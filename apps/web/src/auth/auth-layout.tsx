@@ -29,7 +29,7 @@ export function AuthLayout({ eyebrow, title, lede, points, headerAside, children
 					{headerAside}
 				</div>
 			</header>
-			<main id="main" className="grid flex-1 min-[901px]:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
+			<main id="main" className="grid flex-1 scroll-mt-22 min-[901px]:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
 				<section className="wrap flex w-full flex-col justify-center gap-4 py-8 min-[901px]:mx-0 min-[901px]:max-w-[640px] min-[901px]:py-16">
 					<p className="font-mono text-[12px] leading-[1.4] tracking-[.08em] text-ink-muted uppercase">{eyebrow}</p>
 					<h1 className="font-display text-[clamp(32px,4vw,52px)] leading-[.98] font-[820] tracking-[-0.038em] text-balance [font-stretch:112%]">

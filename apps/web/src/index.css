@@ -73,7 +73,9 @@
 }
 
 @layer base {
-  html { -webkit-text-size-adjust:100%; }
+  /* The sticky header is 64px, so a focused element or an anchor scrolls to just below it, not behind it.
+     The landing page sets its own value, which wins over this one. */
+  html { -webkit-text-size-adjust:100%; scroll-padding-top:88px; }
   body {
     @apply bg-paper font-sans text-ink antialiased;
     font-size:17px;
@@ -111,7 +113,10 @@
   .btn.ghost{--bg:transparent;--fg:var(--ink)}
   .btn .arr{transition:transform .3s --theme(--ease-out)}
   .btn:hover .arr{transform:translateX(4px)}
-  .btn:disabled{cursor:progress;background-size:0% 100%;color:var(--fg);opacity:.7}
+  /* aria-disabled is for a button that is busy: it looks disabled but keeps keyboard focus, and its handler ignores clicks. */
+  .btn:disabled,.btn[aria-disabled="true"]{cursor:progress;background-size:0% 100%;color:var(--fg);opacity:.7}
+  /* Touch targets are at least 44px (design system §2.3). On a fine pointer the app size stays 42px. */
+  @media (pointer:coarse){.btn{min-height:44px}}
   /* Destructive (design system §4, derived): the secondary button in gap-ink; pink fills in on hover. */
   .btn.danger{--bg:transparent;--fg:var(--gap-ink);border-color:var(--gap-ink);background-image:linear-gradient(var(--gap-soft),var(--gap-soft))}
   .btn.danger:hover{color:var(--gap-ink)}

@@ -1,4 +1,4 @@
-import { type DragEvent, useId, useState } from "react";
+import { type DragEvent, useId, useRef, useState } from "react";
 import { Check } from "../components/icons.tsx";
 import { CV_MAX_BYTES, type UploadItem, type useUploadCvs } from "../lib/candidates.ts";
 
@@ -42,10 +42,17 @@ export function UploadZone({
 	const [dragging, setDragging] = useState(false);
 	const inputId = useId();
 	const helpId = useId();
+	const inputRef = useRef<HTMLInputElement>(null);
+	const noteRef = useRef<HTMLParagraphElement>(null);
 	const busy = items.some(({ state }) => state === "waiting" || state === "uploading");
 	const summary = summarise(items);
 	const takeFiles = (files: FileList | null) => {
 		if (files) void upload([...files], slotsLeft);
+	};
+	// "Clear list" goes away with the list, so focus moves on to the chooser (or, when the job can't take CVs, its note).
+	const clearList = () => {
+		clear();
+		(inputRef.current ?? noteRef.current)?.focus();
 	};
 
 	return (
@@ -79,6 +86,7 @@ export function UploadZone({
 						</p>
 					</div>
 					<input
+						ref={inputRef}
 						id={inputId}
 						type="file"
 						accept="application/pdf"
@@ -99,7 +107,9 @@ export function UploadZone({
 					</label>
 				</div>
 			) : (
-				<p className="text-[15px] text-ink-2">{note}</p>
+				<p ref={noteRef} tabIndex={-1} className="text-[15px] text-ink-2">
+					{note}
+				</p>
 			)}
 
 			<p
@@ -126,7 +136,7 @@ export function UploadZone({
 						<button
 							type="button"
 							className="mt-1 min-h-11 rounded-[3px] px-1 text-[14px] font-semibold underline underline-offset-[.18em]"
-							onClick={clear}
+							onClick={clearList}
 						>
 							Clear list
 						</button>

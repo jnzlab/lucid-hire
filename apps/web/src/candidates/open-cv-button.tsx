@@ -8,7 +8,7 @@ export function OpenCvButton({ jobId, candidateId, fileName }: OpenCvButtonProps
 	return (
 		<>
 			{/* Only looks disabled while the file loads, so it keeps keyboard focus; open() ignores repeat clicks. */}
-			<button type="button" className="btn ghost aria-disabled:cursor-progress aria-disabled:opacity-70" aria-disabled={cv.isPending} onClick={cv.open}>
+			<button type="button" className="btn ghost" aria-disabled={cv.isPending} onClick={cv.open}>
 				{cv.isPending ? "Opening" : "Open CV"}
 			</button>
 			{cv.error && (

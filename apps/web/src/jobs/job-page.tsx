@@ -18,7 +18,7 @@ export function JobPage({ jobId }: { jobId: string }) {
 		<div className="wrap py-[clamp(32px,5vw,64px)]">
 			<BackToJobs />
 			{job.isPending ? (
-				<SectionLoading label="Opening the job" />
+				<SectionLoading label="Opening the job" page />
 			) : job.isError ? (
 				<JobLoadError error={job.error} onRetry={() => void job.refetch()} />
 			) : (
@@ -32,6 +32,7 @@ export function JobLoadError({ error, onRetry }: { error: Error; onRetry: () => 
 	const missing = error instanceof ApiError && error.status === 404;
 	return (
 		<SectionError
+			level={1}
 			title={missing ? "This job doesn't exist" : "We couldn't load this job"}
 			message={missing ? "It may have been deleted, or it belongs to another company." : error.message}
 			action={
@@ -49,11 +50,11 @@ export function JobLoadError({ error, onRetry }: { error: Error; onRetry: () => 
 	);
 }
 
-// What the status button does next, and what the status means for the recruiter.
-const NEXT_STATUS: Record<JobStatus, { to: JobStatus; label: string; note: string }> = {
-	draft: { to: "open", label: "Open job", note: "Draft. It isn't taking CVs yet." },
-	open: { to: "closed", label: "Close job", note: "Open. It's taking CVs." },
-	closed: { to: "open", label: "Reopen job", note: "Closed. It isn't taking new CVs." },
+// What the status button does next, what is announced once it has, and what the status means for the recruiter.
+const NEXT_STATUS: Record<JobStatus, { to: JobStatus; label: string; done: string; note: string }> = {
+	draft: { to: "open", label: "Open job", done: "Job opened", note: "Draft. It isn't taking CVs yet." },
+	open: { to: "closed", label: "Close job", done: "Job closed", note: "Open. It's taking CVs." },
+	closed: { to: "open", label: "Reopen job", done: "Job reopened", note: "Closed. It isn't taking new CVs." },
 };
 
 function JobDetails({ job }: { job: Job }) {
@@ -65,7 +66,15 @@ function JobDetails({ job }: { job: Job }) {
 	const cvs = useCandidates(job.id).data?.candidates.length ?? job.cvCount;
 	const removed = cvs > 0 ? `It and its ${cvs} ${cvs === 1 ? "CV are" : "CVs are"} removed` : "It's removed";
 	const [confirmingDelete, setConfirmingDelete] = useState(false);
+	// What screen readers are told after the status changes. The region stays on the page, so a change is announced.
+	const [announcement, setAnnouncement] = useState("");
 	const next = NEXT_STATUS[job.status];
+
+	const changeStatus = () => {
+		if (update.isPending) return;
+		setAnnouncement("");
+		update.mutate({ status: next.to }, { onSuccess: () => setAnnouncement(next.done) });
+	};
 
 	const confirmDelete = () =>
 		remove.mutate(undefined, {
@@ -82,11 +91,12 @@ function JobDetails({ job }: { job: Job }) {
 						<Link to="/dashboard/jobs/$jobId/edit" params={{ jobId: job.id }} className="btn ghost">
 							Edit job
 						</Link>
+						{/* Only looks disabled while it saves, so it keeps keyboard focus; changeStatus ignores the click. */}
 						<button
 							type="button"
 							className={next.to === "closed" ? "btn ghost" : "btn"}
-							disabled={update.isPending}
-							onClick={() => update.mutate({ status: next.to })}
+							aria-disabled={update.isPending}
+							onClick={changeStatus}
 						>
 							{update.isPending ? "Saving" : next.label}
 							{next.to === "open" && !update.isPending && <ArrowRight />}
@@ -102,6 +112,9 @@ function JobDetails({ job }: { job: Job }) {
 					</p>
 				</div>
 			</PageHeading>
+			<p aria-live="polite" className="sr-only">
+				{announcement}
+			</p>
 			{update.isError && (
 				<p role="alert" className="mt-4 text-[14px] text-gap-ink">
 					✕ {update.error.message}

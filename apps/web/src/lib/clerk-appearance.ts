@@ -42,6 +42,8 @@ export const clerkAppearance: Appearance = {
 		socialButtonsBlockButton: "min-h-11 rounded-md border-[1.5px] border-line shadow-none hover:bg-paper-2",
 		dividerLine: "bg-line",
 		footerActionLink: "font-semibold text-ink underline underline-offset-[.18em] hover:text-ink",
+		// The avatar stays 36px; the button around it is a 44px touch target (design system §2.3).
+		userButtonTrigger: "min-h-11 min-w-11 items-center justify-center",
 		userButtonAvatarBox: "size-9",
 	},
 };

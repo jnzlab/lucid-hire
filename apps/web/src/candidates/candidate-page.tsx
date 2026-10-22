@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { DeleteDialog } from "../components/delete-dialog.tsx";
 import { Check } from "../components/icons.tsx";
 import { ScoreRing } from "../components/score-ring.tsx";
@@ -11,6 +11,7 @@ import {
 	CV_LIMIT_PER_JOB,
 	MAX_SCORING_RUNS,
 	type Requirement,
+	SLOW_CHECK_MS,
 	candidateName,
 	formatFileSize,
 	isSlow,
@@ -21,6 +22,7 @@ import {
 } from "../lib/candidates.ts";
 import { useJob } from "../lib/jobs.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
+import { useNow } from "../lib/use-now.ts";
 import { DecisionBlock } from "./decision-block.tsx";
 import { InterviewQuestions } from "./interview-questions.tsx";
 import { OpenCvButton } from "./open-cv-button.tsx";
@@ -40,7 +42,7 @@ export function CandidatePage({ jobId, candidateId }: { jobId: string; candidate
 		<div className="wrap py-[clamp(32px,5vw,64px)]">
 			<BackToJob jobId={jobId} title={job.data?.title} />
 			{candidate.isPending ? (
-				<SectionLoading label="Opening the candidate" />
+				<SectionLoading label="Opening the candidate" page />
 			) : candidate.isError && (!candidate.data || gone) ? (
 				<CandidateLoadError jobId={jobId} error={candidate.error} onRetry={() => void candidate.refetch()} />
 			) : candidate.data ? (
@@ -60,6 +62,7 @@ function CandidateLoadError({ jobId, error, onRetry }: { jobId: string; error: E
 	const missing = error instanceof ApiError && error.status === 404;
 	return (
 		<SectionError
+			level={1}
 			title={missing ? "This candidate doesn't exist" : "We couldn't load this candidate"}
 			message={missing ? "It may have been deleted, or it belongs to another company." : error.message}
 			action={
@@ -74,6 +77,19 @@ function CandidateLoadError({ jobId, error, onRetry }: { jobId: string; error: E
 				)
 			}
 		/>
+	);
+}
+
+// Only mounted while the CV is being read, so the clock that decides "taking longer than usual" ticks only then.
+function StillReading({ candidate, retry }: { candidate: Candidate; retry: ReactNode }) {
+	const now = useNow(SLOW_CHECK_MS);
+	const slow = isSlow(candidate, now);
+	if (!slow && !candidate.canRetry) return null;
+	return (
+		<div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+			{slow && <p className="font-mono text-[12.5px] text-ink-muted">This is taking longer than usual.</p>}
+			{retry}
+		</div>
 	);
 }
 
@@ -103,9 +119,17 @@ function CandidateDetails({
 	const must = requirements.filter(({ importance }) => importance === "must");
 	const nice = requirements.filter(({ importance }) => importance === "nice");
 
+	// Only looks disabled while it retries, so it keeps keyboard focus; the click is ignored.
 	const retryButton = (className: string) =>
 		candidate.canRetry && (
-			<button type="button" className={className} disabled={retry.isPending} onClick={() => retry.mutate(candidate.id)}>
+			<button
+				type="button"
+				className={className}
+				aria-disabled={retry.isPending}
+				onClick={() => {
+					if (!retry.isPending) retry.mutate(candidate.id);
+				}}
+			>
 				{retry.isPending ? "Retrying" : "Retry"}
 			</button>
 		);
@@ -150,14 +174,7 @@ function CandidateDetails({
 					)}
 					{score !== null && `Scored ${score} · ${count(requirements)} requirements`}
 				</p>
-				{isWorking(candidate) && (isSlow(candidate) || candidate.canRetry) && (
-					<div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-						{isSlow(candidate) && (
-							<p className="font-mono text-[12.5px] text-ink-muted">This is taking longer than usual.</p>
-						)}
-						{retryButton("btn ghost")}
-					</div>
-				)}
+				{isWorking(candidate) && <StillReading candidate={candidate} retry={retryButton("btn ghost")} />}
 			</PageHeading>
 			{refreshFailed && (
 				<div className="mt-4">

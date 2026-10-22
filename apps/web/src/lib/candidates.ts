@@ -21,6 +21,8 @@ export const OPEN_CV_FAILED = "We couldn't open the CV. Try again.";
 export const CANDIDATE_POLL_MS = 3000;
 // Reading a CV takes 10 to 80 seconds. After this long the page says it is taking longer than usual.
 export const SLOW_READ_MS = 5 * 60_000;
+// How often a CV that is being read is checked against SLOW_READ_MS.
+export const SLOW_CHECK_MS = 30_000;
 
 export type CandidateStatus = (typeof CANDIDATE_STATUSES)[number];
 export type Decision = (typeof CANDIDATE_DECISIONS)[number];

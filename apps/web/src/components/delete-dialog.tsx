@@ -14,7 +14,8 @@ type DeleteDialogProps = {
 };
 
 // Confirms a delete (design system §4: destructive actions always confirm in a dialog). Focus starts on
-// Cancel, the safe choice, and stays inside the dialog. Escape closes it.
+// Cancel, the safe choice, and stays inside the dialog. Escape closes it. While the delete runs the buttons only
+// look disabled (aria-disabled), so focus stays on the one that was pressed.
 export function DeleteDialog({
 	heading,
 	children,
@@ -26,6 +27,7 @@ export function DeleteDialog({
 	onConfirm,
 }: DeleteDialogProps) {
 	const headingId = useId();
+	const bodyId = useId();
 	const dialogRef = useRef<HTMLDivElement>(null);
 	const cancelRef = useRef<HTMLButtonElement>(null);
 	const onKey = useEffectEvent((event: KeyboardEvent) => {
@@ -33,7 +35,7 @@ export function DeleteDialog({
 		if (event.key !== "Tab" || !dialogRef.current) return;
 
 		// Tab and Shift+Tab wrap around the dialog's buttons instead of leaving it.
-		const buttons = [...dialogRef.current.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+		const buttons = [...dialogRef.current.querySelectorAll<HTMLButtonElement>("button")];
 		const first = buttons[0];
 		const last = buttons[buttons.length - 1];
 		const inside = dialogRef.current.contains(document.activeElement);
@@ -66,6 +68,7 @@ export function DeleteDialog({
 				role="alertdialog"
 				aria-modal="true"
 				aria-labelledby={headingId}
+				aria-describedby={bodyId}
 				className="w-full max-w-[440px] rounded-xl bg-sheet p-6 shadow-float min-[561px]:p-8"
 			>
 				<h2
@@ -74,17 +77,34 @@ export function DeleteDialog({
 				>
 					{heading}
 				</h2>
-				<p className="mt-3 text-[15px] text-ink-2">{children}</p>
+				<p id={bodyId} className="mt-3 text-[15px] text-ink-2">
+					{children}
+				</p>
 				{error && (
 					<p role="alert" className="mt-4 text-[14px] text-gap-ink">
 						✕ {error}
 					</p>
 				)}
 				<div className="mt-6 flex flex-wrap justify-end gap-3">
-					<button ref={cancelRef} type="button" className="btn ghost" onClick={onCancel} disabled={busy}>
+					<button
+						ref={cancelRef}
+						type="button"
+						className="btn ghost"
+						aria-disabled={busy}
+						onClick={() => {
+							if (!busy) onCancel();
+						}}
+					>
 						Cancel
 					</button>
-					<button type="button" className="btn danger" onClick={onConfirm} disabled={busy}>
+					<button
+						type="button"
+						className="btn danger"
+						aria-disabled={busy}
+						onClick={() => {
+							if (!busy) onConfirm();
+						}}
+					>
 						{busy ? busyLabel : confirmLabel}
 					</button>
 				</div>

@@ -33,10 +33,10 @@ export function NewJobPage() {
 							<Link to="/dashboard" className="btn ghost">
 								Cancel
 							</Link>
-							<button type="submit" name="intent" value="draft" className="btn ghost" disabled={saving}>
+							<button type="submit" name="intent" value="draft" className="btn ghost" aria-disabled={saving}>
 								Save as draft
 							</button>
-							<button type="submit" name="intent" value="open" className="btn" disabled={saving}>
+							<button type="submit" name="intent" value="open" className="btn" aria-disabled={saving}>
 								{saving ? "Saving" : "Open job"} <ArrowRight />
 							</button>
 						</>

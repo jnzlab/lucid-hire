@@ -24,7 +24,7 @@ export function AppShell({ org, children }: { org: Org; children: ReactNode }) {
 					</div>
 				</div>
 			</header>
-			<main id="main" className="flex-1">
+			<main id="main" className="flex-1 scroll-mt-22">
 				{children}
 			</main>
 		</div>

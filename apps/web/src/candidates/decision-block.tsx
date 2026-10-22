@@ -62,7 +62,7 @@ function NoteField({ jobId, candidate }: { jobId: string; candidate: Candidate }
 	const changed = draft !== null && draft.trim() !== saved;
 
 	const submit = () => {
-		if (draft === null) return;
+		if (draft === null || save.isPending) return;
 		const sent = draft;
 		save.mutate(
 			{ note: sent },
@@ -103,7 +103,15 @@ function NoteField({ jobId, candidate }: { jobId: string; candidate: Candidate }
 				Everyone at {org.name} can read this.
 			</p>
 			<div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-				<button type="button" className="btn" disabled={!changed || save.isPending} onClick={submit}>
+				{/* Disabled while there is nothing to save. While saving it only looks disabled, so it keeps keyboard
+				    focus; the note is shown as saved at once, so `changed` is already false by then. */}
+				<button
+					type="button"
+					className="btn"
+					disabled={!changed && !save.isPending}
+					aria-disabled={save.isPending}
+					onClick={submit}
+				>
 					{save.isPending ? "Saving" : "Save note"}
 				</button>
 				<p aria-live="polite" className="inline-flex items-center gap-1.5 font-mono text-[12.5px] text-ink">

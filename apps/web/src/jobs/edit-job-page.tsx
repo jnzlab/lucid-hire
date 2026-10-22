@@ -13,7 +13,7 @@ export function EditJobPage({ jobId }: { jobId: string }) {
 		<div className="wrap py-[clamp(32px,5vw,64px)]">
 			<BackToJobs />
 			{job.isPending ? (
-				<SectionLoading label="Opening the job" />
+				<SectionLoading label="Opening the job" page />
 			) : job.isError ? (
 				<JobLoadError error={job.error} onRetry={() => void job.refetch()} />
 			) : (
@@ -42,7 +42,7 @@ function EditJob({ job }: { job: Job }) {
 							<Link {...toJob} className="btn ghost">
 								Cancel
 							</Link>
-							<button type="submit" className="btn" disabled={saving}>
+							<button type="submit" className="btn" aria-disabled={saving}>
 								{saving ? "Saving" : "Save changes"}
 							</button>
 						</>
