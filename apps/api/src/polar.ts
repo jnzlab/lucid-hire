@@ -21,8 +21,16 @@ function fromBase64(value: string): Uint8Array<ArrayBuffer> | null {
 
 export type SignatureCheck = "ok" | "bad_signature" | "stale_timestamp";
 
-// The key is the UTF-8 bytes of the whole secret string, which is what Polar's SDK ends up using (it base64-encodes the
-// secret and Standard Webhooks decodes it again). `subtle.verify` compares in constant time.
+// The HMAC keys a secret can stand for, the one Polar signs with first. A Standard Webhooks secret, `whsec_` and then
+// base64 (what Polar issues for new endpoints), is the decoded bytes. An older `polar_whs_` secret is the UTF-8 bytes
+// of the whole string, which is what Polar's SDK ends up using (it base64-encodes the secret and Standard Webhooks
+// decodes it again). Both come from the secret, so accepting either lets nobody without it through.
+function webhookKeys(secret: string): BufferSource[] {
+	const decoded = secret.startsWith("whsec_") ? fromBase64(secret.slice("whsec_".length)) : null;
+	return decoded && decoded.byteLength > 0 ? [decoded, encoder.encode(secret)] : [encoder.encode(secret)];
+}
+
+// `subtle.verify` compares in constant time.
 export async function verifyWebhook(
 	secret: string,
 	headers: { id: string | undefined; timestamp: string | undefined; signature: string | undefined },
@@ -33,19 +41,21 @@ export async function verifyWebhook(
 	if (!id || !timestamp || !signature || !/^\d+$/.test(timestamp)) return "bad_signature";
 	if (Math.abs(nowMs / 1000 - Number(timestamp)) > TOLERANCE_SECONDS) return "stale_timestamp";
 
-	const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
 	const signed = encoder.encode(`${id}.${timestamp}.${body}`);
-	for (const entry of signature.split(" ")) {
-		const [version, value] = entry.split(",");
-		const bytes = version === "v1" && value ? fromBase64(value) : null;
-		if (bytes && (await crypto.subtle.verify("HMAC", key, bytes, signed))) return "ok";
+	for (const raw of webhookKeys(secret)) {
+		const key = await crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+		for (const entry of signature.split(" ")) {
+			const [version, value] = entry.split(",");
+			const bytes = version === "v1" && value ? fromBase64(value) : null;
+			if (bytes && (await crypto.subtle.verify("HMAC", key, bytes, signed))) return "ok";
+		}
 	}
 	return "bad_signature";
 }
 
 // Signs a body the way Polar does. Used by the tests.
 export async function signWebhook(secret: string, id: string, timestamp: number, body: string): Promise<string> {
-	const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+	const key = await crypto.subtle.importKey("raw", webhookKeys(secret)[0], { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
 	const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(`${id}.${timestamp}.${body}`)));
 	return `v1,${btoa(String.fromCharCode(...mac))}`;
 }
