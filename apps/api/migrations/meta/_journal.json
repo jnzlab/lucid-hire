@@ -64,6 +64,13 @@
       "when": 1792700056150,
       "tag": "0008_comp_test_company",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1792700802418,
+      "tag": "0009_scoring_queue",
+      "breakpoints": true
     }
   ]
 }

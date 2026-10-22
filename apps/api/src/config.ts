@@ -18,3 +18,7 @@ export const POLAR = {
 // origin is used when it is one we allow.
 export const APP_ORIGIN = "https://lucidhire.io";
 export const DEV_APP_ORIGIN = "http://localhost:5173";
+
+// CVs read at once across all companies. Gemini's free tier allows about this many calls in flight, so the rest
+// wait their turn in the queue instead of failing with 429.
+export const GLOBAL_SCORING_CAP = 10;

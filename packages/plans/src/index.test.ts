@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PLANS, planFeatures, planForCvs, planRank } from "./index.ts";
+import { COMPANY_SCORING_CAP, PLANS, planFeatures, planForCvs, planRank } from "./index.ts";
 
 describe("plans", () => {
 	it("holds the numbers the landing page promises", () => {
@@ -19,6 +19,11 @@ describe("plans", () => {
 			"600 AI requests an hour",
 			"First in the reading queue",
 		]);
+	});
+
+	it("gives the paid plans a head start in the reading queue", () => {
+		expect([PLANS.free, PLANS.pro, PLANS.max].map((plan) => plan.queueHeadStartSec)).toEqual([0, 300, 1800]);
+		expect(COMPANY_SCORING_CAP).toBe(5);
 	});
 
 	it("ranks plans from smallest to biggest", () => {

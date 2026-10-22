@@ -6,9 +6,12 @@ import {
 	PermanentScoringError,
 	failureMessage,
 	markFailed,
-	markScoring,
+	QueueTimeoutError,
+	type SlotResult,
+	enterQueue,
 	saveScore,
 	scoreCandidate,
+	takeSlot,
 } from "./scoring.ts";
 
 export type ScoreCvParams = { candidateId: string };
@@ -18,6 +21,11 @@ const SCORE_STEP = {
 	retries: { limit: 3, delay: "15 seconds", backoff: "exponential" },
 	timeout: "3 minutes",
 } as const;
+
+// A waiting CV looks for a free slot every 10 seconds, for up to 30 minutes. Each round is two steps (a check and
+// a sleep), so even this stays far below the 1024 steps an instance may have.
+export const QUEUE_POLL = "10 seconds";
+export const QUEUE_MAX_POLLS = 180;
 
 // Scores one uploaded CV: one Gemini call, then the result is saved on the candidate. The logic lives in
 // scoring.ts so tests can run it; this class only turns it into steps.
@@ -29,9 +37,19 @@ export class ScoreCvWorkflow extends WorkflowEntrypoint<Env, ScoreCvParams> {
 
 		// Every failure from the first step on ends in the "fail" step, so a CV is never left queued or scoring.
 		try {
-			const started = await step.do("start", () => markScoring(db, candidateId));
+			// The place in the reading queue is fixed once, then the CV waits for a slot (at most 5 per company and
+			// 10 in all). Waiting refreshes `updated_at`, so the stale rule only catches runs whose Workflow is gone.
+			const entered = await step.do("enter", () => enterQueue(db, candidateId));
 			// The candidate was deleted before its run began.
-			if (!started) return;
+			if (!entered) return;
+
+			let slot: SlotResult = "waiting";
+			for (let poll = 0; poll < QUEUE_MAX_POLLS && slot === "waiting"; poll++) {
+				slot = await step.do(`slot-${poll}`, () => takeSlot(db, candidateId));
+				if (slot === "waiting") await step.sleep(`wait-${poll}`, QUEUE_POLL);
+			}
+			if (slot === "gone") return;
+			if (slot === "waiting") throw new QueueTimeoutError("No reading slot came free");
 
 			const scored = await step.do("score", SCORE_STEP, async () => {
 				try {
