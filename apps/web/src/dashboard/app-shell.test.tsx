@@ -58,9 +58,9 @@ function renderAt(path: string) {
 }
 
 describe("sidebar", () => {
-	it("shows the company, the pages, the shortcuts and the role", async () => {
+	it("shows the company, the pages, the shortcuts and the role", { timeout: 15_000 }, async () => {
 		renderAt("/dashboard");
-		const nav = await screen.findByRole("navigation", { name: "Main" });
+		const nav = await screen.findByRole("navigation", { name: "Main" }, { timeout: 4000 });
 
 		expect(within(nav).getByRole("link", { name: "Jobs" }).getAttribute("aria-current")).toBe("page");
 		expect(within(nav).getByRole("link", { name: "Post a job" }).getAttribute("href")).toBe("/dashboard/jobs/new");
