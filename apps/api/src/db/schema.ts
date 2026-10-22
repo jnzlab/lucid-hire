@@ -130,3 +130,27 @@ export const aiUsage = sqliteTable(
 	},
 	(t) => [index("ai_usage_org_created_idx").on(t.orgId, t.createdAt)],
 );
+
+// One interview question and what it probes: usually the label of a requirement from the scoring.
+export type InterviewQuestion = { question: string; focus: string };
+
+// The questions Gemini wrote for a scored candidate. One row per candidate; writing them again replaces the row.
+export const interviewQuestions = sqliteTable("interview_questions", {
+	candidateId: text("candidate_id")
+		.primaryKey()
+		.references(() => candidates.id, { onDelete: "cascade" }),
+	orgId: text("org_id")
+		.notNull()
+		.references(() => organizations.id, { onDelete: "cascade" }),
+	jobId: text("job_id")
+		.notNull()
+		.references(() => jobs.id, { onDelete: "cascade" }),
+	questions: text("questions", { mode: "json" }).$type<InterviewQuestion[]>().notNull(),
+	// Whoever wrote the current set.
+	createdBy: text("created_by").notNull(),
+	createdAt: createdAt(),
+	updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+		.notNull()
+		.default(sql`(unixepoch('subsec') * 1000)`)
+		.$onUpdate(() => new Date()),
+});
