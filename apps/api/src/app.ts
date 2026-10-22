@@ -6,6 +6,8 @@ import { requireAuth, verifyClerkSession, type SessionVerifier } from "./auth.ts
 import { ALLOWED_ORIGINS } from "./config.ts";
 import { getDb } from "./db/client.ts";
 import { type QuestionWriter, writeQuestionsWithGemini } from "./interview-questions.ts";
+import { billingRoutes } from "./billing-routes.ts";
+import { type UserDirectory, clerkDirectory } from "./clerk.ts";
 import { jobRoutes } from "./jobs-routes.ts";
 import { overviewRoutes } from "./overview-routes.ts";
 import { type PolarFetch, polarFetcher } from "./polar.ts";
@@ -25,6 +27,8 @@ type AppOptions = {
 	verifyCaptcha?: CaptchaVerifier;
 	// How the API reaches Polar; tests replace it.
 	polar?: (env: Env) => PolarFetch;
+	// Where names and emails come from (Clerk).
+	directory?: UserDirectory;
 };
 
 export function createApp({
@@ -33,6 +37,7 @@ export function createApp({
 	writeQuestions = writeQuestionsWithGemini,
 	verifyCaptcha = verifyTurnstile,
 	polar = (env) => polarFetcher(env.POLAR_ACCESS_TOKEN),
+	directory = clerkDirectory,
 }: AppOptions = {}) {
 	const app = new Hono<AppEnv>();
 
@@ -96,6 +101,7 @@ export function createApp({
 	});
 
 	app.route("/webhooks", webhookRoutes({ polar }));
+	app.route("/billing", billingRoutes({ auth, polar, directory }));
 	app.route("/jobs", jobRoutes({ auth, enhance: enhanceDescription, writeQuestions }));
 
 	app.route("/overview", overviewRoutes({ auth }));
