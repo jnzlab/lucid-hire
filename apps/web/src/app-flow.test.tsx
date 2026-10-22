@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { type Mock, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { routeTree } from "./routeTree.gen.ts";
 
 // Clerk is replaced by a session we control; the API by an in-memory fake of /me, /orgs and /jobs.
@@ -25,7 +25,7 @@ type Org = { id: string; name: string; role: "admin" | "member" };
 type FakeJob = { id: string; title: string; description: string; status: string; createdAt: string; updatedAt: string };
 let org: Org | null;
 let jobs: FakeJob[];
-let fetchMock: ReturnType<typeof vi.fn>;
+let fetchMock: Mock<(url: string, init?: RequestInit) => Promise<Response>>;
 
 const notFound = () => Response.json({ error: { message: "That job doesn't exist or isn't yours" } }, { status: 404 });
 
@@ -236,26 +236,33 @@ describe("jobs", () => {
 	});
 
 	it("lets an admin delete a job after confirming", async () => {
-		jobs = [
-			{
-				id: "job_9",
-				title: "Sprite test role",
-				description: "x",
-				status: "open",
-				createdAt: "2026-10-22T12:00:00Z",
-				updatedAt: "2026-10-22T12:00:00Z",
-			},
-		];
-		const router = renderAt("/dashboard/jobs/job_9");
+		const job = (id: string, title: string, status: string) => ({
+			id,
+			title,
+			description: "x",
+			status,
+			createdAt: "2026-10-22T12:00:00Z",
+			updatedAt: "2026-10-22T12:00:00Z",
+		});
+		jobs = [job("job_9", "Sprite test role", "open"), job("job_8", "Product Designer", "closed")];
+		const router = renderAt("/dashboard");
 
+		fireEvent.click(await screen.findByRole("link", { name: /Sprite test role/ }));
 		fireEvent.click(await screen.findByRole("button", { name: "Delete job" }));
 		const dialog = await screen.findByRole("alertdialog", { name: "Delete “Sprite test role”?" });
 		expect(document.activeElement).toHaveProperty("textContent", "Cancel");
+		// Hold the list's refetch, so the list can only show what the cache holds after the delete.
+		const answer = fetchMock.getMockImplementation()!;
+		fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+			new URL(url).pathname === "/jobs" && !init?.method ? new Promise(() => {}) : answer(url, init),
+		);
 		fireEvent.click(within(dialog).getByRole("button", { name: "Delete job" }));
 
 		expect(await screen.findByText("Deleted “Sprite test role”")).toBeTruthy();
 		expect(router.state.location.pathname).toBe("/dashboard");
-		expect(await screen.findByRole("heading", { name: "No jobs yet" })).toBeTruthy();
+		const list = screen.getByRole("region", { name: "Your jobs" });
+		expect(within(list).queryByText("Sprite test role")).toBeNull();
+		expect(within(list).getByText("Product Designer")).toBeTruthy();
 	});
 
 	it("hides delete from members, and explains a job that doesn't exist", async () => {

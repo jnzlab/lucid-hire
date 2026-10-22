@@ -74,6 +74,8 @@ export function useDeleteJob(id: string) {
 	return useMutation({
 		mutationFn: async () => apiDelete(`/jobs/${id}`, { token: await token() }),
 		onSuccess: () => {
+			// Drop it from the cached list too, or the list shows it until the refetch lands.
+			queryClient.setQueryData<JobSummary[]>(jobsKey(userId), (list) => list?.filter((job) => job.id !== id));
 			queryClient.removeQueries({ queryKey: jobKey(userId, id), exact: true });
 			void queryClient.invalidateQueries({ queryKey: jobsKey(userId), exact: true });
 		},
