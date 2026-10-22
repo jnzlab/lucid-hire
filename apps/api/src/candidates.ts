@@ -1,13 +1,25 @@
 import { and, asc, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
+import type { SQLiteColumn } from "drizzle-orm/sqlite-core";
+import { z } from "zod";
 import type { Db } from "./db/client.ts";
-import { type CandidateStatus, type Requirement, candidates, jobs } from "./db/schema.ts";
+import {
+	CANDIDATE_DECISIONS,
+	type CandidateStatus,
+	type Decision,
+	type Requirement,
+	candidates,
+	jobs,
+} from "./db/schema.ts";
 import { inOrg } from "./jobs.ts";
+
+export { CANDIDATE_DECISIONS, type Decision };
 
 // The landing page promises "Free for 10 CVs a job".
 export const CV_LIMIT_PER_JOB = 10;
 export const CV_MAX_BYTES = 5 * 1024 * 1024;
 export const CV_FILE_NAME_MAX = 200;
 export const DEFAULT_CV_FILE_NAME = "cv.pdf";
+export const NOTE_MAX = 1000;
 // The first run plus up to two manual retries.
 export const MAX_SCORING_RUNS = 3;
 // A run is stuck when the CV is still queued or scoring this long after its last update: a worst-case run
@@ -22,6 +34,8 @@ export type CandidateSummary = {
 	id: string;
 	fileName: string;
 	status: CandidateStatus;
+	// The recruiters' call on this CV, whatever its status.
+	decision: Decision;
 	name: string | null;
 	headline: string | null;
 	score: number | null;
@@ -39,12 +53,16 @@ export type Candidate = CandidateSummary & {
 	summary: string | null;
 	requirements: Requirement[] | null;
 	fileSize: number;
+	note: string | null;
+	// When the decision last changed. Null while it is undecided.
+	decidedAt: Date | null;
 };
 
 const summaryColumns = {
 	id: candidates.id,
 	fileName: candidates.fileName,
 	status: candidates.status,
+	decision: candidates.decision,
 	name: candidates.name,
 	headline: candidates.headline,
 	score: candidates.score,
@@ -55,7 +73,13 @@ const summaryColumns = {
 	updatedAt: candidates.updatedAt,
 	scoredAt: candidates.scoredAt,
 };
-const candidateColumns = { ...summaryColumns, summary: candidates.summary, fileSize: candidates.fileSize };
+const candidateColumns = {
+	...summaryColumns,
+	summary: candidates.summary,
+	fileSize: candidates.fileSize,
+	note: candidates.note,
+	decidedAt: candidates.decidedAt,
+};
 
 type SummaryRow = Pick<typeof candidates.$inferSelect, keyof typeof summaryColumns>;
 type CandidateRow = Pick<typeof candidates.$inferSelect, keyof typeof candidateColumns>;
@@ -75,6 +99,7 @@ function toSummary(row: SummaryRow): CandidateSummary {
 		id: row.id,
 		fileName: row.fileName,
 		status: row.status,
+		decision: row.decision,
 		name: row.name,
 		headline: row.headline,
 		score: row.score,
@@ -100,6 +125,8 @@ const toCandidate = (row: CandidateRow): Candidate => ({
 	summary: row.summary,
 	requirements: row.requirements,
 	fileSize: row.fileSize,
+	note: row.note,
+	decidedAt: row.decidedAt,
 });
 
 // The score is ours, not the model's: must-haves count double, so it is deterministic and explainable.
@@ -229,6 +256,68 @@ export async function startRetry(db: Db, orgId: string, jobId: string, id: strin
 		.limit(1);
 	if (!current) return { ok: false, reason: "candidate_not_found" };
 	return { ok: false, reason: isRetryable(current.status, current.updatedAt) ? "retry_limit" : "not_failed" };
+}
+
+const noteInput = z
+	.string({ error: "Write the note as text" })
+	.trim()
+	.max(NOTE_MAX, { error: `Keep the note to ${NOTE_MAX} characters or fewer` })
+	// A cleared note is stored as null, not as an empty string.
+	.transform((value) => value || null);
+
+export const decideInput = z
+	.object({
+		decision: z.enum(CANDIDATE_DECISIONS, { error: "Choose undecided, shortlisted or rejected" }).optional(),
+		note: noteInput.nullable().optional(),
+	})
+	.refine((patch) => Object.values(patch).some((value) => value !== undefined), { error: "Nothing to update" });
+
+// The column as it is while the row already has this decision, otherwise `fresh`. SQLite reads every value in an
+// UPDATE from the old row, so this is the decision before the change.
+const unlessSame = (decision: Decision, column: SQLiteColumn, fresh: number | string) =>
+	sql`case when ${candidates.decision} = ${decision} then ${column} else ${fresh} end`;
+
+// Records a recruiter's decision and note. Any status can be decided, so a CV that failed can be rejected.
+// `decided_at` and `decided_by` change only when the decision itself does, and are cleared when it goes back to
+// undecided. That is one statement, so two recruiters deciding at once can't mix their name with the other's time.
+// `updated_at` stays put: it times scoring runs.
+export async function decideCandidate(
+	db: Db,
+	orgId: string,
+	jobId: string,
+	id: string,
+	userId: string,
+	{ decision, note }: z.output<typeof decideInput>,
+): Promise<Candidate | null> {
+	const [row] = await db
+		.update(candidates)
+		.set({
+			...(note !== undefined && { note }),
+			...(decision !== undefined && {
+				decision,
+				decidedAt: decision === "undecided" ? null : unlessSame(decision, candidates.decidedAt, Date.now()),
+				decidedBy: decision === "undecided" ? null : unlessSame(decision, candidates.decidedBy, userId),
+			}),
+			updatedAt: sql`${candidates.updatedAt}`,
+		})
+		.where(inJobById(orgId, jobId, id))
+		.returning(candidateColumns);
+	return row ? toCandidate(row) : null;
+}
+
+// The R2 key and name of a CV file, or null when the candidate isn't the company's.
+export async function getCvFile(
+	db: Db,
+	orgId: string,
+	jobId: string,
+	id: string,
+): Promise<{ fileKey: string; fileName: string } | null> {
+	const [row] = await db
+		.select({ fileKey: candidates.fileKey, fileName: candidates.fileName })
+		.from(candidates)
+		.where(inJobById(orgId, jobId, id))
+		.limit(1);
+	return row ?? null;
 }
 
 // Returns the deleted CV's R2 key, or null when it isn't the company's. The job keeps the slot it used.
