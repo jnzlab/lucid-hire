@@ -309,6 +309,18 @@ describe("the reading queue", () => {
 		expect(await takeSlot(db, early)).toBe("started");
 	});
 
+	it("keeps the slot a retried step already took, even with a better waiter queued since", async () => {
+		for (let i = 0; i < 5; i++) await seedQueued(orgId, { status: "scoring" });
+		for (let i = 0; i < 3; i++) await seedQueued(otherOrg, { status: "scoring" });
+		const now = Date.now();
+		const mine = await seedQueued(thirdOrg, { priorityAt: now });
+		expect(await takeSlot(db, mine)).toBe("started");
+		// D1's answer to that step was lost, and a Max CV with a 30-minute head start began waiting meanwhile.
+		await seedQueued(otherOrg, { priorityAt: now - 1_800_000 });
+		expect(await takeSlot(db, mine)).toBe("started");
+		expect((await rowOf(mine)).status).toBe("scoring");
+	});
+
 	it("does not let a better waiter whose own company is full block others", async () => {
 		for (let i = 0; i < 5; i++) await seedQueued(orgId, { status: "scoring" });
 		const now = Date.now();

@@ -74,10 +74,13 @@ export async function takeSlot(db: Db, candidateId: string, now: number = Date.n
 		RETURNING id`);
 	if (started.length > 0) return "started";
 
-	const waiting = await db.all<{ id: string }>(sql`UPDATE candidates SET updated_at = ${now}
-		WHERE id = ${candidateId} AND status = 'queued'
-		RETURNING id`);
-	return waiting.length > 0 ? "waiting" : "gone";
+	// Already scoring means an earlier try of this step took the slot and only its answer was lost: the slot is
+	// still this CV's, even if a better-placed waiter has arrived since.
+	const [held] = await db.all<{ status: string }>(sql`UPDATE candidates SET updated_at = ${now}
+		WHERE id = ${candidateId} AND status IN ('queued', 'scoring')
+		RETURNING status`);
+	if (!held) return "gone";
+	return held.status === "scoring" ? "started" : "waiting";
 }
 
 export async function scoreCandidate(
