@@ -40,7 +40,7 @@ export function JobLoadError({ error, onRetry }: { error: Error; onRetry: () => 
 			message={missing ? "It may have been deleted, or it belongs to another company." : error.message}
 			action={
 				missing ? (
-					<Link to="/dashboard" className="btn">
+					<Link to="/dashboard/jobs" className="btn">
 						Back to your jobs
 					</Link>
 				) : (
@@ -90,7 +90,7 @@ function JobDetails({ job }: { job: Job }) {
 
 	const confirmDelete = () =>
 		remove.mutate(undefined, {
-			onSuccess: () => void navigate({ to: "/dashboard", state: { deletedJob: job.title } }),
+			onSuccess: () => void navigate({ to: "/dashboard/jobs", state: { deletedJob: job.title } }),
 		});
 
 	return (

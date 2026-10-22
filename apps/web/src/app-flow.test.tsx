@@ -397,7 +397,7 @@ describe("signing in for the first time", () => {
 		fireEvent.change(input, { target: { value: "  Sprite   Labs " } });
 		fireEvent.click(screen.getByRole("button", { name: /Continue to your dashboard/ }));
 
-		expect(await screen.findByRole("heading", { name: "No jobs yet" })).toBeTruthy();
+		expect(await screen.findByRole("heading", { level: 1, name: "Overview" })).toBeTruthy();
 		expect(router.state.location.pathname).toBe("/dashboard");
 		expect(screen.getAllByText("Sprite Labs").length).toBeGreaterThan(0);
 		expect(fetchMock).toHaveBeenCalledWith(
@@ -465,7 +465,7 @@ expect(router.state.location.search).toEqual({ next: "/dashboard/jobs/job_1" });
 		fireEvent.change(screen.getByLabelText("Company name"), { target: { value: "Sprite Labs" } });
 		fireEvent.click(screen.getByRole("button", { name: /Continue to your dashboard/ }));
 
-		expect(await screen.findByRole("heading", { name: "No jobs yet" })).toBeTruthy();
+		expect(await screen.findByRole("heading", { level: 1, name: "Overview" })).toBeTruthy();
 		expect(router.state.location.pathname).toBe("/dashboard");
 	});
 });
@@ -475,7 +475,7 @@ describe("returning recruiters", () => {
 		org = { id: "org_1", name: "Acme Hiring", role: "admin" };
 		const router = renderAt("/onboarding");
 
-		expect(await screen.findByRole("heading", { name: "No jobs yet" })).toBeTruthy();
+		expect(await screen.findByRole("heading", { level: 1, name: "Overview" })).toBeTruthy();
 		expect(router.state.location.pathname).toBe("/dashboard");
 	});
 });
@@ -563,7 +563,7 @@ describe("jobs", () => {
 	});
 
 	it("posts a first job from the empty state and opens it", async () => {
-		const router = renderAt("/dashboard");
+		const router = renderAt("/dashboard/jobs");
 
 		fireEvent.click(await screen.findByRole("link", { name: /Post your first job/ }));
 		const title = await screen.findByLabelText("Job title");
@@ -595,7 +595,7 @@ describe("jobs", () => {
 
 	it("offers Post a job on the list once there are jobs, and Post your first job before", async () => {
 		jobs = [];
-		renderAt("/dashboard");
+		renderAt("/dashboard/jobs");
 		expect(await screen.findByRole("link", { name: /Post your first job/ })).toBeTruthy();
 		// The sidebar's shortcut is always there; the page's own button is what comes later.
 		expect(within(screen.getByRole("main")).queryByRole("link", { name: /Post a job/ })).toBeNull();
@@ -611,7 +611,7 @@ describe("jobs", () => {
 				updatedAt: "2026-10-22T12:00:00Z",
 			},
 		];
-		const router = renderAt("/dashboard");
+		const router = renderAt("/dashboard/jobs");
 		await screen.findByRole("link", { name: /Product Designer/ });
 		const post = within(screen.getByRole("main")).getByRole("link", { name: /Post a job/ });
 		expect(screen.queryByRole("link", { name: /New job/ })).toBeNull();
@@ -684,7 +684,7 @@ describe("jobs", () => {
 			updatedAt: "2026-10-22T12:00:00Z",
 		});
 		jobs = [job("job_9", "Sprite test role", "open"), job("job_8", "Product Designer", "closed")];
-		const router = renderAt("/dashboard");
+		const router = renderAt("/dashboard/jobs");
 
 		fireEvent.click(await screen.findByRole("link", { name: /Sprite test role/ }));
 		fireEvent.click(await screen.findByRole("button", { name: "Delete job" }));
@@ -704,7 +704,7 @@ describe("jobs", () => {
 		const deleted = await screen.findByText("Deleted “Sprite test role”");
 		// Announced: the banner went into a polite live region that was already on the page.
 		expect(deleted.closest("[aria-live]")?.getAttribute("aria-live")).toBe("polite");
-		expect(router.state.location.pathname).toBe("/dashboard");
+		expect(router.state.location.pathname).toBe("/dashboard/jobs");
 		const list = screen.getByRole("region", { name: "Your jobs" });
 		expect(within(list).queryByText("Sprite test role")).toBeNull();
 		expect(within(list).getByText("Product Designer")).toBeTruthy();
@@ -754,7 +754,7 @@ describe("jobs", () => {
 		});
 
 		it("shows the count, the toolbar and Post a job", async () => {
-			renderAt("/dashboard");
+			renderAt("/dashboard/jobs");
 			expect(await screen.findByText("Showing 1–3 of 3")).toBeTruthy();
 			expect(screen.getByLabelText("Search jobs")).toBeTruthy();
 			expect(screen.getByRole("radiogroup", { name: "Status" })).toBeTruthy();
@@ -764,7 +764,7 @@ describe("jobs", () => {
 		});
 
 		it("searches after a pause, keeps the words in the address and says what it found", async () => {
-			const router = renderAt("/dashboard");
+			const router = renderAt("/dashboard/jobs");
 			const box = (await screen.findByLabelText("Search jobs")) as HTMLInputElement;
 
 			fireEvent.change(box, { target: { value: "  figma " } });
@@ -778,7 +778,7 @@ describe("jobs", () => {
 		});
 
 		it("filters by status and sorts, and Clear filters puts everything back", async () => {
-			const router = renderAt("/dashboard");
+			const router = renderAt("/dashboard/jobs");
 			await screen.findByText("Showing 1–3 of 3");
 
 			fireEvent.click(screen.getByRole("radio", { name: "Draft" }));
@@ -803,7 +803,7 @@ describe("jobs", () => {
 		});
 
 		it("reads its filters from the address", async () => {
-			renderAt("/dashboard?status=closed&sort=title&q=sql");
+			renderAt("/dashboard/jobs?status=closed&sort=title&q=sql");
 			expect(await screen.findByText("Showing 1–1 of 1")).toBeTruthy();
 			expect((screen.getByLabelText("Search jobs") as HTMLInputElement).value).toBe("sql");
 			expect((screen.getByRole("radio", { name: "Closed" }) as HTMLInputElement).checked).toBe(true);
@@ -812,7 +812,7 @@ describe("jobs", () => {
 		});
 
 		it("says No jobs match, which is not No jobs yet, and offers Clear filters", async () => {
-			renderAt("/dashboard?q=zzz");
+			renderAt("/dashboard/jobs?q=zzz");
 			expect(await screen.findByRole("heading", { name: "No jobs match" })).toBeTruthy();
 			expect(screen.queryByRole("heading", { name: "No jobs yet" })).toBeNull();
 			expect(screen.queryByRole("link", { name: /Post your first job/ })).toBeNull();
@@ -829,13 +829,13 @@ describe("jobs", () => {
 				fakeCandidate({ id: "c2", jobId: "job_1", score: 60 }),
 				fakeCandidate({ id: "c3", jobId: "job_1", status: "queued" }),
 			];
-			renderAt("/dashboard");
+			renderAt("/dashboard/jobs");
 			expect(await screen.findByText(/4 CVs \(2 scored\)/)).toBeTruthy();
 		});
 
 		it("pages through more than 20 jobs", async () => {
 			jobs = Array.from({ length: 25 }, (_, i) => job(i + 1));
-			const router = renderAt("/dashboard");
+			const router = renderAt("/dashboard/jobs");
 			expect(await screen.findByText("Showing 1–20 of 25")).toBeTruthy();
 			expect(screen.getByText("Page 1 of 2")).toBeTruthy();
 			expect(screen.getByText("Previous").getAttribute("aria-disabled")).toBe("true");
@@ -850,7 +850,7 @@ describe("jobs", () => {
 		});
 
 		it("goes back to page 1 when the page asked for is past the end", async () => {
-			const router = renderAt("/dashboard?page=9");
+			const router = renderAt("/dashboard/jobs?page=9");
 			expect(await screen.findByText("Showing 1–3 of 3")).toBeTruthy();
 			expect(router.state.location.search).toEqual({});
 		});
@@ -863,7 +863,7 @@ describe("jobs", () => {
 					? Promise.resolve(apiError(500, "internal_error", "Something went wrong on our side. Try again."))
 					: answer(url, init),
 			);
-			renderAt("/dashboard");
+			renderAt("/dashboard/jobs");
 			const alert = await screen.findByRole("alert");
 			expect(alert.textContent).toContain("We couldn't load your jobs");
 			fail = false;
@@ -890,7 +890,7 @@ describe("jobs", () => {
 		});
 
 		it("opens a menu for each job, closes it with Escape and gives focus back", async () => {
-			renderAt("/dashboard");
+			renderAt("/dashboard/jobs");
 			const button = await screen.findByRole("button", { name: "Actions for Backend Engineer" });
 			expect(button.getAttribute("aria-expanded")).toBe("false");
 
@@ -917,7 +917,7 @@ describe("jobs", () => {
 		});
 
 		it("opens the job's page and its edit page from the menu", async () => {
-			const router = renderAt("/dashboard");
+			const router = renderAt("/dashboard/jobs");
 			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
 			open("Backend Engineer");
 			fireEvent.click(screen.getByRole("menuitem", { name: "Edit" }));
@@ -926,7 +926,7 @@ describe("jobs", () => {
 		});
 
 		it("duplicates from the menu and opens the copy's edit page as a draft", async () => {
-			const router = renderAt("/dashboard");
+			const router = renderAt("/dashboard/jobs");
 			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
 			open("Backend Engineer");
 			fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
@@ -960,7 +960,7 @@ describe("jobs", () => {
 					? Promise.resolve(apiError(403, "job_limit", "You've used this month's jobs. Wait for next month."))
 					: answer(url, init),
 			);
-			renderAt("/dashboard");
+			renderAt("/dashboard/jobs");
 			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
 			open("Backend Engineer");
 			fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
@@ -971,7 +971,7 @@ describe("jobs", () => {
 		});
 
 		it("deletes only after confirming, and says so", async () => {
-			renderAt("/dashboard");
+			renderAt("/dashboard/jobs");
 			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
 			open("Backend Engineer");
 			fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
@@ -993,7 +993,7 @@ describe("jobs", () => {
 
 		it("leaves Delete out for members", async () => {
 			org = { id: "org_1", name: "Sprite Labs", role: "member" };
-			renderAt("/dashboard");
+			renderAt("/dashboard/jobs");
 			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
 			open("Backend Engineer");
 			expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
@@ -1008,7 +1008,7 @@ describe("jobs", () => {
 		it("copies the public link from the menu and says Copied", async () => {
 			const writeText = vi.fn(async () => {});
 			vi.stubGlobal("navigator", { clipboard: { writeText } });
-			renderAt("/dashboard");
+			renderAt("/dashboard/jobs");
 			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
 			open("Backend Engineer");
 			fireEvent.click(screen.getByRole("menuitem", { name: "Copy public link" }));
@@ -1022,7 +1022,7 @@ describe("jobs", () => {
 		it("shares to the same places as the job page", async () => {
 			const writeText = vi.fn(async (_text: string) => {});
 			vi.stubGlobal("navigator", { clipboard: { writeText } });
-			renderAt("/dashboard");
+			renderAt("/dashboard/jobs");
 			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
 			open("Backend Engineer");
 			const share = screen.getByRole("menuitem", { name: "Share" });
@@ -1053,7 +1053,7 @@ describe("jobs", () => {
 				{ ...jobs[0]!, status: "draft" },
 				{ ...jobs[0]!, id: "job_2", title: "Closed role", status: "closed" },
 			];
-			renderAt("/dashboard");
+			renderAt("/dashboard/jobs");
 			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
 			open("Backend Engineer");
 			expect(screen.queryByRole("menuitem", { name: "Copy public link" })).toBeNull();
@@ -1126,7 +1126,7 @@ describe("unsaved changes on the job form", () => {
 		fireEvent.click(cancel);
 		fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Leave" }));
 		expect(await screen.findByRole("heading", { level: 1, name: "Jobs" })).toBeTruthy();
-		expect(router.state.location.pathname).toBe("/dashboard");
+		expect(router.state.location.pathname).toBe("/dashboard/jobs");
 		expect(screen.queryByRole("alertdialog")).toBeNull();
 		expect(confirm).not.toHaveBeenCalled();
 	});
@@ -1136,7 +1136,7 @@ describe("unsaved changes on the job form", () => {
 		fireEvent.click(await screen.findByRole("link", { name: "Cancel" }));
 		expect(await screen.findByRole("heading", { level: 1, name: "Jobs" })).toBeTruthy();
 		expect(screen.queryByRole("alertdialog")).toBeNull();
-		expect(router.state.location.pathname).toBe("/dashboard");
+		expect(router.state.location.pathname).toBe("/dashboard/jobs");
 	});
 
 	it("asks before any link leaves an edited job, and lets go once the edit is undone", async () => {
@@ -1241,7 +1241,7 @@ describe("page states and focus", () => {
 	});
 
 	it("moves focus to the page's h1 when a page opens, and draws no ring on it", async () => {
-		renderAt("/dashboard");
+		renderAt("/dashboard/jobs");
 
 		const heading = await screen.findByRole("heading", { level: 1, name: "Jobs" });
 		await waitFor(() => expect(document.activeElement).toBe(heading));
@@ -1311,20 +1311,20 @@ describe("page states and focus", () => {
 
 		// The jobs list already sits under the page's own "Jobs".
 		failRequests((url) => url.endsWith("/jobs"), async () => apiError(503, "unavailable", "Try again later"));
-		renderAt("/dashboard");
+		renderAt("/dashboard/jobs");
 		expect(await screen.findByRole("heading", { level: 2, name: "✕ We couldn't load your jobs" })).toBeTruthy();
 		expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
 	});
 
 	it("says in plain words when the API can't be reached or has nothing to say", async () => {
 		failRequests((url) => url.endsWith("/jobs"), async () => Promise.reject(new TypeError("Failed to fetch")));
-		renderAt("/dashboard");
+		renderAt("/dashboard/jobs");
 		expect(await screen.findByText("We couldn't reach LucidHire. Check your connection and try again.")).toBeTruthy();
 		expect(screen.queryByText(/Failed to fetch/)).toBeNull();
 		cleanup();
 
 		failRequests((url) => url.endsWith("/jobs"), async () => new Response("<html>Bad gateway</html>", { status: 502 }));
-		renderAt("/dashboard");
+		renderAt("/dashboard/jobs");
 		expect(await screen.findByText("Something went wrong on our side. Try again.")).toBeTruthy();
 		expect(screen.queryByText(/Request failed with/)).toBeNull();
 	});
@@ -1349,7 +1349,7 @@ describe("page states and focus", () => {
 		try {
 			// A date nobody can format crashes the list while it renders.
 			jobs = [keptRole({ createdAt: "not a date" })];
-			renderAt("/dashboard");
+			renderAt("/dashboard/jobs");
 
 			expect(await screen.findByRole("heading", { level: 1, name: "✕ Something went wrong" })).toBeTruthy();
 			expect(screen.getByText("This page hit a problem. Try again.")).toBeTruthy();
@@ -1542,7 +1542,7 @@ describe("choosing a plan before signing up", () => {
 		const router = renderAt("/onboarding");
 		fireEvent.change(await screen.findByLabelText("Company name"), { target: { value: "Sprite Labs" } });
 		fireEvent.click(screen.getByRole("button", { name: /Continue to your dashboard/ }));
-		expect(await screen.findByRole("heading", { name: "No jobs yet" })).toBeTruthy();
+		expect(await screen.findByRole("heading", { level: 1, name: "Overview" })).toBeTruthy();
 		expect(router.state.location.pathname).toBe("/dashboard");
 	});
 });
@@ -2626,7 +2626,7 @@ describe("candidates", () => {
 			openJob({ id: "job_2", title: "One CV", cvCount: 1 }),
 			openJob({ id: "job_3", title: "No CVs", cvCount: 0 }),
 		];
-		renderAt("/dashboard");
+		renderAt("/dashboard/jobs");
 
 		expect(await screen.findByText("Created 22 Oct 2026 · 3 CVs (0 scored)")).toBeTruthy();
 		expect(screen.getByText("Created 22 Oct 2026 · 1 CV (0 scored)")).toBeTruthy();

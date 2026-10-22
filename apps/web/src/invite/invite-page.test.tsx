@@ -72,7 +72,7 @@ describe("the invite page", () => {
 			"http://localhost:8787/invites/tok_abc/accept",
 			expect.objectContaining({ method: "POST" }),
 		);
-		expect(await screen.findByRole("heading", { name: "No jobs yet" })).toBeTruthy();
+		expect(await screen.findByRole("heading", { level: 1, name: "Overview" })).toBeTruthy();
 	});
 
 	it("sends a signed-out visitor to sign in first", async () => {

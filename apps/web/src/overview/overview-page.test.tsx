@@ -102,8 +102,8 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-function renderOverview() {
-	const router = createAppRouter(createMemoryHistory({ initialEntries: ["/dashboard/overview"] }));
+function renderOverview(path = "/dashboard") {
+	const router = createAppRouter(createMemoryHistory({ initialEntries: [path] }));
 	render(
 		<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
 			<RouterProvider router={router} />
@@ -128,6 +128,12 @@ describe("overview page", () => {
 		const nav = within(screen.getByRole("navigation", { name: "Main" }));
 		expect(nav.getByRole("link", { name: "Overview" }).getAttribute("aria-current")).toBe("page");
 		expect(nav.getByRole("link", { name: "Jobs" }).getAttribute("aria-current")).toBeNull();
+	});
+
+	it("takes the old /dashboard/overview address to /dashboard", async () => {
+		const router = renderOverview("/dashboard/overview");
+		expect(await screen.findByRole("heading", { level: 1, name: "Overview" }, { timeout: 4000 })).toBeTruthy();
+		expect(router.state.location.pathname).toBe("/dashboard");
 	});
 
 	it("shows the four key numbers with changes written out", async () => {
@@ -188,7 +194,7 @@ describe("overview page", () => {
 		);
 		expect(activity.getByRole("link", { name: "Job posted: Staff Engineer" }).getAttribute("href")).toBe("/dashboard/jobs/job_1");
 		expect(activity.queryByRole("link", { name: /rewritten with AI/ })).toBeNull();
-		expect(activity.getByRole("link", { name: /View all jobs/ }).getAttribute("href")).toBe("/dashboard");
+		expect(activity.getByRole("link", { name: /View all jobs/ }).getAttribute("href")).toBe("/dashboard/jobs");
 	});
 
 	it("gives every card its own empty state for a company with no data", async () => {

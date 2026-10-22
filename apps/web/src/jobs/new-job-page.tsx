@@ -66,7 +66,7 @@ export function NewJobPage() {
 					}
 					actions={({ saving }) => (
 						<>
-							<Link to="/dashboard" className="btn ghost">
+							<Link to="/dashboard/jobs" className="btn ghost">
 								Cancel
 							</Link>
 							<button type="submit" name="intent" value="draft" className="btn ghost" aria-disabled={saving} disabled={full}>

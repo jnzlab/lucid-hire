@@ -60,7 +60,7 @@ export function PageHeading({
 export function BackToJobs() {
 	return (
 		<Link
-			to="/dashboard"
+			to="/dashboard/jobs"
 			className="mb-6 inline-flex min-h-11 items-center gap-2 rounded-[3px] font-mono text-[13px] text-ink-muted hover:text-ink"
 		>
 			<span aria-hidden="true">←</span> Jobs
