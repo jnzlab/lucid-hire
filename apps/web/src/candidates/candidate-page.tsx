@@ -21,7 +21,9 @@ import {
 } from "../lib/candidates.ts";
 import { useJob } from "../lib/jobs.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
+import { DecisionBlock } from "./decision-block.tsx";
 import { InterviewQuestions } from "./interview-questions.tsx";
+import { OpenCvButton } from "./open-cv-button.tsx";
 import { RefreshFailed } from "./refresh-failed.tsx";
 
 export function CandidatePage({ jobId, candidateId }: { jobId: string; candidateId: string }) {
@@ -192,6 +194,8 @@ function CandidateDetails({
 				</p>
 			)}
 
+			<DecisionBlock key={candidate.id} jobId={jobId} candidate={candidate} />
+
 			{requirements.length > 0 && (
 				<section aria-labelledby="requirements-h" className="mt-10">
 					<div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
@@ -215,9 +219,12 @@ function CandidateDetails({
 			)}
 			<InterviewQuestions jobId={jobId} candidate={candidate} />
 
-			<p className="mt-10 font-mono text-[12.5px] text-ink-muted [overflow-wrap:anywhere]">
-				CV file · {candidate.fileName} · {formatFileSize(candidate.fileSize)}
-			</p>
+			<div className="mt-10 flex flex-wrap items-center gap-x-5 gap-y-3">
+				<p className="font-mono text-[12.5px] text-ink-muted [overflow-wrap:anywhere]">
+					CV file · {candidate.fileName} · {formatFileSize(candidate.fileSize)}
+				</p>
+				<OpenCvButton jobId={jobId} candidateId={candidate.id} fileName={candidate.fileName} />
+			</div>
 
 			{org.role === "admin" && (
 				<section aria-labelledby="danger-h" className="mt-12 border-t border-line pt-6">

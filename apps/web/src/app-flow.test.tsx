@@ -1,8 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/react-router";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { type Mock, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CANDIDATE_POLL_MS, CV_MAX_BYTES, type Candidate } from "./lib/candidates.ts";
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { type Mock, type MockInstance, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	CANDIDATE_POLL_MS,
+	CV_MAX_BYTES,
+	CV_URL_REVOKE_MS,
+	type Candidate,
+	type Decision,
+	useDecideCandidate,
+} from "./lib/candidates.ts";
 import { routeTree } from "./routeTree.gen.ts";
 
 // Clerk is replaced by a session we control; the API by an in-memory fake of /me, /orgs, /jobs and the
@@ -95,13 +102,16 @@ const summary = ({
 	summary: _summary,
 	requirements: _requirements,
 	fileSize: _size,
+	note: _note,
+	decidedAt: _decidedAt,
 	...rest
 }: FakeCandidate) => rest;
 const forPage = ({ jobId: _jobId, ...rest }: FakeCandidate): Candidate => rest;
 // Scored first (best first), then the ones being read, then the failed, as the API orders them.
 const place = (candidate: FakeCandidate) => ({ scored: 0, queued: 1, scoring: 1, failed: 2 })[candidate.status];
 
-// The candidates API: the ranked list, upload (the raw PDF as the body), read, retry and admin-only delete.
+// The candidates API: the ranked list, upload (the raw PDF as the body), read, decide, the CV file, retry and
+// admin-only delete.
 function fakeCandidates(url: URL, init: RequestInit | undefined): Response {
 	const [, , jobId, , id, action] = url.pathname.split("/");
 	const method = init?.method ?? "GET";
@@ -151,6 +161,18 @@ function fakeCandidates(url: URL, init: RequestInit | undefined): Response {
 		Object.assign(found, { status: "queued", error: null, canRetry: false, updatedAt: new Date().toISOString() });
 		return Response.json({ candidate: forPage(found) }, { status: 202 });
 	}
+	if (action === "cv") {
+		return new Response("%PDF-1.4 fake", { headers: { "Content-Type": "application/pdf" } });
+	}
+	if (method === "PATCH") {
+		const patch = JSON.parse(init!.body as string) as { decision?: Decision; note?: string | null };
+		if (patch.decision !== undefined && patch.decision !== found.decision) {
+			found.decidedAt = patch.decision === "undecided" ? null : new Date().toISOString();
+		}
+		if (patch.decision !== undefined) found.decision = patch.decision;
+		if (patch.note !== undefined) found.note = patch.note?.trim() || null;
+		return Response.json({ candidate: forPage(found) });
+	}
 	if (method === "DELETE") {
 		if (org?.role !== "admin") return apiError(403, "forbidden", "Only admins can delete candidates");
 		candidates = candidates.filter((candidate) => candidate !== found);
@@ -165,6 +187,7 @@ function fakeCandidate(fields: Partial<FakeCandidate> & { id: string }): FakeCan
 		jobId: "job_1",
 		fileName: `${fields.id}.pdf`,
 		status: "scored",
+		decision: "undecided",
 		name: null,
 		headline: null,
 		score: null,
@@ -177,6 +200,8 @@ function fakeCandidate(fields: Partial<FakeCandidate> & { id: string }): FakeCan
 		summary: null,
 		requirements: null,
 		fileSize: 120_000,
+		note: null,
+		decidedAt: null,
 		...fields,
 	};
 }
@@ -1043,5 +1068,447 @@ describe("candidates", () => {
 		expect(await screen.findByText("Created 22 Oct 2026 · 3 CVs")).toBeTruthy();
 		expect(screen.getByText("Created 22 Oct 2026 · 1 CV")).toBeTruthy();
 		expect(screen.getAllByText("Created 22 Oct 2026")).toHaveLength(1);
+	});
+
+	describe("decisions", () => {
+		const decisionGroup = async () => screen.findByRole("radiogroup", { name: "Decision" });
+		const radio = (name: string) => screen.getByRole("radio", { name }) as HTMLInputElement;
+		const patches = () => fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH");
+		const isPatch = (_url: string, init?: RequestInit) => init?.method === "PATCH";
+		// Makes the API refuse every change with a 500.
+		const refuseChanges = () => {
+			const answer = fetchMock.getMockImplementation()!;
+			fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+				isPatch(url, init)
+					? Promise.resolve(apiError(500, "internal_error", "Something went wrong. Try again."))
+					: answer(url, init),
+			);
+		};
+
+		it("shows the decision as a radio group of three, undecided to begin with", async () => {
+			candidates = [grace()];
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+
+			const group = await decisionGroup();
+			const options = within(group).getAllByRole("radio") as HTMLInputElement[];
+			expect(options.map((option) => option.labels?.[0].textContent)).toEqual(["Undecided", "Shortlisted", "Rejected"]);
+			expect(options.map((option) => option.checked)).toEqual([true, false, false]);
+			// One name makes them one group, which is what gives them the arrow keys and a single tab stop.
+			expect(new Set(options.map((option) => option.name)).size).toBe(1);
+			expect(options.every((option) => option.type === "radio")).toBe(true);
+			expect(screen.getByRole("heading", { level: 2, name: "Decision" })).toBeTruthy();
+
+			// Right after the summary and before the requirements.
+			const summaryText = screen.getByText("Six years of SwiftUI at a bank. No Kotlin shown.");
+			const requirements = screen.getByRole("heading", { level: 2, name: "Requirements" });
+			expect(summaryText.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+			expect(group.compareDocumentPosition(requirements) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		});
+
+		it("shortlists, rejects and un-decides at once, sends only the decision and announces each change", async () => {
+			candidates = [grace()];
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+			await decisionGroup();
+			const saving = hold(isPatch);
+
+			fireEvent.click(radio("Shortlisted"));
+			const announced = screen.getByText("Marked as shortlisted");
+			expect(announced.getAttribute("aria-live")).toBe("polite");
+			expect(announced.className).toContain("sr-only");
+			// The page shows it before the API has answered.
+			await waitFor(() => expect(saving.pending()).toBe(1));
+			expect(radio("Shortlisted").checked).toBe(true);
+			expect(radio("Undecided").checked).toBe(false);
+			expect(patches()).toHaveLength(1);
+			expect(fetchMock).toHaveBeenLastCalledWith(
+				"http://localhost:8787/jobs/job_1/candidates/cand_grace",
+				expect.objectContaining({
+					method: "PATCH",
+					body: JSON.stringify({ decision: "shortlisted" }),
+					headers: expect.objectContaining({
+						Authorization: "Bearer session-token",
+						"Content-Type": "application/json",
+					}),
+				}),
+			);
+			await act(async () => saving.release());
+			await waitFor(() => expect(candidates[0].decision).toBe("shortlisted"));
+			expect(radio("Shortlisted").checked).toBe(true);
+
+			fireEvent.click(radio("Rejected"));
+			expect(screen.getByText("Marked as rejected")).toBeTruthy();
+			await waitFor(() => expect(patches()).toHaveLength(2));
+			expect(radio("Rejected").checked).toBe(true);
+			expect(patches()[1][1]?.body).toBe(JSON.stringify({ decision: "rejected" }));
+			await act(async () => saving.release());
+
+			fireEvent.click(radio("Undecided"));
+			expect(screen.getByText("Marked as undecided")).toBeTruthy();
+			await waitFor(() => expect(patches()).toHaveLength(3));
+			expect(radio("Undecided").checked).toBe(true);
+			await act(async () => saving.release());
+			await waitFor(() => expect(candidates[0]).toMatchObject({ decision: "undecided", decidedAt: null }));
+			expect(screen.queryByRole("alert")).toBeNull();
+		});
+
+		it("lets a member decide too", async () => {
+			org = { id: "org_1", name: "Sprite Labs", role: "member" };
+			candidates = [grace()];
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+			await decisionGroup();
+
+			fireEvent.click(radio("Rejected"));
+			await waitFor(() => expect(candidates[0].decision).toBe("rejected"));
+			expect(radio("Rejected").checked).toBe(true);
+		});
+
+		it("puts the old decision back and says why when the API refuses", async () => {
+			candidates = [grace({ decision: "shortlisted" })];
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+			await decisionGroup();
+			expect(radio("Shortlisted").checked).toBe(true);
+			refuseChanges();
+			const refusing = hold(isPatch);
+
+			fireEvent.click(radio("Rejected"));
+			await waitFor(() => expect(refusing.pending()).toBe(1));
+			expect(radio("Rejected").checked).toBe(true);
+			await act(async () => refusing.release());
+
+			expect((await screen.findByRole("alert")).textContent).toBe("✕ Something went wrong. Try again.");
+			expect(radio("Shortlisted").checked).toBe(true);
+			expect(radio("Rejected").checked).toBe(false);
+			// Nothing is announced for a change that didn't happen.
+			expect(screen.queryByText("Marked as rejected")).toBeNull();
+			expect(candidates[0].decision).toBe("shortlisted");
+		});
+
+		it("updates the cached candidate and list at once, and puts both back when the API refuses", async () => {
+			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			const wrapper = ({ children }: { children: React.ReactNode }) => (
+				<QueryClientProvider client={client}>{children}</QueryClientProvider>
+			);
+			const listKey = ["candidates", "user_1", "job_1"];
+			const detailKey = [...listKey, "cand_grace"];
+			const kenji = fakeCandidate({ id: "cand_kenji", score: 71 });
+			client.setQueryData(detailKey, forPage(grace({ note: "Old note" })));
+			client.setQueryData(listKey, {
+				candidates: [summary(grace()), summary(kenji)],
+				cvCount: 2,
+				cvLimit: 10,
+			});
+			candidates = [grace({ note: "Old note" }), kenji];
+			const rows = () =>
+				client
+					.getQueryData<{ candidates: { id: string; decision: string }[] }>(listKey)
+					?.candidates.map((c) => [c.id, c.decision]);
+			const detail = () => client.getQueryData<Candidate>(detailKey);
+
+			const { result } = renderHook(() => useDecideCandidate("job_1", "cand_grace"), { wrapper });
+			const saving = hold(isPatch);
+			act(() => result.current.mutate({ decision: "shortlisted", note: "  New note " }));
+
+			await waitFor(() => expect(detail()).toMatchObject({ decision: "shortlisted", note: "New note" }));
+			expect(detail()?.decidedAt).not.toBeNull();
+			expect(rows()).toEqual([["cand_grace", "shortlisted"], ["cand_kenji", "undecided"]]);
+			await waitFor(() => expect(saving.pending()).toBe(1));
+			await act(async () => saving.release());
+			await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+			// Now a refusal.
+			refuseChanges();
+			act(() => result.current.mutate({ decision: "rejected", note: "" }));
+			await waitFor(() => expect(result.current.isError).toBe(true));
+			await waitFor(() => expect(detail()).toMatchObject({ decision: "shortlisted", note: "New note" }));
+			expect(rows()).toEqual([["cand_grace", "shortlisted"], ["cand_kenji", "undecided"]]);
+		});
+
+		it("pre-fills the note, saves it, and says Saved", async () => {
+			candidates = [grace({ note: "Strong on SwiftUI." })];
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+
+			const note = (await screen.findByLabelText("Note")) as HTMLTextAreaElement;
+			expect(note.value).toBe("Strong on SwiftUI.");
+			expect(note.maxLength).toBe(1000);
+			expect(screen.getByText("18 / 1,000")).toBeTruthy();
+			expect(screen.getByText("Everyone at Sprite Labs can read this.")).toBeTruthy();
+			const save = screen.getByRole("button", { name: "Save note" }) as HTMLButtonElement;
+			// Nothing to save yet.
+			expect(save.disabled).toBe(true);
+
+			fireEvent.change(note, { target: { value: "Strong on SwiftUI. Call on Monday." } });
+			expect(save.disabled).toBe(false);
+			expect(screen.getByText("34 / 1,000")).toBeTruthy();
+			expect(screen.queryByText("Saved")).toBeNull();
+			fireEvent.click(save);
+
+			expect(await screen.findByText("Saved")).toBeTruthy();
+			expect(patches()).toHaveLength(1);
+			expect(patches()[0]).toEqual([
+				"http://localhost:8787/jobs/job_1/candidates/cand_grace",
+				expect.objectContaining({
+					method: "PATCH",
+					body: JSON.stringify({ note: "Strong on SwiftUI. Call on Monday." }),
+				}),
+			]);
+			expect(candidates[0].note).toBe("Strong on SwiftUI. Call on Monday.");
+			expect(note.value).toBe("Strong on SwiftUI. Call on Monday.");
+			expect(save.disabled).toBe(true);
+			expect(screen.getByText("Saved").closest("[aria-live]")?.getAttribute("aria-live")).toBe("polite");
+
+			// Typing again clears the confirmation, and an empty note clears the saved one.
+			fireEvent.change(note, { target: { value: "   " } });
+			expect(screen.queryByText("Saved")).toBeNull();
+			fireEvent.click(save);
+			await waitFor(() => expect(candidates[0].note).toBeNull());
+			expect(await screen.findByText("Saved")).toBeTruthy();
+			expect(note.value).toBe("");
+		});
+
+		it("keeps what was typed and says why when a note can't be saved", async () => {
+			candidates = [grace({ note: "Old note" })];
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+			const note = (await screen.findByLabelText("Note")) as HTMLTextAreaElement;
+			refuseChanges();
+
+			fireEvent.change(note, { target: { value: "A better note" } });
+			fireEvent.click(screen.getByRole("button", { name: "Save note" }));
+
+			expect((await screen.findByRole("alert")).textContent).toBe("✕ Something went wrong. Try again.");
+			expect(note.value).toBe("A better note");
+			expect(screen.queryByText("Saved")).toBeNull();
+			expect((screen.getByRole("button", { name: "Save note" }) as HTMLButtonElement).disabled).toBe(false);
+			expect(candidates[0].note).toBe("Old note");
+		});
+
+		it("can decide on a CV that failed", async () => {
+			candidates = [
+				fakeCandidate({ id: "cand_bad", fileName: "scan.pdf", status: "failed", error: "Scoring failed." }),
+			];
+			renderAt("/dashboard/jobs/job_1/candidates/cand_bad");
+			await decisionGroup();
+
+			fireEvent.click(radio("Rejected"));
+			await waitFor(() => expect(candidates[0].decision).toBe("rejected"));
+		});
+
+		it("shows a decision made on the candidate page in the list", async () => {
+			candidates = [grace(), fakeCandidate({ id: "cand_kenji", name: "Kenji Tanaka", score: 71 })];
+			renderAt("/dashboard/jobs/job_1");
+
+			fireEvent.click(await screen.findByRole("link", { name: /Grace Turner/ }));
+			await decisionGroup();
+			fireEvent.click(radio("Shortlisted"));
+			await waitFor(() => expect(candidates[0].decision).toBe("shortlisted"));
+			fireEvent.click(screen.getByRole("link", { name: "Senior iOS Engineer" }));
+
+			const list = await screen.findByRole("list", { name: "Candidates" });
+			expect(within(list).getByText("Shortlisted")).toBeTruthy();
+			expect(screen.getByRole("radio", { name: "Shortlisted 1" })).toBeTruthy();
+		});
+	});
+
+	describe("the ranked list", () => {
+		const ana = () => fakeCandidate({ id: "cand_ana", name: "Ana Silva", score: 65, decision: "rejected" });
+		const kenji = () => fakeCandidate({ id: "cand_kenji", name: "Kenji Tanaka", score: 71 });
+		const filter = () => screen.getByRole("radiogroup", { name: "Show" });
+		const show = (name: string) => fireEvent.click(within(filter()).getByRole("radio", { name }));
+
+		it("marks shortlisted and rejected CVs in words, mutes the rejected and leaves the others alone", async () => {
+			candidates = [grace({ decision: "shortlisted" }), kenji(), ana()];
+			renderAt("/dashboard/jobs/job_1");
+
+			const list = await screen.findByRole("list", { name: "Candidates" });
+			const shortlisted = within(list).getByText("Shortlisted");
+			expect(shortlisted.className).toContain("bg-marker");
+			const rejected = within(list).getByText("Rejected");
+			expect(rejected.className).toContain("bg-gap");
+			// Nothing on the undecided row.
+			const rows = within(list).getAllByRole("listitem");
+			expect(rows[1].textContent).toMatch(/Kenji Tanaka/);
+			expect(rows[1].textContent).not.toMatch(/Shortlisted|Rejected|Undecided/);
+			expect(rows[0].textContent).toMatch(/Grace Turner.*Decision: Shortlisted/);
+			// Muted, in a colour that keeps its contrast, rather than faded.
+			expect(within(rows[2]).getByText("Ana Silva").className).toContain("text-ink-muted");
+			expect(within(rows[1]).getByText("Kenji Tanaka").className).not.toContain("text-ink-muted");
+		});
+
+		it("filters by decision, with counts, and keeps each CV's rank", async () => {
+			candidates = [
+				grace({ decision: "shortlisted" }),
+				kenji(),
+				ana(),
+				fakeCandidate({ id: "cand_new", fileName: "new_upload.pdf", status: "queued" }),
+				fakeCandidate({ id: "cand_bad", fileName: "scan.pdf", status: "failed", error: "We couldn't read this file." }),
+			];
+			renderAt("/dashboard/jobs/job_1");
+			await screen.findByText("Grace Turner");
+
+			const options = within(filter()).getAllByRole("radio") as HTMLInputElement[];
+			expect(options.map((option) => option.labels?.[0].textContent)).toEqual([
+				"All 5",
+				"Shortlisted 1",
+				"Undecided 3",
+				"Rejected 1",
+			]);
+			expect(options.map((option) => option.checked)).toEqual([true, false, false, false]);
+			expect(rowTexts()).toHaveLength(5);
+
+			show("Rejected 1");
+			expect(rowTexts()).toEqual([expect.stringMatching(/Rank 3: Ana Silva/)]);
+			show("Undecided 3");
+			expect(rowTexts()).toEqual([
+				expect.stringMatching(/Rank 2: Kenji Tanaka/),
+				expect.stringMatching(/new_upload\.pdf/),
+				expect.stringMatching(/scan\.pdf/),
+			]);
+			show("Shortlisted 1");
+			expect(rowTexts()).toEqual([expect.stringMatching(/Rank 1: Grace Turner/)]);
+			show("All 5");
+			expect(rowTexts()).toHaveLength(5);
+			// The filter only hides rows. The header still counts the whole list, and nothing was asked of the API.
+			expect(screen.getByText("3 of 5 read · 1 failed")).toBeTruthy();
+			expect(patches()).toHaveLength(0);
+		});
+
+		it("says when nothing has that decision", async () => {
+			candidates = [grace(), kenji()];
+			renderAt("/dashboard/jobs/job_1");
+			await screen.findByText("Grace Turner");
+
+			show("Shortlisted 0");
+			expect(screen.getByText("No shortlisted candidates yet.")).toBeTruthy();
+			expect(screen.queryByRole("list", { name: "Candidates" })).toBeNull();
+			show("Rejected 0");
+			expect(screen.getByText("No rejected candidates yet.")).toBeTruthy();
+			show("Undecided 2");
+			expect(screen.queryByText(/No .* candidates yet\./)).toBeNull();
+			expect(rowTexts()).toHaveLength(2);
+
+			candidates = [];
+			cleanup();
+			candidates = [grace({ decision: "rejected" })];
+			renderAt("/dashboard/jobs/job_1");
+			await screen.findByText("Grace Turner");
+			show("Undecided 0");
+			expect(screen.getByText("No undecided candidates yet.")).toBeTruthy();
+		});
+
+		it("shows the filter only once a CV is scored", async () => {
+			candidates = [fakeCandidate({ id: "cand_new", fileName: "new_upload.pdf", status: "queued" })];
+			renderAt("/dashboard/jobs/job_1");
+
+			await screen.findByText("new_upload.pdf");
+			expect(screen.queryByRole("radiogroup", { name: "Show" })).toBeNull();
+		});
+
+		const patches = () => fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH");
+	});
+
+	describe("Open CV", () => {
+		const createObjectURL = vi.fn((_blob: Blob) => "blob:cv-1");
+		const revokeObjectURL = vi.fn();
+		const tab = { location: { href: "" }, close: vi.fn() };
+		const cvRequests = () =>
+			fetchMock.mock.calls.filter(([url]) => url.endsWith("/jobs/job_1/candidates/cand_grace/cv"));
+		let open: MockInstance<typeof window.open>;
+
+		beforeEach(() => {
+			tab.location.href = "";
+			tab.close.mockClear();
+			createObjectURL.mockClear();
+			revokeObjectURL.mockClear();
+			// jsdom has neither of these.
+			Object.assign(URL, { createObjectURL, revokeObjectURL });
+			open = vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
+			candidates = [grace()];
+		});
+
+		afterEach(() => {
+			open.mockRestore();
+			Reflect.deleteProperty(URL, "createObjectURL");
+			Reflect.deleteProperty(URL, "revokeObjectURL");
+		});
+
+		it("opens the tab inside the click, then fetches the PDF with the token and sends the tab to it", async () => {
+			vi.useFakeTimers({ shouldAdvanceTime: true });
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+			const button = await screen.findByRole("button", { name: "Open CV" });
+			// It sits on the line that names the file.
+			expect(screen.getByText("CV file · grace_turner.pdf · 117 KB").parentElement?.contains(button)).toBe(true);
+
+			fireEvent.click(button);
+			// Before anything is fetched, or the browser would take the tab for a popup.
+			expect(open).toHaveBeenCalledWith("", "_blank");
+			expect(cvRequests()).toHaveLength(0);
+			await waitFor(() => expect(cvRequests()).toHaveLength(1));
+			expect(cvRequests()[0][1]).toEqual(
+				expect.objectContaining({ method: "GET", headers: { Authorization: "Bearer session-token" } }),
+			);
+
+			await waitFor(() => expect(tab.location.href).toBe("blob:cv-1"));
+			const blob = createObjectURL.mock.calls[0][0];
+			expect(blob.type).toBe("application/pdf");
+			expect(await blob.text()).toBe("%PDF-1.4 fake");
+			expect(tab.close).not.toHaveBeenCalled();
+			expect(screen.queryByRole("alert")).toBeNull();
+			expect(screen.getByRole("button", { name: "Open CV" })).toHaveProperty("disabled", false);
+
+			// The temporary link is dropped after a minute.
+			expect(revokeObjectURL).not.toHaveBeenCalled();
+			await act(() => vi.advanceTimersByTimeAsync(CV_URL_REVOKE_MS / 2));
+			expect(revokeObjectURL).not.toHaveBeenCalled();
+			await act(() => vi.advanceTimersByTimeAsync(CV_URL_REVOKE_MS / 2));
+			expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:cv-1");
+		});
+
+		it("downloads the PDF instead when the browser blocks the tab", async () => {
+			open.mockReturnValue(null);
+			const clicked: { href: string; download: string; attached: boolean }[] = [];
+			const click = vi
+				.spyOn(HTMLAnchorElement.prototype, "click")
+				.mockImplementation(function (this: HTMLAnchorElement) {
+					clicked.push({ href: this.href, download: this.download, attached: this.isConnected });
+				});
+			try {
+				renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+				fireEvent.click(await screen.findByRole("button", { name: "Open CV" }));
+
+				await waitFor(() => expect(clicked).toHaveLength(1));
+				expect(clicked[0]).toEqual({ href: "blob:cv-1", download: "grace_turner.pdf", attached: true });
+				// The link is only there for the click.
+				expect(document.querySelector("a[download]")).toBeNull();
+				expect(screen.queryByRole("alert")).toBeNull();
+			} finally {
+				click.mockRestore();
+			}
+		});
+
+		it("closes the tab and says so when the CV can't be fetched, and tries again on the next click", async () => {
+			const answer = fetchMock.getMockImplementation()!;
+			fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+				url.endsWith("/cv") && cvRequests().length <= 1
+					? Promise.resolve(apiError(404, "file_missing", "The CV file is missing"))
+					: answer(url, init),
+			);
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+			fireEvent.click(await screen.findByRole("button", { name: "Open CV" }));
+
+			expect((await screen.findByRole("alert")).textContent).toBe("✕ We couldn't open the CV. Try again.");
+			expect(tab.close).toHaveBeenCalledOnce();
+			expect(createObjectURL).not.toHaveBeenCalled();
+			expect(tab.location.href).toBe("");
+
+			fireEvent.click(screen.getByRole("button", { name: "Open CV" }));
+			await waitFor(() => expect(tab.location.href).toBe("blob:cv-1"));
+			expect(screen.queryByRole("alert")).toBeNull();
+		});
+
+		it("is there for members too", async () => {
+			org = { id: "org_1", name: "Sprite Labs", role: "member" };
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+			fireEvent.click(await screen.findByRole("button", { name: "Open CV" }));
+			await waitFor(() => expect(tab.location.href).toBe("blob:cv-1"));
+		});
 	});
 });

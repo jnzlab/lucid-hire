@@ -61,6 +61,13 @@ export function apiGet<T>(path: string, options: ApiRequestOptions = {}): Promis
 	return request<T>("GET", path, undefined, options);
 }
 
+// Downloads a file, like a CV's PDF. A refusal is parsed like any other call, so it throws the API's error.
+export async function apiGetBlob(path: string, { token, signal }: ApiRequestOptions = {}): Promise<Blob> {
+	const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+	const res = await fetch(`${API_URL}${path}`, { method: "GET", headers, signal });
+	return res.ok ? res.blob() : parse<never>(res);
+}
+
 export function apiPost<T>(path: string, body: unknown, options: ApiRequestOptions = {}): Promise<T> {
 	return request<T>("POST", path, body, options);
 }

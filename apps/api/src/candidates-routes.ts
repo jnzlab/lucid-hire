@@ -7,10 +7,13 @@ import {
 	DEFAULT_CV_FILE_NAME,
 	MAX_SCORING_RUNS,
 	createCandidate,
+	decideCandidate,
+	decideInput,
 	deleteCandidate,
 	deleteCvFiles,
 	getCandidate,
 	getCvCount,
+	getCvFile,
 	listCandidates,
 	markStartFailed,
 	releaseSlot,
@@ -19,11 +22,13 @@ import {
 } from "./candidates.ts";
 import { type Db, getDb } from "./db/client.ts";
 import type { AppEnv } from "./types.ts";
+import { validJson } from "./validation.ts";
 
 const jobNotFound = { error: { code: "job_not_found", message: "That job doesn't exist or isn't yours" } };
 const candidateNotFound = {
 	error: { code: "candidate_not_found", message: "That candidate doesn't exist or isn't yours" },
 };
+const fileMissing = { error: { code: "file_missing", message: "The CV file is missing" } };
 
 // The file name from the query, tidied; null unless it is a .pdf.
 function cleanFileName(raw: string | undefined): string | null {
@@ -31,6 +36,14 @@ function cleanFileName(raw: string | undefined): string | null {
 	if (!/\.pdf$/i.test(name)) return null;
 	// Cut the middle, so the name still ends in .pdf.
 	return name.length > CV_FILE_NAME_MAX ? name.slice(0, CV_FILE_NAME_MAX - 4) + name.slice(-4) : name;
+}
+
+// The Content-Disposition for showing a CV in the browser: a plain ASCII name for old clients, and the real
+// one, percent-encoded, for the rest. encodeURIComponent leaves ' ( ) * alone, which RFC 5987 doesn't allow.
+function cvDisposition(fileName: string): string {
+	const ascii = fileName.replace(/[^A-Za-z0-9._ -]/gu, "_");
+	const encoded = encodeURIComponent(fileName).replace(/['()*]/gu, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+	return `inline; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
 // Starts a scoring run. If the Workflow won't start, the CV is failed with a retryable message
@@ -132,6 +145,35 @@ export function candidateRoutes() {
 	routes.get("/:id", async (c) => {
 		const candidate = await getCandidate(getDb(c.env.DB), c.get("org").id, c.req.param("jobId"), c.req.param("id"));
 		return candidate ? c.json({ candidate }, 200, { "Cache-Control": "no-store" }) : c.json(candidateNotFound, 404);
+	});
+
+	// Any member of the company may decide, admins and members alike. Only delete is for admins.
+	routes.patch("/:id", validJson(decideInput), async (c) => {
+		const candidate = await decideCandidate(
+			getDb(c.env.DB),
+			c.get("org").id,
+			c.req.param("jobId"),
+			c.req.param("id"),
+			c.get("userId"),
+			c.req.valid("json"),
+		);
+		return candidate ? c.json({ candidate }) : c.json(candidateNotFound, 404);
+	});
+
+	// The original PDF, streamed from R2 and never buffered. `no-store` keeps a CV out of shared caches.
+	routes.get("/:id/cv", async (c) => {
+		const file = await getCvFile(getDb(c.env.DB), c.get("org").id, c.req.param("jobId"), c.req.param("id"));
+		if (!file) return c.json(candidateNotFound, 404);
+
+		const object = await c.env.CVS.get(file.fileKey);
+		if (!object) return c.json(fileMissing, 404);
+		return c.body(object.body, 200, {
+			"Content-Type": "application/pdf",
+			"Content-Length": String(object.size),
+			"Content-Disposition": cvDisposition(file.fileName),
+			"Cache-Control": "private, no-store",
+			"X-Content-Type-Options": "nosniff",
+		});
 	});
 
 	// Another scoring run for a CV that failed or got stuck, at most MAX_SCORING_RUNS in all.

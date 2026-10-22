@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "./app.ts";
 import type { SessionVerifier } from "./auth.ts";
-import { CV_MAX_BYTES, STALE_SCORING_MS, computeScore, deleteCvFiles } from "./candidates.ts";
+import { CV_MAX_BYTES, NOTE_MAX, STALE_SCORING_MS, computeScore, deleteCvFiles } from "./candidates.ts";
 import { type Db, getDb } from "./db/client.ts";
 import { type Requirement, candidates, jobs, members } from "./db/schema.ts";
 import { createOrgForUser } from "./orgs.ts";
@@ -133,6 +133,10 @@ type CandidateJson = {
 	canRetry: boolean;
 	summary: string | null;
 	requirements: Requirement[] | null;
+	decision: string;
+	note: string | null;
+	decidedAt: string | null;
+	updatedAt: string;
 };
 
 async function uploadOk(user: string, jobId: string, options?: UploadOptions) {
@@ -498,6 +502,352 @@ describe("GET /jobs/:jobId/candidates/:id", () => {
 				error: { code: "candidate_not_found", message: "That candidate doesn't exist or isn't yours" },
 			});
 		}
+	});
+});
+
+describe("PATCH /jobs/:jobId/candidates/:id", () => {
+	type Decide = { decision?: string; note?: string | null };
+	const decide = (user: string | null, jobId: string, id: string, body: unknown) =>
+		send(user, "PATCH", `/jobs/${jobId}/candidates/${id}`, {
+			headers: { "content-type": "application/json" },
+			body: new TextEncoder().encode(JSON.stringify(body)),
+		});
+	const decideOk = async (user: string, jobId: string, id: string, body: Decide) => {
+		const res = await decide(user, jobId, id, body);
+		expect(res.status).toBe(200);
+		return ((await res.json()) as { candidate: CandidateJson }).candidate;
+	};
+	const rowOf = async (id: string) => (await db.select().from(candidates).where(eq(candidates.id, id)))[0];
+	const later = () => new Promise((resolve) => setTimeout(resolve, 5));
+
+	it("starts undecided, and the list shows the decision while the note stays on the candidate", async () => {
+		const jobId = await createJob();
+		const id = await seed(jobId, { status: "scored", score: 80, scoredAt: new Date() });
+
+		const detail = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates/${id}`)).json()) as {
+			candidate: CandidateJson;
+		};
+		expect(detail.candidate).toMatchObject({ decision: "undecided", note: null, decidedAt: null });
+
+		await decideOk("user_admin", jobId, id, { decision: "shortlisted", note: "Call on Monday" });
+		const list = await send("user_admin", "GET", `/jobs/${jobId}/candidates`);
+		const { candidates: listed } = (await list.json()) as { candidates: CandidateJson[] };
+		expect(listed[0]).toMatchObject({ id, decision: "shortlisted" });
+		expect(listed[0]).not.toHaveProperty("note");
+		expect(listed[0]).not.toHaveProperty("decidedAt");
+	});
+
+	it("sets decidedAt and decidedBy when the decision changes, and clears them on undecided", async () => {
+		const jobId = await createJob();
+		const id = await seed(jobId, { status: "scored", score: 80, scoredAt: new Date() });
+
+		const shortlisted = await decideOk("user_admin", jobId, id, { decision: "shortlisted" });
+		expect(shortlisted).toMatchObject({ id, decision: "shortlisted", note: null });
+		const first = Date.parse(shortlisted.decidedAt ?? "");
+		expect(Date.now() - first).toBeLessThan(60_000);
+		expect(await rowOf(id)).toMatchObject({
+			decision: "shortlisted",
+			decidedAt: new Date(first),
+			decidedBy: "user_admin",
+		});
+
+		// Saying the same thing again, even as someone else, leaves who decided and when alone.
+		await later();
+		const same = await decideOk("user_member", jobId, id, { decision: "shortlisted" });
+		expect(same.decidedAt).toBe(shortlisted.decidedAt);
+		expect(await rowOf(id)).toMatchObject({ decidedAt: new Date(first), decidedBy: "user_admin" });
+
+		// Changing it records the new person and time.
+		const rejected = await decideOk("user_member", jobId, id, { decision: "rejected" });
+		expect(rejected.decision).toBe("rejected");
+		expect(Date.parse(rejected.decidedAt ?? "")).toBeGreaterThan(first);
+		const second = Date.parse(rejected.decidedAt ?? "");
+		expect(await rowOf(id)).toMatchObject({
+			decision: "rejected",
+			decidedAt: new Date(second),
+			decidedBy: "user_member",
+		});
+
+		// A note alone isn't a decision.
+		await later();
+		const noted = await decideOk("user_admin", jobId, id, { note: "Not senior enough" });
+		expect(noted).toMatchObject({ decision: "rejected", note: "Not senior enough" });
+		expect(await rowOf(id)).toMatchObject({ decidedAt: new Date(second), decidedBy: "user_member" });
+
+		// Back to undecided clears both, and the note stays.
+		const undecided = await decideOk("user_admin", jobId, id, { decision: "undecided" });
+		expect(undecided).toMatchObject({ decision: "undecided", decidedAt: null, note: "Not senior enough" });
+		expect(await rowOf(id)).toMatchObject({ decision: "undecided", decidedAt: null, decidedBy: null });
+
+		// Undecided to undecided stays clear.
+		await decideOk("user_admin", jobId, id, { decision: "undecided" });
+		expect(await rowOf(id)).toMatchObject({ decidedAt: null, decidedBy: null });
+
+		// And shortlisted straight to rejected is a change, not a clear.
+		await decideOk("user_admin", jobId, id, { decision: "shortlisted" });
+		await decideOk("user_admin", jobId, id, { decision: "rejected" });
+		expect(await rowOf(id)).toMatchObject({ decision: "rejected", decidedBy: "user_admin" });
+		expect((await rowOf(id)).decidedAt).not.toBeNull();
+	});
+
+	it("takes a decision on a CV in any status, such as rejecting one that failed", async () => {
+		const jobId = await createJob();
+		for (const status of ["queued", "scoring", "scored", "failed"] as const) {
+			const id = await seed(jobId, { status });
+			expect(await decideOk("user_admin", jobId, id, { decision: "rejected" })).toMatchObject({
+				status,
+				decision: "rejected",
+			});
+		}
+	});
+
+	it("trims the note, stores an empty one as null, and keeps the decision when only the note changes", async () => {
+		const jobId = await createJob();
+		const id = await seed(jobId, { status: "scored", score: 60, scoredAt: new Date() });
+		await decideOk("user_admin", jobId, id, { decision: "shortlisted" });
+
+		expect(await decideOk("user_member", jobId, id, { note: "  Strong on Swift.\n" })).toMatchObject({
+			decision: "shortlisted",
+			note: "Strong on Swift.",
+		});
+		expect((await rowOf(id)).note).toBe("Strong on Swift.");
+
+		// A decision alone leaves the note.
+		expect(await decideOk("user_member", jobId, id, { decision: "rejected" })).toMatchObject({
+			note: "Strong on Swift.",
+		});
+
+		for (const empty of ["", "   \n\t ", null]) {
+			await decideOk("user_admin", jobId, id, { note: "Something" });
+			expect(await decideOk("user_admin", jobId, id, { note: empty })).toMatchObject({ note: null });
+			expect((await rowOf(id)).note).toBeNull();
+		}
+
+		// Both at once.
+		expect(await decideOk("user_admin", jobId, id, { decision: "shortlisted", note: " Call her " })).toMatchObject({
+			decision: "shortlisted",
+			note: "Call her",
+		});
+	});
+
+	it("allows a note of 1000 characters after trimming, and refuses a longer one (400)", async () => {
+		const jobId = await createJob();
+		const id = await seed(jobId);
+
+		const full = "n".repeat(NOTE_MAX);
+		expect((await decideOk("user_admin", jobId, id, { note: `  ${full}  ` })).note).toBe(full);
+
+		const res = await decide("user_admin", jobId, id, { note: "n".repeat(NOTE_MAX + 1) });
+		expect(res.status).toBe(400);
+		const message = "Keep the note to 1000 characters or fewer";
+		expect(await res.json()).toEqual({ error: { code: "invalid_input", message, fields: { note: message } } });
+		// Nothing was saved, not even the decision sent with it.
+		const both = await decide("user_admin", jobId, id, { decision: "rejected", note: "n".repeat(NOTE_MAX + 1) });
+		expect(both.status).toBe(400);
+		expect(await rowOf(id)).toMatchObject({ note: full, decision: "undecided" });
+	});
+
+	it("refuses an empty body, an unknown decision and a note that isn't text (400 invalid_input)", async () => {
+		const jobId = await createJob();
+		const id = await seed(jobId);
+
+		const bodies = [{}, { other: "field" }, { decision: "maybe" }, { decision: 1 }, { note: 5 }, { decision: null }];
+		for (const body of bodies) {
+			const res = await decide("user_admin", jobId, id, body);
+			expect(res.status).toBe(400);
+			expect(await res.json()).toMatchObject({ error: { code: "invalid_input" } });
+		}
+		expect((await decide("user_admin", jobId, id, {})).status).toBe(400);
+		expect(await (await decide("user_admin", jobId, id, {})).json()).toMatchObject({
+			error: { message: "Nothing to update" },
+		});
+		expect(await rowOf(id)).toMatchObject({ decision: "undecided", note: null, decidedAt: null });
+	});
+
+	it("leaves updated_at alone, so a stuck scoring run is still timed from its last real change", async () => {
+		const jobId = await createJob();
+		const updatedAt = new Date(Date.now() - STALE_SCORING_MS - 60_000);
+		const stuck = await seed(jobId, { status: "scoring", updatedAt });
+		const scored = await seed(jobId, { status: "scored", score: 50, scoredAt: new Date(), updatedAt });
+
+		for (const id of [stuck, scored]) {
+			await decideOk("user_admin", jobId, id, { decision: "shortlisted" });
+			await decideOk("user_member", jobId, id, { note: "Look again" });
+			await decideOk("user_member", jobId, id, { decision: "undecided", note: null });
+			expect((await rowOf(id)).updatedAt).toEqual(updatedAt);
+		}
+
+		// So the stuck row still offers a retry, and the retry limit and clock are untouched.
+		const res = await send("user_admin", "GET", `/jobs/${jobId}/candidates/${stuck}`);
+		const { candidate } = (await res.json()) as { candidate: CandidateJson };
+		expect(candidate).toMatchObject({ status: "scoring", canRetry: true, updatedAt: updatedAt.toISOString() });
+		expect((await rowOf(stuck)).runs).toBe(1);
+	});
+
+	it("is open to any member of the company, not only admins", async () => {
+		const jobId = await createJob();
+		const id = await seed(jobId);
+		expect(await decideOk("user_member", jobId, id, { decision: "shortlisted", note: "Good" })).toMatchObject({
+			decision: "shortlisted",
+			note: "Good",
+		});
+		expect(await rowOf(id)).toMatchObject({ decidedBy: "user_member" });
+	});
+
+	it("needs a session and a company", async () => {
+		const jobId = await createJob();
+		const id = await seed(jobId);
+		expect((await decide(null, jobId, id, { decision: "rejected" })).status).toBe(401);
+		expect((await decide("user_new", jobId, id, { decision: "rejected" })).status).toBe(403);
+		expect(await rowOf(id)).toMatchObject({ decision: "undecided" });
+	});
+
+	it("404s for another company's candidate, a missing one and the wrong job, and changes nothing", async () => {
+		const jobId = await createJob();
+		const acmeJob = await createJob("open", "user_acme");
+		const theirs = await seed(acmeJob, {}, acmeOrgId);
+		const mine = await seed(jobId);
+		const otherJob = await createJob();
+
+		const paths = [
+			[acmeJob, theirs],
+			[jobId, theirs],
+			[jobId, "nope"],
+			[otherJob, mine],
+			["no-such-job", mine],
+		];
+		for (const [job, id] of paths) {
+			const res = await decide("user_admin", job, id, { decision: "rejected", note: "No" });
+			expect(res.status).toBe(404);
+			expect(await res.json()).toEqual({
+				error: { code: "candidate_not_found", message: "That candidate doesn't exist or isn't yours" },
+			});
+		}
+		expect(await rowOf(theirs)).toMatchObject({ decision: "undecided", note: null });
+		expect(await rowOf(mine)).toMatchObject({ decision: "undecided", note: null });
+	});
+});
+
+describe("GET /jobs/:jobId/candidates/:id/cv", () => {
+	// Every byte value, so a text round trip anywhere would show.
+	const BYTES = Uint8Array.from({ length: 1024 }, (_, i) => i % 256);
+
+	it("streams the exact PDF bytes with the headers that show it in the browser", async () => {
+		const jobId = await createJob();
+		const candidate = await uploadOk("user_admin", jobId, { fileName: "ada.pdf", body: BYTES });
+
+		const res = await send("user_admin", "GET", `/jobs/${jobId}/candidates/${candidate.id}/cv`);
+		expect(res.status).toBe(200);
+		expect(res.headers.get("content-type")).toBe("application/pdf");
+		expect(res.headers.get("content-length")).toBe(String(BYTES.byteLength));
+		expect(res.headers.get("content-disposition")).toBe(`inline; filename="ada.pdf"; filename*=UTF-8''ada.pdf`);
+		expect(res.headers.get("cache-control")).toBe("private, no-store");
+		expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+		expect(new Uint8Array(await res.arrayBuffer())).toEqual(BYTES);
+	});
+
+	it("hands R2's stream straight to the response without reading it", async () => {
+		const jobId = await createJob();
+		const candidate = await uploadOk("user_admin", jobId);
+		const arrayBuffer = vi.fn();
+		const text = vi.fn();
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(PDF.slice(0, 10));
+				controller.enqueue(PDF.slice(10));
+				controller.close();
+			},
+		});
+		const get = vi.spyOn(env.CVS, "get").mockResolvedValue({ body, size: PDF.byteLength, arrayBuffer, text } as never);
+		try {
+			const res = await send("user_admin", "GET", `/jobs/${jobId}/candidates/${candidate.id}/cv`);
+			expect(res.status).toBe(200);
+			expect(get).toHaveBeenCalledWith(`${orgId}/${jobId}/${candidate.id}.pdf`);
+			expect(new Uint8Array(await res.arrayBuffer())).toEqual(PDF);
+		} finally {
+			get.mockRestore();
+		}
+		expect(arrayBuffer).not.toHaveBeenCalled();
+		expect(text).not.toHaveBeenCalled();
+	});
+
+	it("gives the file name in ASCII and, percent-encoded, in full", async () => {
+		const jobId = await createJob();
+		const fileName = 'résumé "final".pdf';
+		const candidate = await uploadOk("user_member", jobId, { fileName });
+
+		const res = await send("user_member", "GET", `/jobs/${jobId}/candidates/${candidate.id}/cv`);
+		expect(res.status).toBe(200);
+		expect(res.headers.get("content-disposition")).toBe(
+			`inline; filename="r_sum_ _final_.pdf"; filename*=UTF-8''r%C3%A9sum%C3%A9%20%22final%22.pdf`,
+		);
+
+		// Quotes, backslashes, line breaks and emoji can't break out of the header either.
+		const nasty = await uploadOk("user_member", jobId, { fileName: 'a";\\b\r\nX-Evil: 1 \u{1F600}.pdf' });
+		const header = (await send("user_member", "GET", `/jobs/${jobId}/candidates/${nasty.id}/cv`)).headers.get(
+			"content-disposition",
+		);
+		expect(header).toMatch(/^inline; filename="[A-Za-z0-9._ -]+"; filename\*=UTF-8''[A-Za-z0-9._~%!-]+$/);
+		expect(header).toContain('filename="a___b__X-Evil_ 1 _.pdf"');
+
+		// RFC 5987 doesn't allow ' ( ) * unencoded in filename*, though encodeURIComponent leaves them.
+		const quoted = await uploadOk("user_member", jobId, { fileName: "Ada's CV (final)*.pdf" });
+		expect(
+			(await send("user_member", "GET", `/jobs/${jobId}/candidates/${quoted.id}/cv`)).headers.get("content-disposition"),
+		).toBe(`inline; filename="Ada_s CV _final__.pdf"; filename*=UTF-8''Ada%27s%20CV%20%28final%29%2A.pdf`);
+	});
+
+	it("is open to any member of the company, not only admins", async () => {
+		const jobId = await createJob();
+		const candidate = await uploadOk("user_admin", jobId);
+		const res = await send("user_member", "GET", `/jobs/${jobId}/candidates/${candidate.id}/cv`);
+		expect(res.status).toBe(200);
+		expect(new Uint8Array(await res.arrayBuffer())).toEqual(PDF);
+	});
+
+	it("404s with file_missing when the file is gone from R2", async () => {
+		const jobId = await createJob();
+		const candidate = await uploadOk("user_admin", jobId);
+		await bucket.delete(`${orgId}/${jobId}/${candidate.id}.pdf`);
+
+		const res = await send("user_admin", "GET", `/jobs/${jobId}/candidates/${candidate.id}/cv`);
+		expect(res.status).toBe(404);
+		expect(await res.json()).toEqual({ error: { code: "file_missing", message: "The CV file is missing" } });
+	});
+
+	it("404s for another company's candidate, a missing one and the wrong job, without touching R2", async () => {
+		const jobId = await createJob();
+		const acmeJob = await createJob("open", "user_acme");
+		const theirs = await uploadOk("user_acme", acmeJob);
+		const mine = await uploadOk("user_admin", jobId);
+		const otherJob = await createJob();
+
+		const get = vi.spyOn(env.CVS, "get");
+		try {
+			const paths = [
+				`/jobs/${acmeJob}/candidates/${theirs.id}/cv`,
+				`/jobs/${jobId}/candidates/${theirs.id}/cv`,
+				`/jobs/${jobId}/candidates/nope/cv`,
+				`/jobs/${otherJob}/candidates/${mine.id}/cv`,
+			];
+			for (const path of paths) {
+				const res = await send("user_admin", "GET", path);
+				expect(res.status).toBe(404);
+				expect(await res.json()).toEqual({
+					error: { code: "candidate_not_found", message: "That candidate doesn't exist or isn't yours" },
+				});
+			}
+			expect(get).not.toHaveBeenCalled();
+		} finally {
+			get.mockRestore();
+		}
+	});
+
+	it("needs a session and a company", async () => {
+		const jobId = await createJob();
+		const candidate = await uploadOk("user_admin", jobId);
+		expect((await send(null, "GET", `/jobs/${jobId}/candidates/${candidate.id}/cv`)).status).toBe(401);
+		expect((await send("user_new", "GET", `/jobs/${jobId}/candidates/${candidate.id}/cv`)).status).toBe(403);
 	});
 });
 

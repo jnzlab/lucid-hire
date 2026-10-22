@@ -66,6 +66,9 @@ export const jobs = sqliteTable(
 export const CANDIDATE_STATUSES = ["queued", "scoring", "scored", "failed"] as const;
 export type CandidateStatus = (typeof CANDIDATE_STATUSES)[number];
 
+export const CANDIDATE_DECISIONS = ["undecided", "shortlisted", "rejected"] as const;
+export type Decision = (typeof CANDIDATE_DECISIONS)[number];
+
 // One checked requirement from the job, with the CV quote that shows it was met.
 export type Requirement = {
 	label: string;
@@ -76,7 +79,8 @@ export type Requirement = {
 };
 
 // One uploaded CV for a job. The PDF lives in R2 under `file_key`; a Workflow scores it with Gemini and
-// fills in the rest. `runs` counts scoring runs started, which caps manual retries.
+// fills in the rest. `runs` counts scoring runs started, which caps manual retries. The recruiters' call on
+// the CV is `decision` and `note`; `decided_at` and `decided_by` say who last changed the decision, and when.
 export const candidates = sqliteTable(
 	"candidates",
 	{
@@ -106,6 +110,10 @@ export const candidates = sqliteTable(
 			.default(sql`(unixepoch('subsec') * 1000)`)
 			.$onUpdate(() => new Date()),
 		scoredAt: integer("scored_at", { mode: "timestamp_ms" }),
+		decision: text("decision", { enum: CANDIDATE_DECISIONS }).notNull().default("undecided"),
+		note: text("note"),
+		decidedAt: integer("decided_at", { mode: "timestamp_ms" }),
+		decidedBy: text("decided_by"),
 	},
 	// The ranked list is "this job's candidates by score"; the org index backs company-wide cleanup.
 	(t) => [index("candidates_job_score_idx").on(t.jobId, t.score), index("candidates_org_idx").on(t.orgId)],
