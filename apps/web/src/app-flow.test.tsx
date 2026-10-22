@@ -753,16 +753,17 @@ describe("page states and focus", () => {
 
 	it("shows a page for an address that matches nothing, with a link back for signed-in and signed-out visitors", async () => {
 		renderAt("/dashboard/nowhere");
-		expect(await screen.findByRole("heading", { level: 1, name: "✕ This page doesn't exist" })).toBeTruthy();
+		expect(await screen.findByRole("heading", { level: 1, name: "✕ This page does not exist" })).toBeTruthy();
 		expect(document.title).toBe("Page not found · LucidHire");
-		expect(screen.getByRole("link", { name: "Back to your jobs" }).getAttribute("href")).toBe("/dashboard");
+		expect(screen.getByRole("link", { name: "Open your dashboard" }).getAttribute("href")).toBe("/dashboard");
+		expect(screen.getByRole("link", { name: "Go home" }).getAttribute("href")).toBe("/");
 		cleanup();
 
 		session.signedIn = false;
 		renderAt("/nowhere");
-		expect(await screen.findByRole("heading", { level: 1, name: "✕ This page doesn't exist" })).toBeTruthy();
-		expect(screen.getByRole("link", { name: "Back to home" }).getAttribute("href")).toBe("/");
-		expect(screen.queryByRole("link", { name: "Back to your jobs" })).toBeNull();
+		expect(await screen.findByRole("heading", { level: 1, name: "✕ This page does not exist" })).toBeTruthy();
+		expect(screen.getByRole("link", { name: "Go home" }).getAttribute("href")).toBe("/");
+		expect(screen.queryByRole("link", { name: "Open your dashboard" })).toBeNull();
 	});
 
 	it("catches a page that crashes, says so plainly and offers to try again", async () => {
