@@ -20,6 +20,8 @@ export const CV_MAX_BYTES = 5 * 1024 * 1024;
 export const CV_FILE_NAME_MAX = 200;
 export const DEFAULT_CV_FILE_NAME = "cv.pdf";
 export const NOTE_MAX = 1000;
+// The longest name a recruiter can give a CV.
+export const APPLICANT_NAME_MAX = 120;
 // The first run plus up to two manual retries.
 export const MAX_SCORING_RUNS = 3;
 // A run is stuck when the CV is still queued or scoring this long after its last update: a worst-case run
@@ -285,6 +287,20 @@ export async function releaseSlot(db: Db, orgId: string, jobId: string): Promise
 	}
 }
 
+// The name a recruiter typed for a CV, sent URI-encoded in a header so names with accents or other scripts survive.
+// Blank is none (null); undefined means the header was malformed or too long.
+export function parseApplicantName(raw: string | undefined): string | null | undefined {
+	if (raw === undefined) return null;
+	let name: string;
+	try {
+		name = decodeURIComponent(raw).trim().replace(/\s+/gu, " ");
+	} catch {
+		return undefined;
+	}
+	if (!name) return null;
+	return name.length > APPLICANT_NAME_MAX ? undefined : name;
+}
+
 type NewCandidate = {
 	id: string;
 	orgId: string;
@@ -296,6 +312,8 @@ type NewCandidate = {
 	// Set for applications from the public page; recruiter uploads leave both out.
 	source?: "upload" | "apply";
 	email?: string;
+	// What a recruiter typed for a CV; scoring never replaces it with the name read from the CV.
+	name?: string;
 };
 
 export async function createCandidate(db: Db, input: NewCandidate): Promise<Candidate> {

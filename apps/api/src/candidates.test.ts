@@ -90,15 +90,22 @@ async function send(user: string | null, method: string, path: string, init: Ini
 	return res;
 }
 
-type UploadOptions = { fileName?: string | null; type?: string; length?: string | null; body?: Uint8Array };
+type UploadOptions = {
+	fileName?: string | null;
+	type?: string;
+	length?: string | null;
+	body?: Uint8Array;
+	// Raw header values, as the web app sends them (the name URI-encoded).
+	headers?: Record<string, string>;
+};
 
 // Uploads a PDF the way the web app does: the raw bytes as the body, with a Content-Length.
 function upload(
 	user: string,
 	jobId: string,
-	{ fileName = "ada.pdf", type = "application/pdf", length, body = PDF }: UploadOptions = {},
+	{ fileName = "ada.pdf", type = "application/pdf", length, body = PDF, headers: extra = {} }: UploadOptions = {},
 ) {
-	const headers: Record<string, string> = { "content-type": type };
+	const headers: Record<string, string> = { "content-type": type, ...extra };
 	const size = length === undefined ? String(body.byteLength) : length;
 	if (size !== null) headers["content-length"] = size;
 	const query = fileName === null ? "" : `?fileName=${encodeURIComponent(fileName)}`;
@@ -335,6 +342,63 @@ describe("POST /jobs/:jobId/candidates", () => {
 		expect((await jobOf(jobId)).cvCount).toBe(10);
 		expect(creates).toHaveLength(10);
 		expect(await keysUnder(`${orgId}/${jobId}/`)).toHaveLength(10);
+	});
+
+	describe("the name and email a recruiter gives", () => {
+		const given = { "x-applicant-name": encodeURIComponent("  Zoë  Müller "), "x-applicant-email": " Zoe@Example.com " };
+
+		it("stores them, tidied, and shows them in the list and on the candidate", async () => {
+			const jobId = await createJob();
+			const candidate = await uploadOk("user_admin", jobId, { headers: given });
+			expect(candidate).toMatchObject({ name: "Zoë Müller", email: "zoe@example.com", source: "upload" });
+			const list = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates`)).json()) as {
+				candidates: { id: string; name: string | null; email: string | null }[];
+			};
+			expect(list.candidates[0]).toMatchObject({ id: candidate.id, name: "Zoë Müller", email: "zoe@example.com" });
+		});
+
+		it("treats blank headers as none", async () => {
+			const jobId = await createJob();
+			const candidate = await uploadOk("user_admin", jobId, { headers: { "x-applicant-name": "%20", "x-applicant-email": " " } });
+			expect(candidate).toMatchObject({ name: null, email: null });
+			// Two CVs without an email don't collide.
+			await uploadOk("user_admin", jobId, { fileName: "b.pdf" });
+		});
+
+		it("turns away a malformed email or name before a slot is taken", async () => {
+			const jobId = await createJob();
+			for (const [headers, code] of [
+				[{ "x-applicant-email": "not-an-email" }, "invalid_email"],
+				[{ "x-applicant-name": "%E0%A4%A" }, "invalid_name"],
+				[{ "x-applicant-name": "a".repeat(121) }, "invalid_name"],
+			] as const) {
+				const res = await upload("user_admin", jobId, { headers });
+				expect(res.status).toBe(400);
+				expect(((await res.json()) as { error: { code: string } }).error.code).toBe(code);
+			}
+			expect((await jobOf(jobId)).cvCount).toBe(0);
+		});
+
+		it("answers 409 for an email already on another CV of the job, and gives the slot back", async () => {
+			const jobId = await createJob();
+			await uploadOk("user_admin", jobId, { headers: given });
+			const res = await upload("user_admin", jobId, { fileName: "again.pdf", headers: { "x-applicant-email": "ZOE@example.com" } });
+			expect(res.status).toBe(409);
+			expect(await res.json()).toEqual({
+				error: { code: "email_taken", message: "Another CV on this job already uses that email address" },
+			});
+			expect((await jobOf(jobId)).cvCount).toBe(1);
+			// Another job may use it.
+			const other = await createJob();
+			expect((await upload("user_admin", other, { headers: given })).status).toBe(201);
+		});
+
+		it("does not tell another company that an address is taken", async () => {
+			const jobId = await createJob();
+			await uploadOk("user_admin", jobId, { headers: given });
+			const res = await upload("user_acme", jobId, { headers: given });
+			expect(res.status).toBe(404);
+		});
 	});
 
 	it("lets exactly 10 of 11 simultaneous uploads through", async () => {
