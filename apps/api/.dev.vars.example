@@ -1,3 +1,6 @@
 # Copy to .dev.vars for `pnpm dev:api`. Use the Clerk DEVELOPMENT instance's secret key:
 # production keys only work on lucidhire.io.
 CLERK_SECRET_KEY=sk_test_...
+
+# Gemini API key (Google AI Studio). The live Worker has its own copy as a secret.
+GOOGLE_GENERATIVE_AI_API_KEY=...

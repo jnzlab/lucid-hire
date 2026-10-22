@@ -169,6 +169,25 @@ Legacy used `gemini-3-flash-preview` and `gemini-embedding-001` (768
 dims). Neither is carried over. Prices for `gemini-3.8-flash` double on
 2027-01-01 ($0.75/$3.75 now, then $1.50/$7.50 per 1M tokens).
 
+**Gemini key and tier (owner, 2026-10-22):** the legacy key's prepaid
+credit is used up (HTTP 402), so the owner made a new key and chose to
+**stay on the free tier** with the models above. The key lives in the
+`lucidhire-api` secret `GOOGLE_GENERATIVE_AI_API_KEY` and in the owner's
+`apps/api/.dev.vars`, never in the repo. What that means:
+- Free-tier content may be used by Google to improve its products, so
+  only sample CVs (the prototype's cast) go through it during the
+  hackathon.
+- Latency is high and uneven: `gemini-3.8-flash` took 11 to 112 seconds
+  for a 400-word rewrite on 2026-10-22, and sometimes answered 503 "high
+  demand". Calls use thinking level `low` (`minimal` is rejected), a
+  90-second timeout, and the SDK's retries; the UI says a rewrite can take
+  up to a minute.
+- `gemini-embedding-2` accepts `outputDimensionality: 768` (checked
+  2026-10-22).
+- Request-facing AI calls are capped per company by the `AI_RATE_LIMIT`
+  binding (10 a minute), and every call, failed ones included, writes an
+  `ai_usage` row after the response (`waitUntil`).
+
 **Cloudflare tooling: use the `cf` CLI, not wrangler.**
 - The `cf` CLI (v1.0.0-beta) is installed globally and already
   authenticated with the owner's account through OAuth. Never run
@@ -391,6 +410,18 @@ status** (not a check run) with the context **`TestSprite V3`**, so query
 requires both `Workers Builds: lucidhire-app` and `TestSprite V3`, each
 pinned to the app that posts it. Admins can bypass in an emergency.
 Screenshot it for the write-up.
+
+**Project instructions steer gate runs (verified 2026-10-22, PR #3):**
+Settings → General → Extra Instructions are read by gate runs, but not by
+a single test's "Save & Run". PR #3's first gate blocked the sign-in test
+because the instructions still said "don't sign in", while the same test
+passed alone. **Update them in every PR that ships a new layer,** with
+the owner's approval of the text.
+
+**Re-running a gate:** the dashboard can't re-run a GitHub-triggered run
+("Re-run blocked" says "Could not start the run", "Re-Run All" says
+"unknown environment 'github-pr-3'"), and "Re-Run Failed" skips blocked
+tests. Push a commit to the PR branch instead.
 
 **Retention:** trigger activity is kept for 30 days.
 
@@ -634,6 +665,15 @@ TestSprite's cloud browser has to get in. Constraints, from the docs:
 - A seed script creates one published job with a known slug and a few
   processed candidates, so the leaderboard and candidate pages have data as
   soon as a run starts. Mark it as sample data.
+- **Test jobs (owner, 2026-10-22):** tests run as Sprite Labs on the live
+  site, so they must not pile up data, and **TestSprite runs a suite's
+  tests in parallel**, so no two tests may share a job. Each test owns its
+  title and cleans up after itself: "Recruiter posts a job" deletes its
+  "Sprite post role" after checking it, and "Recruiter deletes a job"
+  creates and deletes its own "Sprite delete role". The close test reuses
+  one "Sprite archive role". The AI and validation tests save nothing.
+  (PR #4's first gate failed when a post test and a delete test shared
+  "Sprite test role".)
 - Gemini calls cost real money and add latency. Keep test CVs small. The
   test CVs in `lucid-hire-legacy/test/` can be reused.
 - Use stable, accessible selectors and labels (real `<button>`, `<label>`

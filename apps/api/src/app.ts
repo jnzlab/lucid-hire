@@ -1,8 +1,11 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { HTTPException } from "hono/http-exception";
+import { type DescriptionEnhancer, enhanceWithGemini } from "./ai.ts";
 import { requireAuth, verifyClerkSession, type SessionVerifier } from "./auth.ts";
 import { ALLOWED_ORIGINS } from "./config.ts";
 import { getDb } from "./db/client.ts";
+import { jobRoutes } from "./jobs-routes.ts";
 import { ORG_NAME_MAX, ORG_NAME_MIN, createOrgForUser, findOrgForUser, normalizeOrgName } from "./orgs.ts";
 import type { AppEnv } from "./types.ts";
 
@@ -11,9 +14,13 @@ const REQUEST_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/;
 
 type AppOptions = {
 	verifySession?: SessionVerifier;
+	enhanceDescription?: DescriptionEnhancer;
 };
 
-export function createApp({ verifySession = verifyClerkSession }: AppOptions = {}) {
+export function createApp({
+	verifySession = verifyClerkSession,
+	enhanceDescription = enhanceWithGemini,
+}: AppOptions = {}) {
 	const app = new Hono<AppEnv>();
 
 	app.use(async (c, next) => {
@@ -74,6 +81,8 @@ export function createApp({ verifySession = verifyClerkSession }: AppOptions = {
 		return c.json({ org }, created ? 201 : 200);
 	});
 
+	app.route("/jobs", jobRoutes({ auth, enhance: enhanceDescription }));
+
 	app.notFound((c) =>
 		c.json(
 			{
@@ -87,6 +96,11 @@ export function createApp({ verifySession = verifyClerkSession }: AppOptions = {
 	);
 
 	app.onError((error, c) => {
+		// Hono's own 4xx errors, such as a malformed JSON body, keep their status in our error shape.
+		if (error instanceof HTTPException && error.status < 500) {
+			return c.json({ error: { code: "bad_request", message: error.message } }, error.status);
+		}
+
 		const requestId = c.get("requestId");
 		console.error(`[${requestId}] unhandled error`, error);
 		return c.json(
