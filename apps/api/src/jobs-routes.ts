@@ -1,6 +1,4 @@
-import { zValidator } from "@hono/zod-validator";
 import { Hono, type MiddlewareHandler } from "hono";
-import type { z } from "zod";
 import { type DescriptionEnhancer, recordAiUsage } from "./ai.ts";
 import { requireOrg } from "./auth.ts";
 import { candidateRoutes } from "./candidates-routes.ts";
@@ -19,19 +17,7 @@ import {
 } from "./jobs.ts";
 import { questionRoutes } from "./questions-routes.ts";
 import type { AppEnv } from "./types.ts";
-
-// Zod failures in the API's error shape: the first message, plus the first message for each field.
-function validJson<T extends z.ZodType>(schema: T) {
-	return zValidator("json", schema, (result, c) => {
-		if (result.success) return;
-		const fields: Record<string, string> = {};
-		for (const issue of result.error.issues) fields[String(issue.path[0] ?? "body")] ??= issue.message;
-		return c.json(
-			{ error: { code: "invalid_input", message: result.error.issues[0]?.message ?? "Check the form", fields } },
-			400,
-		);
-	});
-}
+import { validJson } from "./validation.ts";
 
 const notFound = { error: { code: "not_found", message: "That job doesn't exist or isn't yours" } };
 
