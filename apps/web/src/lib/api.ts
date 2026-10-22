@@ -84,6 +84,21 @@ export async function apiGetBlob(path: string, { token, signal }: ApiRequestOpti
 	return res.ok ? res.blob() : parse<never>(res);
 }
 
+// A file name from a Content-Disposition header, if it has a plain one.
+const fileNameOf = (header: string | null) => header?.match(/filename="([^"]+)"/i)?.[1] ?? null;
+
+// Downloads a generated file, like the CSV export, with the name the API gave it.
+export async function apiGetFile(
+	path: string,
+	{ token, signal }: ApiRequestOptions = {},
+): Promise<{ blob: Blob; fileName: string | null }> {
+	const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+	const res = await send(`${API_URL}${path}`, { method: "GET", headers, signal });
+	return res.ok
+		? { blob: await res.blob(), fileName: fileNameOf(res.headers.get("Content-Disposition")) }
+		: parse<never>(res);
+}
+
 export function apiPost<T>(path: string, body: unknown, options: ApiRequestOptions = {}): Promise<T> {
 	return request<T>("POST", path, body, options);
 }

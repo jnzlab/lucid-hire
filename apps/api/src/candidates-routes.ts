@@ -15,14 +15,17 @@ import {
 	getCvCount,
 	getCvFile,
 	listCandidates,
+	listForExport,
 	markStartFailed,
 	releaseSlot,
 	startRetry,
 	takeSlot,
 } from "./candidates.ts";
+import { buildCsv, exportFileName, exportQuery } from "./candidates-export.ts";
 import { type Db, getDb } from "./db/client.ts";
+import { getJob } from "./jobs.ts";
 import type { AppEnv } from "./types.ts";
-import { validJson } from "./validation.ts";
+import { validJson, validQuery } from "./validation.ts";
 
 const jobNotFound = { error: { code: "job_not_found", message: "That job doesn't exist or isn't yours" } };
 const candidateNotFound = {
@@ -70,6 +73,25 @@ export function candidateRoutes() {
 
 		const candidates = await listCandidates(db, c.get("org").id, jobId);
 		return c.json({ candidates, cvCount, cvLimit: CV_LIMIT_PER_JOB }, 200, { "Cache-Control": "no-store" });
+	});
+
+	// The job's candidates as a spreadsheet, for any member of the company. Registered before "/:id" so the path is
+	// not taken for a candidate. The file is built from one query: a CPU-light loop over the job's few hundred rows at most.
+	routes.get("/export.csv", validQuery(exportQuery), async (c) => {
+		const db = getDb(c.env.DB);
+		const org = c.get("org");
+		const jobId = c.req.param("jobId");
+		const job = await getJob(db, org.id, jobId);
+		if (!job) return c.json(jobNotFound, 404);
+
+		const { decision } = c.req.valid("query");
+		const rows = await listForExport(db, org.id, jobId, decision);
+		return c.body(buildCsv(rows), 200, {
+			"Content-Type": "text/csv; charset=utf-8",
+			"Content-Disposition": `attachment; filename="${exportFileName(job.title, decision)}"`,
+			"Cache-Control": "no-store",
+			"X-Content-Type-Options": "nosniff",
+		});
 	});
 
 	// The body is the raw PDF. It is streamed straight into R2 and never buffered: a Worker on the free

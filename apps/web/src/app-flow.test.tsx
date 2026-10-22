@@ -174,6 +174,15 @@ function fakeCandidates(url: URL, init: RequestInit | undefined): Response {
 	const job = jobs.find((candidate) => candidate.id === jobId);
 	if (!job) return notFound();
 
+	if (id === "export.csv") {
+		const decision = url.searchParams.get("decision");
+		return new Response(`\uFEFFRank,Name\r\n1,Grace (${decision})\r\n`, {
+			headers: {
+				"Content-Type": "text/csv; charset=utf-8",
+				"Content-Disposition": `attachment; filename="senior-ios-engineer-${decision === "all" ? "" : `${decision}-`}applicants.csv"`,
+			},
+		});
+	}
 	if (!id) {
 		if (method === "GET") {
 			const ranked = candidates
@@ -2670,6 +2679,59 @@ describe("candidates", () => {
 			open.mockRestore();
 			Reflect.deleteProperty(URL, "createObjectURL");
 			Reflect.deleteProperty(URL, "revokeObjectURL");
+		});
+
+		it("exports the candidates as a CSV from the menu, with the session token", async () => {
+			candidates = [grace(), kenji()];
+			const clicked: { href: string; download: string }[] = [];
+			const createObjectURL = vi.fn((_blob: Blob) => "blob:csv-1");
+			Object.assign(URL, { createObjectURL, revokeObjectURL: () => {} });
+			const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+				clicked.push({ href: this.href, download: this.download });
+			});
+			renderAt("/dashboard/jobs/job_1");
+			const button = await screen.findByRole("button", { name: "Export CSV" });
+
+			expect(button.getAttribute("aria-expanded")).toBe("false");
+			fireEvent.click(button);
+			expect(button.getAttribute("aria-expanded")).toBe("true");
+			expect(["All candidates", "Shortlisted", "Undecided", "Rejected"].map((name) => screen.getByRole("button", { name }))).toHaveLength(4);
+			// Escape closes it and gives focus back.
+			fireEvent.keyDown(document, { key: "Escape" });
+			expect(screen.queryByRole("button", { name: "All candidates" })).toBeNull();
+			expect(document.activeElement).toBe(button);
+
+			fireEvent.click(button);
+			fireEvent.click(screen.getByRole("button", { name: "Shortlisted" }));
+			await waitFor(() => expect(clicked).toHaveLength(1));
+			expect(clicked[0]).toEqual({ href: "blob:csv-1", download: "senior-ios-engineer-shortlisted-applicants.csv" });
+			const request = fetchMock.mock.calls.find(([url]) => url.includes("export.csv"))!;
+			expect(request[0]).toBe("http://localhost:8787/jobs/job_1/candidates/export.csv?decision=shortlisted");
+			expect(request[1]).toEqual(expect.objectContaining({ headers: { Authorization: "Bearer session-token" } }));
+			const blob = createObjectURL.mock.calls[0][0];
+			expect(blob.type).toContain("text/csv");
+			expect(screen.queryByRole("alert")).toBeNull();
+
+			fireEvent.click(screen.getByRole("button", { name: "Export CSV" }));
+			fireEvent.click(screen.getByRole("button", { name: "All candidates" }));
+			await waitFor(() => expect(clicked).toHaveLength(2));
+			expect(clicked[1].download).toBe("senior-ios-engineer-applicants.csv");
+			click.mockRestore();
+			Reflect.deleteProperty(URL, "createObjectURL");
+			Reflect.deleteProperty(URL, "revokeObjectURL");
+		});
+
+		it("says so when the export fails", async () => {
+			candidates = [grace()];
+			renderAt("/dashboard/jobs/job_1");
+			fireEvent.click(await screen.findByRole("button", { name: "Export CSV" }));
+			const answer = fetchMock.getMockImplementation()!;
+			fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+				url.includes("export.csv") ? Promise.resolve(apiError(500, "server_error", "Boom")) : answer(url, init),
+			);
+			fireEvent.click(screen.getByRole("button", { name: "Rejected" }));
+
+			expect((await screen.findByRole("alert")).textContent).toBe("✕ We couldn't export the candidates. Try again.");
 		});
 
 		it("opens a row to show every requirement, then closes it", async () => {

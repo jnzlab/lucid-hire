@@ -34,6 +34,7 @@ import {
 import type { Job } from "../lib/jobs.ts";
 import { useNow } from "../lib/use-now.ts";
 import { CandidateTags, DecisionTag } from "./candidate-tags.tsx";
+import { ExportMenu } from "./export-menu.tsx";
 import { OpenCvButton } from "./open-cv-button.tsx";
 import { RefreshFailed } from "./refresh-failed.tsx";
 import { ROW_ACTION } from "./row-action.ts";
@@ -192,6 +193,9 @@ function RankedList({
 
 	return (
 		<>
+			<div className="mb-4 flex justify-end">
+				<ExportMenu jobId={jobId} />
+			</div>
 			<ListTools view={view} onChange={change} />
 			{filterable && <DecisionFilter candidates={candidates} show={view.decision} onChange={(show) => change({ decision: show })} />}
 			{filtered && (

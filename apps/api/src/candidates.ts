@@ -215,6 +215,30 @@ async function ranked(db: Db, orgId: string, jobId: string, row: CandidateRow): 
 	return toCandidate(row, index === -1 ? null : index + 1, ids.length);
 }
 
+// Everything the CSV export holds, ranked as the list is. Ranks count the whole job, so they don't change with the
+// decision filter.
+export async function listForExport(
+	db: Db,
+	orgId: string,
+	jobId: string,
+	decision: Decision | "all",
+): Promise<(Candidate & { email: string | null; phone: string | null })[]> {
+	const rows = await db
+		.select(candidateColumns)
+		.from(candidates)
+		.where(inJob(orgId, jobId))
+		.orderBy(sql`case ${candidates.status} when 'scored' then 0 when 'failed' then 2 else 1 end`, ...rankOrder);
+	let rank = 0;
+	return rows
+		.map((row) => ({ row, place: row.status === "scored" && row.score !== null ? ++rank : null }))
+		.filter(({ row }) => decision === "all" || row.decision === decision)
+		.map(({ row, place }) => ({
+			...toCandidate(row, place, rank),
+			email: row.profile?.email ?? null,
+			phone: row.profile?.phone ?? null,
+		}));
+}
+
 export async function getCandidate(db: Db, orgId: string, jobId: string, id: string): Promise<Candidate | null> {
 	const [row] = await db.select(candidateColumns).from(candidates).where(inJobById(orgId, jobId, id)).limit(1);
 	return row ? ranked(db, orgId, jobId, row) : null;

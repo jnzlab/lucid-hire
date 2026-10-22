@@ -527,6 +527,128 @@ describe("GET /jobs/:jobId/candidates", () => {
 	});
 });
 
+describe("GET /jobs/:jobId/candidates/export.csv", () => {
+	const exportCsv = (user: string | null, jobId: string, query = "") =>
+		send(user, "GET", `/jobs/${jobId}/candidates/export.csv${query}`);
+	// fetch's text() drops the BOM, so it is checked on the bytes.
+	const lines = async (res: Response) => (await res.text()).replace(/^\uFEFF/, "").split("\r\n").filter(Boolean);
+
+	async function exportJob() {
+		const jobId = await createJob();
+		await db.update(jobs).set({ title: "Senior iOS Engineer" }).where(eq(jobs.id, jobId));
+		const at = (minute: number) => new Date(Date.UTC(2026, 9, 22, 10, minute));
+		const best = await seed(jobId, {
+			status: "scored",
+			score: 90,
+			scoredAt: at(5),
+			name: "Ada Lovelace",
+			decision: "shortlisted",
+			decidedAt: at(40),
+			profile: { email: "ada@example.com", phone: "+44 7946 095 800", links: [], skills: [], experience: [], education: [], certifications: [] },
+			requirements: [req("Swift", "must", true), req("Combine", "must", false)],
+			summary: "Great, really.",
+		});
+		const next = await seed(jobId, { status: "scored", score: 60, scoredAt: at(6), name: "=Bob", note: "Maybe" });
+		const rejected = await seed(jobId, { status: "scored", score: 30, scoredAt: at(7), name: "Cy", decision: "rejected" });
+		const failed = await seed(jobId, { status: "failed", error: "Scoring failed." });
+		const reading = await seed(jobId, { status: "scoring" });
+		return { jobId, best, next, rejected, failed, reading };
+	}
+
+	it("sends every candidate, ranked, as a downloadable CSV that is not cached", async () => {
+		const { jobId } = await exportJob();
+		const res = await exportCsv("user_member", jobId);
+
+		expect(res.status).toBe(200);
+		expect(res.headers.get("content-type")).toBe("text/csv; charset=utf-8");
+		expect(res.headers.get("content-disposition")).toBe('attachment; filename="senior-ios-engineer-applicants.csv"');
+		expect(res.headers.get("cache-control")).toBe("no-store");
+		expect([...new Uint8Array(await res.clone().arrayBuffer()).slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+		const rows = await lines(res);
+		// Header, three scored by rank, then the CV being read and the failed one.
+		expect(rows).toHaveLength(6);
+		// The time it was applied depends on when the row was seeded, so it is checked apart.
+		const [rank, name, email, phone, score, status, decision, note, decidedAt, , summary, matching, missing, reason] =
+			rows[1].replace('"Great, really."', "Great; really.").split(",");
+		expect([rank, name, email, phone, score, status, decision, note, decidedAt, summary, matching, missing, reason]).toEqual([
+			"1",
+			"Ada Lovelace",
+			"ada@example.com",
+			"'+44 7946 095 800",
+			"90",
+			"scored",
+			"Shortlisted",
+			"",
+			"2026-10-22T10:40:00.000Z",
+			"Great; really.",
+			"Swift",
+			"Combine",
+			"",
+		]);
+		expect(rows[2]).toContain("2,'=Bob,,,60,scored,Undecided,Maybe,");
+		expect(rows[3]).toContain("3,Cy,");
+		expect(rows[4]).toMatch(/^,seed\.pdf,,,,scoring,/);
+		expect(rows[5]).toMatch(/^,seed\.pdf,,,,failed,.*,Scoring failed\.$/);
+	});
+
+	it("filters by decision, keeps each CV's rank and names the file after the filter", async () => {
+		const { jobId } = await exportJob();
+
+		const rejected = await exportCsv("user_admin", jobId, "?decision=rejected");
+		expect(rejected.headers.get("content-disposition")).toBe(
+			'attachment; filename="senior-ios-engineer-rejected-applicants.csv"',
+		);
+		const rows = await lines(rejected);
+		expect(rows).toHaveLength(2);
+		expect(rows[1]).toMatch(/^3,Cy,,,30,scored,Rejected,/);
+
+		const undecided = await lines(await exportCsv("user_admin", jobId, "?decision=undecided"));
+		expect(undecided).toHaveLength(4);
+		expect(undecided[1]).toMatch(/^2,'=Bob,/);
+
+		const shortlisted = await exportCsv("user_admin", jobId, "?decision=shortlisted");
+		expect(shortlisted.headers.get("content-disposition")).toContain("-shortlisted-applicants.csv");
+		expect(await lines(shortlisted)).toHaveLength(2);
+		expect((await exportCsv("user_admin", jobId, "?decision=all")).headers.get("content-disposition")).toContain(
+			'"senior-ios-engineer-applicants.csv"',
+		);
+	});
+
+	it("numbers the CSV like the list and the candidate page", async () => {
+		const { jobId, best, next } = await exportJob();
+		const list = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates`)).json()) as {
+			candidates: CandidateJson[];
+		};
+		const rows = await lines(await exportCsv("user_admin", jobId));
+		const ranks = rows.slice(1).map((line) => line.split(",")[0]);
+		expect(ranks).toEqual(list.candidates.map((c) => (c.rank === null ? "" : String(c.rank))));
+		const page = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates/${next}`)).json()) as {
+			candidate: CandidateJson;
+		};
+		expect(page.candidate.rank).toBe(2);
+		expect(list.candidates[0].id).toBe(best);
+	});
+
+	it("refuses an unknown decision (400), a stranger's job (404) and a missing session (401)", async () => {
+		const { jobId } = await exportJob();
+		const bad = await exportCsv("user_admin", jobId, "?decision=maybe");
+		expect(bad.status).toBe(400);
+		expect(((await bad.json()) as { error: { code: string } }).error.code).toBe("invalid_input");
+
+		const acmeJob = await createJob("open", "user_acme");
+		expect((await exportCsv("user_admin", acmeJob)).status).toBe(404);
+		expect((await exportCsv("user_admin", "missing")).status).toBe(404);
+		expect((await exportCsv(null, jobId)).status).toBe(401);
+	});
+
+	it("exports a job with no candidates as just the header", async () => {
+		const jobId = await createJob();
+		const rows = await lines(await exportCsv("user_admin", jobId));
+		expect(rows).toHaveLength(1);
+		expect(rows[0].startsWith("Rank,Name,Email")).toBe(true);
+	});
+});
+
 describe("GET /jobs/:jobId/candidates/:id", () => {
 	it("returns the full candidate, with its requirements and evidence", async () => {
 		const jobId = await createJob();

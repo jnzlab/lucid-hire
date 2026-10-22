@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { ApiError, apiDelete, apiGet, apiGetBlob, apiPatch, apiPost, apiUploadPdf } from "./api.ts";
+import { ApiError, apiDelete, apiGet, apiGetBlob, apiGetFile, apiPatch, apiPost, apiUploadPdf } from "./api.ts";
 import { jobKey, jobsKey } from "./jobs.ts";
 import { useSession } from "./session.ts";
 
@@ -261,6 +261,30 @@ export function useOpenCv(jobId: string, id: string, fileName: string) {
 		isPending: mutation.isPending,
 		error: mutation.isError ? OPEN_CV_FAILED : null,
 	};
+}
+
+export type ExportChoice = "all" | Decision;
+export const EXPORT_FAILED = "We couldn't export the candidates. Try again.";
+
+// Downloads the job's candidates as a CSV. The API needs the session token, so the file is fetched and handed to the
+// browser as a temporary link instead of being opened by a plain link.
+export function useExportCsv(jobId: string) {
+	const { token } = useSession();
+	return useMutation({
+		mutationFn: async (choice: ExportChoice) => {
+			const { blob, fileName } = await apiGetFile(`/jobs/${jobId}/candidates/export.csv?decision=${choice}`, {
+				token: await token(),
+			});
+			const url = URL.createObjectURL(blob);
+			const link = document.createElement("a");
+			link.href = url;
+			link.download = fileName ?? "applicants.csv";
+			document.body.append(link);
+			link.click();
+			link.remove();
+			setTimeout(() => URL.revokeObjectURL(url), CV_URL_REVOKE_MS);
+		},
+	});
 }
 
 export type UploadItem = {
