@@ -28,6 +28,7 @@ import {
 	scoreCandidate,
 } from "./scoring.ts";
 import { createTestD1 } from "./test/d1.ts";
+import { RENEWAL_GRACE_MS } from "./plan-state.ts";
 
 let db: Db;
 let bucket: R2Bucket;
@@ -308,6 +309,18 @@ describe("the reading queue", () => {
 		expect(await takeSlot(db, early)).toBe("started");
 	});
 
+	it("keeps the slot a retried step already took, even with a better waiter queued since", async () => {
+		for (let i = 0; i < 5; i++) await seedQueued(orgId, { status: "scoring" });
+		for (let i = 0; i < 3; i++) await seedQueued(otherOrg, { status: "scoring" });
+		const now = Date.now();
+		const mine = await seedQueued(thirdOrg, { priorityAt: now });
+		expect(await takeSlot(db, mine)).toBe("started");
+		// D1's answer to that step was lost, and a Max CV with a 30-minute head start began waiting meanwhile.
+		await seedQueued(otherOrg, { priorityAt: now - 1_800_000 });
+		expect(await takeSlot(db, mine)).toBe("started");
+		expect((await rowOf(mine)).status).toBe("scoring");
+	});
+
 	it("does not let a better waiter whose own company is full block others", async () => {
 		for (let i = 0; i < 5; i++) await seedQueued(orgId, { status: "scoring" });
 		const now = Date.now();
@@ -350,8 +363,8 @@ describe("the reading queue", () => {
 		for (const id of ids) expect(await enterQueue(db, id, now)).toBe(true);
 		const at = await Promise.all(ids.map(async (id) => (await rowOf(id)).queuePriorityAt?.getTime()));
 		expect(at).toEqual([now, now - 300_000, now - 1_800_000]);
-		// An expired paid plan counts as Free.
-		await db.update(organizations).set({ currentPeriodEnd: now - 1 }).where(eq(organizations.id, max));
+		// A paid plan past its period and the renewal grace counts as Free.
+		await db.update(organizations).set({ currentPeriodEnd: now - RENEWAL_GRACE_MS - 1 }).where(eq(organizations.id, max));
 		await enterQueue(db, ids[2], now);
 		expect((await rowOf(ids[2])).queuePriorityAt?.getTime()).toBe(now);
 		expect(await enterQueue(db, "deleted")).toBe(false);

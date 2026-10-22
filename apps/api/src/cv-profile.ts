@@ -78,12 +78,12 @@ function list(values: unknown, limit: number, max: number): string[] {
 }
 
 // Not a full RFC 5322 check: plain ASCII addresses only, which keeps out anything that is not one address (and,
-// in a mailto: link, anything that could add a header or a query).
-const EMAIL = /^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/;
+// in a mailto: link, anything that could add a header or a query). Every email the API stores passes it.
+export const EMAIL_PATTERN = /^[a-z0-9._+-]+@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/;
 
 export function cleanEmail(value: unknown): string | undefined {
 	const email = clip(value, 254)?.replace(/^mailto:/i, "").toLowerCase();
-	return email && EMAIL.test(email) ? email : undefined;
+	return email && EMAIL_PATTERN.test(email) ? email : undefined;
 }
 
 // Digits and the usual separators only, with enough digits to be a number.

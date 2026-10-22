@@ -321,7 +321,9 @@ export type UploadItem = {
 // The longest name the API takes (apps/api/src/candidates.ts).
 export const APPLICANT_NAME_MAX = 120;
 // The API's own test for an address (apps/api/src/public.ts): loose on purpose.
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/;
+// The API's rule: plain ASCII addresses only. Anything else is either not one address or can't travel in a request
+// header, and in a mailto: link it could add a recipient or a query.
+const EMAIL_PATTERN = /^[a-z0-9._+-]+@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/i;
 export const isEmail = (raw: string) => raw.length <= 254 && EMAIL_PATTERN.test(raw);
 
 // What is wrong with the details typed for the staged files, by item key: an address that isn't one, or one that two

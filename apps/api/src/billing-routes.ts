@@ -5,7 +5,8 @@ import { type UserDirectory } from "./clerk.ts";
 import { ALLOWED_ORIGINS, APP_ORIGIN } from "./config.ts";
 import { requireOrg } from "./auth.ts";
 import { getDb } from "./db/client.ts";
-import { effectivePlan, getPlanState } from "./plan-state.ts";
+import { isPlanKey } from "@lucid-hire/plans";
+import { ACCESS_STATUSES, getPlanState } from "./plan-state.ts";
 import { type PolarFetch, productForPlan } from "./polar.ts";
 import type { AppEnv } from "./types.ts";
 import { validJson } from "./validation.ts";
@@ -46,8 +47,10 @@ export function billingRoutes({ auth, polar, directory }: BillingRouteOptions) {
 		const state = await getPlanState(db, org.id);
 		const polarApi = polar(c.env);
 
-		// Anyone paying today (a subscription that still grants a paid plan) changes it in place.
-		if (state?.polarSubscriptionId && effectivePlan(state) !== "free") {
+		// Anyone with a live subscription changes it in place. Live means its stored status still gives access, even
+		// when its period end has passed: the renewal webhook may be late, and a second checkout would bill twice.
+		const live = (ACCESS_STATUSES as readonly string[]).includes(state?.subscriptionStatus ?? "");
+		if (state?.polarSubscriptionId && live && isPlanKey(state.plan) && state.plan !== "free") {
 			if (state.subscriptionStatus === "past_due") {
 				return c.json(
 					{ error: { code: "payment_overdue", message: "Your last payment failed. Fix it in the billing portal first." } },

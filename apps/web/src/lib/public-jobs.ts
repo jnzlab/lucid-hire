@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiApply, apiGet } from "./api.ts";
 import { API_URL } from "./config.ts";
-import { CV_MAX_BYTES } from "./candidates.ts";
+import { CV_MAX_BYTES, isEmail } from "./candidates.ts";
 
 // A job as the public page sees it: no company id, no counts, nothing about recruiters.
 export type PublicJob = {
@@ -37,7 +37,7 @@ export function checkApplicationFile(file: File): string | null {
 	return null;
 }
 
-export const isValidEmail = (email: string) => email.length <= 254 && /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(email);
+export const isValidEmail = isEmail;
 
 export function useApply(slug: string) {
 	return useMutation({

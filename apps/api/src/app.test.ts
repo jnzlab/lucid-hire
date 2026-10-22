@@ -60,6 +60,26 @@ describe("CORS", () => {
 		expect(res.headers.get("access-control-allow-headers")?.toLowerCase()).toContain("authorization");
 	});
 
+	it("allows every custom header the web app sends", async () => {
+		// The browser drops a request whose header isn't allowed here, so each one the web app sets must be listed.
+		const sent = ["authorization", "content-type", "x-applicant-email", "x-applicant-name", "x-turnstile-token", "x-file-name"];
+		const res = await app.request(
+			"/jobs/job_1/candidates",
+			{
+				method: "OPTIONS",
+				headers: {
+					origin: "https://lucidhire.io",
+					"access-control-request-method": "POST",
+					"access-control-request-headers": sent.join(","),
+				},
+			},
+			env,
+		);
+
+		const allowed = res.headers.get("access-control-allow-headers")?.toLowerCase().split(",") ?? [];
+		for (const header of sent) expect(allowed).toContain(header);
+	});
+
 	it("does not grant other origins", async () => {
 		const res = await app.request("/health", { headers: { origin: "https://evil.example" } }, env);
 

@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "./db/client.ts";
 import { candidates, jobs, organizations } from "./db/schema.ts";
+import { EMAIL_PATTERN } from "./cv-profile.ts";
 
 // Everything the public job page may show. No org id, no internal ids, no plan usage.
 export type PublicJob = {
@@ -61,12 +62,12 @@ export function listOpenJobSlugs(db: Db): Promise<{ slug: string; updatedAt: Dat
 		.limit(SITEMAP_MAX);
 }
 
-// An address as typed, tidied for storage: trimmed and lower case, or null when it isn't an email. Deliberately
-// loose (one @, a dot in the domain, no spaces): the only real test of an address is mailing it.
+// An address as typed, tidied for storage: trimmed and lower case, or null when it isn't an email. The same rule as
+// an email read from a CV, so a typed address can't add a recipient or a query to the recruiter's mailto: link.
 export function normalizeEmail(raw: string | undefined | null): string | null {
 	const email = raw?.trim().toLowerCase();
 	if (!email || email.length > EMAIL_MAX) return null;
-	return /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(email) ? email : null;
+	return EMAIL_PATTERN.test(email) ? email : null;
 }
 
 export async function hasApplied(db: Db, jobId: string, email: string): Promise<boolean> {

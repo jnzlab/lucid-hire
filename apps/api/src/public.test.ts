@@ -162,6 +162,13 @@ describe("normalizeEmail", () => {
 			expect(normalizeEmail(bad)).toBeNull();
 		}
 	});
+
+	it("rejects anything a mailto: link or a header would read as more than one plain address", () => {
+		for (const bad of ["ada@example.com?bcc=spy%40evil.com", "ada@x.co,spy@evil.com", "ada&body=hi@example.com", "a%3fb@example.com", "иван@почта.рф"]) {
+			expect(normalizeEmail(bad)).toBeNull();
+		}
+		expect(normalizeEmail("ada.lovelace+jobs@mail.example.co.uk")).toBe("ada.lovelace+jobs@mail.example.co.uk");
+	});
 });
 
 describe("GET /public/jobs/:slug", () => {
