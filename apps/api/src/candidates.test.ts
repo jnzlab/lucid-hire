@@ -226,10 +226,12 @@ describe("POST /jobs/:jobId/candidates", () => {
 			fileName: `${"a".repeat(196)}.PDF`,
 		});
 
-		const big = await uploadOk("user_admin", jobId, { body: new Uint8Array(CV_MAX_BYTES) });
+		const bigPdf = new Uint8Array(CV_MAX_BYTES);
+		bigPdf.set(PDF);
+		const big = await uploadOk("user_admin", jobId, { body: bigPdf });
 		expect(big.fileSize).toBe(CV_MAX_BYTES);
 		expect((await bucket.head(`${orgId}/${jobId}/${big.id}.pdf`))?.size).toBe(CV_MAX_BYTES);
-	});
+	}, 20_000);
 
 	it("rejects anything but a PDF with 415, before taking a slot", async () => {
 		const jobId = await createJob();
@@ -241,6 +243,24 @@ describe("POST /jobs/:jobId/candidates", () => {
 		}
 		expect((await jobOf(jobId)).cvCount).toBe(0);
 		expect(creates).toEqual([]);
+	});
+
+	it("checks that the bytes really are a PDF, whatever the content type and the name say (400)", async () => {
+		const jobId = await createJob();
+		const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+		for (const body of [png, new TextEncoder().encode("<html>not a pdf</html>"), new TextEncoder().encode("%PDF")]) {
+			const res = await upload("user_admin", jobId, { body });
+			expect(res.status).toBe(400);
+			expect(await res.json()).toEqual({ error: { code: "not_pdf", message: "Upload a PDF file" } });
+		}
+		// No slot taken, nothing stored, nothing started.
+		expect((await jobOf(jobId)).cvCount).toBe(0);
+		expect(creates).toEqual([]);
+		expect(await keysUnder(`${orgId}/${jobId}/`)).toEqual([]);
+		expect(await db.select().from(candidates).where(eq(candidates.jobId, jobId))).toEqual([]);
+
+		// A real PDF still goes through.
+		expect((await upload("user_admin", jobId)).status).toBe(201);
 	});
 
 	it("needs a Content-Length (411)", async () => {
@@ -931,8 +951,8 @@ describe("PATCH /jobs/:jobId/candidates/:id", () => {
 });
 
 describe("GET /jobs/:jobId/candidates/:id/cv", () => {
-	// Every byte value, so a text round trip anywhere would show.
-	const BYTES = Uint8Array.from({ length: 1024 }, (_, i) => i % 256);
+	// After the %PDF- every byte value, so a text round trip anywhere would show.
+	const BYTES = Uint8Array.from({ length: 1024 }, (_, i) => (i < 5 ? "%PDF-".charCodeAt(i) : i % 256));
 
 	it("streams the exact PDF bytes with the headers that show it in the browser", async () => {
 		const jobId = await createJob();

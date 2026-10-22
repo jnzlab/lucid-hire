@@ -24,6 +24,7 @@ import {
 import { buildCsv, exportFileName, exportQuery } from "./candidates-export.ts";
 import { type Db, getDb } from "./db/client.ts";
 import { getJob } from "./jobs.ts";
+import { peekPdf } from "./pdf-stream.ts";
 import type { AppEnv } from "./types.ts";
 import { validJson, validQuery } from "./validation.ts";
 
@@ -117,6 +118,11 @@ export function candidateRoutes() {
 			return c.json({ error: { code: "empty_file", message: "That file is empty" } }, 400);
 		}
 
+		// The first bytes must say PDF: the content type and the name are only what the client claims. Looked at
+		// before a slot is taken, so a file that isn't a PDF costs nothing.
+		const pdf = c.req.raw.body ? await peekPdf(c.req.raw.body, fileSize) : null;
+		if (!pdf) return c.json({ error: { code: "not_pdf", message: "Upload a PDF file" } }, 400);
+
 		const db = getDb(c.env.DB);
 		const slot = await takeSlot(db, org.id, jobId);
 		if (!slot.ok) {
@@ -136,7 +142,10 @@ export function candidateRoutes() {
 		const id = crypto.randomUUID();
 		const fileKey = `${org.id}/${jobId}/${id}.pdf`;
 		try {
-			await c.env.CVS.put(fileKey, c.req.raw.body, { httpMetadata: { contentType: "application/pdf" } });
+			await Promise.all([
+				c.env.CVS.put(fileKey, pdf.readable, { httpMetadata: { contentType: "application/pdf" } }),
+				pdf.pumped,
+			]);
 		} catch (error) {
 			console.error(`[${c.get("requestId")}] cv upload to R2 failed`, error);
 			c.executionCtx.waitUntil(releaseSlot(db, org.id, jobId));

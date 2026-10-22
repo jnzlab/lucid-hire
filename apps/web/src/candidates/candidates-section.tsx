@@ -2,7 +2,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import { AnnouncedBanner } from "../components/announced-banner.tsx";
 import { ConfirmDialog } from "../components/confirm-dialog.tsx";
-import { NoteMark } from "../components/icons.tsx";
+import { Check, NoteMark } from "../components/icons.tsx";
 import { ScoreRing } from "../components/score-ring.tsx";
 import { useOrg } from "../dashboard/org.ts";
 import { SectionError, SectionLoading } from "../jobs/job-ui.tsx";
@@ -63,6 +63,12 @@ export function CandidatesSection({ job }: { job: Job }) {
 	const [deletedHere, setDeletedHere] = useState<string>();
 	const headingRef = useRef<HTMLHeadingElement>(null);
 	const list = candidates.data?.candidates ?? [];
+	// "All CVs processed" says so when the last CV that was being read in this visit has finished. A list that was
+	// never working (opened with everything read already) says nothing.
+	const working = list.some(isWorking);
+	const [sawWork, setSawWork] = useState(false);
+	if (working && !sawWork) setSawWork(true);
+	const allProcessed = sawWork && !working && list.length > 0;
 	// The job's own count shows until the list arrives.
 	const used = candidates.data?.cvCount ?? job.cvCount;
 	const limit = candidates.data?.cvLimit ?? CV_LIMIT_PER_JOB;
@@ -93,6 +99,15 @@ export function CandidatesSection({ job }: { job: Job }) {
 					<ReadProgress list={list} />
 				</div>
 			</div>
+			{/* Always on the page, so the screen reader hears the line when it appears. */}
+			<p aria-live="polite" className="mt-2 inline-flex items-center gap-2 font-mono text-[12.5px] text-ink empty:hidden">
+				{allProcessed && (
+					<>
+						<Check />
+						All CVs processed. The list is up to date.
+					</>
+				)}
+			</p>
 
 			<AnnouncedBanner message={deletedHere ?? (deletedCandidate && `Deleted “${deletedCandidate}”`)} className="mt-4" />
 

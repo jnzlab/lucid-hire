@@ -11,6 +11,7 @@ import {
 	useDecideCandidate,
 } from "./lib/candidates.ts";
 import { createAppRouter } from "./router.ts";
+import { stubXhr } from "./test/fake-xhr.ts";
 
 // Pages load code-split chunks, which can take a while when several test runs share a machine.
 configure({ asyncUtilTimeout: 5000 });
@@ -49,6 +50,8 @@ let org: Org | null;
 let jobs: FakeJob[];
 let candidates: FakeCandidate[];
 let fetchMock: Mock<(url: string, init?: RequestInit) => Promise<Response>>;
+// The percentages the fake upload reports before the server answers.
+let uploadProgress: number[];
 
 const notFound = () => Response.json({ error: { message: "That job doesn't exist or isn't yours" } }, { status: 404 });
 const apiError = (status: number, code: string, message: string) =>
@@ -304,6 +307,13 @@ beforeEach(() => {
 		return Response.json({ error: { message: "not found" } }, { status: 404 });
 	});
 	vi.stubGlobal("fetch", fetchMock);
+	// Uploads go through XMLHttpRequest, for its progress; the fake hands them to the same fake API as everything else.
+	uploadProgress = [50];
+	stubXhr(async (request, progress) => {
+		for (const percent of uploadProgress) progress(percent, 100);
+		const res = await fetchMock(request.url, { method: request.method, headers: request.headers, body: request.body });
+		return { status: res.status, body: await res.text() };
+	});
 	// The router restores scroll on navigation; jsdom doesn't implement it.
 	vi.stubGlobal("scrollTo", () => {});
 });
@@ -1426,6 +1436,105 @@ describe("candidates", () => {
 		const [, init] = uploads()[0];
 		expect(init?.body).toBe(files[0]);
 		expect(init?.headers).toEqual({ "Content-Type": "application/pdf", Authorization: "Bearer session-token" });
+	});
+
+	it("shows how far each upload has got, in a bar and in percent", async () => {
+		uploadProgress = [10, 42];
+		renderAt("/dashboard/jobs/job_1");
+		const sending = hold(isUpload);
+
+		fireEvent.change(await screen.findByLabelText("Choose PDFs"), { target: { files: [pdf("grace_turner.pdf")] } });
+
+		const bar = await screen.findByRole("progressbar", { name: "Uploading grace_turner.pdf" });
+		expect(bar.getAttribute("aria-valuenow")).toBe("42");
+		expect(bar.getAttribute("aria-valuemin")).toBe("0");
+		expect(bar.getAttribute("aria-valuemax")).toBe("100");
+		expect(screen.getByText("42%")).toBeTruthy();
+		await act(async () => sending.release());
+		expect(await screen.findByText("1 CV uploaded")).toBeTruthy();
+		expect(screen.queryByRole("progressbar")).toBeNull();
+	});
+
+	it("takes a waiting file out of the batch before it uploads", async () => {
+		renderAt("/dashboard/jobs/job_1");
+		const sending = hold(isUpload);
+		fireEvent.change(await screen.findByLabelText("Choose PDFs"), {
+			target: { files: [pdf("first.pdf"), pdf("second.pdf"), pdf("third.pdf")] },
+		});
+
+		// The first is on its way; the others wait and can be removed.
+		await waitFor(() => expect(sending.pending()).toBe(1));
+		expect(screen.queryByRole("button", { name: "Remove first.pdf" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Remove second.pdf" }));
+		expect(screen.queryByText("second.pdf")).toBeNull();
+		await act(async () => sending.release());
+		// The third goes next, held the same way.
+		await waitFor(() => expect(sending.pending()).toBe(1));
+		await act(async () => sending.release());
+
+		expect(await screen.findByText("2 CVs uploaded")).toBeTruthy();
+		expect(uploads().map(([url]) => decodeURIComponent(url.split("fileName=")[1]))).toEqual(["first.pdf", "third.pdf"]);
+		expect(screen.queryByRole("button", { name: /^Remove / })).toBeNull();
+		expect(screen.getByText("2 of 10 free CVs used")).toBeTruthy();
+	});
+
+	it("offers Retry upload for a file that failed to go up, and not for one the API refused", async () => {
+		renderAt("/dashboard/jobs/job_1");
+		const answer = fetchMock.getMockImplementation()!;
+		let failures = 1;
+		fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+			if (isUpload(url, init) && failures-- > 0) return Promise.reject(new TypeError("Failed to fetch"));
+			return answer(url, init);
+		});
+
+		fireEvent.change(await screen.findByLabelText("Choose PDFs"), { target: { files: [pdf("flaky.pdf")] } });
+		expect(await screen.findByText("✕ We couldn't reach LucidHire. Check your connection and try again.")).toBeTruthy();
+		expect(screen.getByText("1 not uploaded")).toBeTruthy();
+		expect(screen.getByText("0 of 10 free CVs used")).toBeTruthy();
+
+		fireEvent.click(screen.getByRole("button", { name: "Retry upload flaky.pdf" }));
+		expect(await screen.findByText("1 CV uploaded")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /Retry upload/ })).toBeNull();
+		expect(screen.queryByText(/We couldn't reach/)).toBeNull();
+		expect(uploads()).toHaveLength(2);
+		expect(screen.getByText("1 of 10 free CVs used")).toBeTruthy();
+
+		// A server error can be retried too; a 4xx is the file's own problem.
+		fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+			isUpload(url, init) ? Promise.resolve(apiError(502, "upload_failed", "We couldn't store that file. Try again.")) : answer(url, init),
+		);
+		fireEvent.change(screen.getByLabelText("Choose PDFs"), { target: { files: [pdf("later.pdf")] } });
+		expect(await screen.findByText("✕ We couldn't store that file. Try again.")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Retry upload later.pdf" })).toBeTruthy();
+
+		fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+			isUpload(url, init) ? Promise.resolve(apiError(400, "not_pdf", "Upload a PDF file")) : answer(url, init),
+		);
+		fireEvent.change(screen.getByLabelText("Choose PDFs"), { target: { files: [pdf("fake.pdf")] } });
+		expect(await screen.findByText("✕ Upload a PDF file")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /Retry upload/ })).toBeNull();
+	});
+
+	it("says when every CV has been read, and not before or when nothing was being read", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		candidates = [fakeCandidate({ id: "cand_grace", fileName: "grace_turner.pdf", status: "scoring" })];
+		renderAt("/dashboard/jobs/job_1");
+
+		expect(await screen.findByText("Reading the CV")).toBeTruthy();
+		expect(screen.queryByText("All CVs processed. The list is up to date.")).toBeNull();
+
+		Object.assign(candidates[0], grace());
+		await act(() => vi.advanceTimersByTimeAsync(CANDIDATE_POLL_MS));
+		const done = await screen.findByText("All CVs processed. The list is up to date.");
+		// A live region that was already on the page, so it is read out.
+		expect(done.closest("[aria-live]")?.getAttribute("aria-live")).toBe("polite");
+		cleanup();
+
+		// Opening a job whose CVs are all read says nothing.
+		candidates = [grace()];
+		renderAt("/dashboard/jobs/job_1");
+		await screen.findByText("Grace Turner");
+		expect(screen.queryByText("All CVs processed. The list is up to date.")).toBeNull();
 	});
 
 	it("calls the upload zone Add CVs on a phone, and keeps the Choose PDFs button", async () => {
