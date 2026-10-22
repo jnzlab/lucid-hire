@@ -11,6 +11,7 @@ import {
 	useDecideCandidate,
 } from "./lib/candidates.ts";
 import { createAppRouter } from "./router.ts";
+import { stubXhr } from "./test/fake-xhr.ts";
 
 // Pages load code-split chunks, which can take a while when several test runs share a machine.
 configure({ asyncUtilTimeout: 5000 });
@@ -49,6 +50,8 @@ let org: Org | null;
 let jobs: FakeJob[];
 let candidates: FakeCandidate[];
 let fetchMock: Mock<(url: string, init?: RequestInit) => Promise<Response>>;
+// The percentages the fake upload reports before the server answers.
+let uploadProgress: number[];
 
 const notFound = () => Response.json({ error: { message: "That job doesn't exist or isn't yours" } }, { status: 404 });
 const apiError = (status: number, code: string, message: string) =>
@@ -142,14 +145,27 @@ function fakeJobs(path: string, method: string, body: Record<string, string>, qu
 // A candidate as the list shows it, without the fields only the candidate page needs.
 const summary = ({
 	jobId: _jobId,
-	summary: _summary,
-	requirements: _requirements,
+	rankedCount: _rankedCount,
+	requirements,
 	fileSize: _size,
-	note: _note,
+	note,
 	decidedAt: _decidedAt,
+	profile,
 	...rest
-}: FakeCandidate) => rest;
-const forPage = ({ jobId: _jobId, ...rest }: FakeCandidate): Candidate => rest;
+}: FakeCandidate) => ({
+	...rest,
+	hasNote: note !== null,
+	profile: profile?.email ? { email: profile.email } : null,
+	checks: (requirements ?? []).map(({ label, met, importance }) => ({ label, met, importance })),
+});
+// The page also gets the place among the job's scored CVs, ordered by score as the list is.
+const forPage = ({ jobId, ...rest }: FakeCandidate): Candidate => {
+	const scored = candidates
+		.filter((c) => c.jobId === jobId && c.status === "scored" && c.score !== null)
+		.toSorted((a, b) => (b.score ?? 0) - (a.score ?? 0));
+	const index = scored.findIndex((c) => c.id === rest.id);
+	return index === -1 ? rest : { ...rest, rank: index + 1, rankedCount: scored.length };
+};
 // Scored first (best first), then the ones being read, then the failed, as the API orders them.
 const place = (candidate: FakeCandidate) => ({ scored: 0, queued: 1, scoring: 1, failed: 2 })[candidate.status];
 
@@ -161,6 +177,15 @@ function fakeCandidates(url: URL, init: RequestInit | undefined): Response {
 	const job = jobs.find((candidate) => candidate.id === jobId);
 	if (!job) return notFound();
 
+	if (id === "export.csv") {
+		const decision = url.searchParams.get("decision");
+		return new Response(`\uFEFFRank,Name\r\n1,Grace (${decision})\r\n`, {
+			headers: {
+				"Content-Type": "text/csv; charset=utf-8",
+				"Content-Disposition": `attachment; filename="senior-ios-engineer-${decision === "all" ? "" : `${decision}-`}applicants.csv"`,
+			},
+		});
+	}
 	if (!id) {
 		if (method === "GET") {
 			const ranked = candidates
@@ -170,7 +195,12 @@ function fakeCandidates(url: URL, init: RequestInit | undefined): Response {
 						place(a) - place(b) ||
 						(a.status === "scored" ? (b.score ?? 0) - (a.score ?? 0) : a.createdAt.localeCompare(b.createdAt)),
 				);
-			return Response.json({ candidates: ranked.map(summary), cvCount: job.cvCount ?? 0, cvLimit: 10 });
+			let rank = 0;
+			const withRanks = ranked.map((candidate) => ({
+				...candidate,
+				rank: candidate.status === "scored" && candidate.score !== null ? ++rank : null,
+			}));
+			return Response.json({ candidates: withRanks.map(summary), cvCount: job.cvCount ?? 0, cvLimit: 10 });
 		}
 		const fileName = url.searchParams.get("fileName") ?? "cv.pdf";
 		if (new Headers(init?.headers).get("Content-Type") !== "application/pdf" || !fileName.endsWith(".pdf"))
@@ -229,13 +259,19 @@ function fakeCandidate(fields: Partial<FakeCandidate> & { id: string }): FakeCan
 	return {
 		jobId: "job_1",
 		fileName: `${fields.id}.pdf`,
+		source: "upload",
+		email: null,
 		status: "scored",
 		decision: "undecided",
 		name: null,
 		headline: null,
 		score: null,
+		rank: null,
+		rankedCount: 0,
 		matches: [],
 		gaps: [],
+		checks: [],
+		hasNote: false,
 		error: null,
 		canRetry: false,
 		createdAt: "2026-10-22T12:00:00Z",
@@ -245,6 +281,7 @@ function fakeCandidate(fields: Partial<FakeCandidate> & { id: string }): FakeCan
 		fileSize: 120_000,
 		note: null,
 		decidedAt: null,
+		profile: null,
 		...fields,
 	};
 }
@@ -272,6 +309,13 @@ beforeEach(() => {
 		return Response.json({ error: { message: "not found" } }, { status: 404 });
 	});
 	vi.stubGlobal("fetch", fetchMock);
+	// Uploads go through XMLHttpRequest, for its progress; the fake hands them to the same fake API as everything else.
+	uploadProgress = [50];
+	stubXhr(async (request, progress) => {
+		for (const percent of uploadProgress) progress(percent, 100);
+		const res = await fetchMock(request.url, { method: request.method, headers: request.headers, body: request.body });
+		return { status: res.status, body: await res.text() };
+	});
 	// The router restores scroll on navigation; jsdom doesn't implement it.
 	vi.stubGlobal("scrollTo", () => {});
 });
@@ -1396,6 +1440,105 @@ describe("candidates", () => {
 		expect(init?.headers).toEqual({ "Content-Type": "application/pdf", Authorization: "Bearer session-token" });
 	});
 
+	it("shows how far each upload has got, in a bar and in percent", async () => {
+		uploadProgress = [10, 42];
+		renderAt("/dashboard/jobs/job_1");
+		const sending = hold(isUpload);
+
+		fireEvent.change(await screen.findByLabelText("Choose PDFs"), { target: { files: [pdf("grace_turner.pdf")] } });
+
+		const bar = await screen.findByRole("progressbar", { name: "Uploading grace_turner.pdf" });
+		expect(bar.getAttribute("aria-valuenow")).toBe("42");
+		expect(bar.getAttribute("aria-valuemin")).toBe("0");
+		expect(bar.getAttribute("aria-valuemax")).toBe("100");
+		expect(screen.getByText("42%")).toBeTruthy();
+		await act(async () => sending.release());
+		expect(await screen.findByText("1 CV uploaded")).toBeTruthy();
+		expect(screen.queryByRole("progressbar")).toBeNull();
+	});
+
+	it("takes a waiting file out of the batch before it uploads", async () => {
+		renderAt("/dashboard/jobs/job_1");
+		const sending = hold(isUpload);
+		fireEvent.change(await screen.findByLabelText("Choose PDFs"), {
+			target: { files: [pdf("first.pdf"), pdf("second.pdf"), pdf("third.pdf")] },
+		});
+
+		// The first is on its way; the others wait and can be removed.
+		await waitFor(() => expect(sending.pending()).toBe(1));
+		expect(screen.queryByRole("button", { name: "Remove first.pdf" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Remove second.pdf" }));
+		expect(screen.queryByText("second.pdf")).toBeNull();
+		await act(async () => sending.release());
+		// The third goes next, held the same way.
+		await waitFor(() => expect(sending.pending()).toBe(1));
+		await act(async () => sending.release());
+
+		expect(await screen.findByText("2 CVs uploaded")).toBeTruthy();
+		expect(uploads().map(([url]) => decodeURIComponent(url.split("fileName=")[1]))).toEqual(["first.pdf", "third.pdf"]);
+		expect(screen.queryByRole("button", { name: /^Remove / })).toBeNull();
+		expect(screen.getByText("2 of 10 free CVs used")).toBeTruthy();
+	});
+
+	it("offers Retry upload for a file that failed to go up, and not for one the API refused", async () => {
+		renderAt("/dashboard/jobs/job_1");
+		const answer = fetchMock.getMockImplementation()!;
+		let failures = 1;
+		fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+			if (isUpload(url, init) && failures-- > 0) return Promise.reject(new TypeError("Failed to fetch"));
+			return answer(url, init);
+		});
+
+		fireEvent.change(await screen.findByLabelText("Choose PDFs"), { target: { files: [pdf("flaky.pdf")] } });
+		expect(await screen.findByText("✕ We couldn't reach LucidHire. Check your connection and try again.")).toBeTruthy();
+		expect(screen.getByText("1 not uploaded")).toBeTruthy();
+		expect(screen.getByText("0 of 10 free CVs used")).toBeTruthy();
+
+		fireEvent.click(screen.getByRole("button", { name: "Retry upload flaky.pdf" }));
+		expect(await screen.findByText("1 CV uploaded")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /Retry upload/ })).toBeNull();
+		expect(screen.queryByText(/We couldn't reach/)).toBeNull();
+		expect(uploads()).toHaveLength(2);
+		expect(screen.getByText("1 of 10 free CVs used")).toBeTruthy();
+
+		// A server error can be retried too; a 4xx is the file's own problem.
+		fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+			isUpload(url, init) ? Promise.resolve(apiError(502, "upload_failed", "We couldn't store that file. Try again.")) : answer(url, init),
+		);
+		fireEvent.change(screen.getByLabelText("Choose PDFs"), { target: { files: [pdf("later.pdf")] } });
+		expect(await screen.findByText("✕ We couldn't store that file. Try again.")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Retry upload later.pdf" })).toBeTruthy();
+
+		fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+			isUpload(url, init) ? Promise.resolve(apiError(400, "not_pdf", "Upload a PDF file")) : answer(url, init),
+		);
+		fireEvent.change(screen.getByLabelText("Choose PDFs"), { target: { files: [pdf("fake.pdf")] } });
+		expect(await screen.findByText("✕ Upload a PDF file")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: /Retry upload/ })).toBeNull();
+	});
+
+	it("says when every CV has been read, and not before or when nothing was being read", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		candidates = [fakeCandidate({ id: "cand_grace", fileName: "grace_turner.pdf", status: "scoring" })];
+		renderAt("/dashboard/jobs/job_1");
+
+		expect(await screen.findByText("Reading the CV")).toBeTruthy();
+		expect(screen.queryByText("All CVs processed. The list is up to date.")).toBeNull();
+
+		Object.assign(candidates[0], grace());
+		await act(() => vi.advanceTimersByTimeAsync(CANDIDATE_POLL_MS));
+		const done = await screen.findByText("All CVs processed. The list is up to date.");
+		// A live region that was already on the page, so it is read out.
+		expect(done.closest("[aria-live]")?.getAttribute("aria-live")).toBe("polite");
+		cleanup();
+
+		// Opening a job whose CVs are all read says nothing.
+		candidates = [grace()];
+		renderAt("/dashboard/jobs/job_1");
+		await screen.findByText("Grace Turner");
+		expect(screen.queryByText("All CVs processed. The list is up to date.")).toBeNull();
+	});
+
 	it("calls the upload zone Add CVs on a phone, and keeps the Choose PDFs button", async () => {
 		vi.stubGlobal("matchMedia", (query: string) => ({
 			matches: query === "(pointer: coarse)",
@@ -2044,6 +2187,119 @@ describe("candidates", () => {
 		expect(screen.getAllByText("Created 22 Oct 2026")).toHaveLength(1);
 	});
 
+	describe("the candidate page", () => {
+		const profile = {
+			email: "grace@example.com",
+			phone: "+44 7946 095 800",
+			location: "London, UK",
+			links: [
+				{ label: "GitHub", url: "https://github.com/grace-turner/" },
+				{ url: "javascript:alert(1)" },
+			],
+			skills: ["Swift", "SwiftUI"],
+			experience: [{ title: "Senior iOS Engineer", company: "Barclays", start: "2019", end: "Present", summary: "Led the app." }],
+			education: [{ qualification: "BSc Computer Science", institution: "UCL", year: "2016" }],
+			certifications: ["Apple Developer Academy"],
+		};
+		let open: MockInstance;
+		beforeEach(() => {
+			open = vi.spyOn(window, "open").mockReturnValue(null);
+		});
+		afterEach(() => open.mockRestore());
+
+		it("shows the rank, the email, when it was decided and the profile from the CV", async () => {
+			candidates = [
+				grace({ profile, decision: "shortlisted", decidedAt: "2026-10-22T14:00:00Z" }),
+				fakeCandidate({ id: "cand_kenji", name: "Kenji Tanaka", score: 80, scoredAt: "2026-10-22T12:06:00Z" }),
+				fakeCandidate({ id: "cand_wait", status: "scoring" }),
+			];
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+
+			expect(await screen.findByText("Ranked #1 of 2 scored CVs for this role")).toBeTruthy();
+			expect(screen.getByRole("link", { name: "grace@example.com" }).getAttribute("href")).toBe("mailto:grace@example.com");
+			expect(screen.getByText("Decided 22 Oct 2026")).toBeTruthy();
+
+			const card = screen.getByRole("region", { name: "Profile" });
+			expect(within(card).getByRole("link", { name: "+44 7946 095 800" }).getAttribute("href")).toBe("tel:+447946095800");
+			expect(within(card).getByText("London, UK")).toBeTruthy();
+			const github = within(card).getByRole("link", { name: "github.com/grace-turner" });
+			expect(github.getAttribute("href")).toBe("https://github.com/grace-turner/");
+			expect(github.getAttribute("rel")).toBe("noopener noreferrer");
+			expect(github.getAttribute("target")).toBe("_blank");
+			// A link that is not http or https is text, never a link.
+			expect(within(card).getByText("javascript:alert(1)").closest("a")).toBeNull();
+			expect(within(card).getByText("SwiftUI")).toBeTruthy();
+			expect(within(card).getByText(/Senior iOS Engineer/)).toBeTruthy();
+			expect(within(card).getByText("2019 – Present")).toBeTruthy();
+			expect(within(card).getByText("BSc Computer Science")).toBeTruthy();
+			expect(within(card).getByText("Apple Developer Academy")).toBeTruthy();
+		});
+
+		it("says there is no email, and leaves out the profile card and the empty sections", async () => {
+			candidates = [
+				grace({ profile: { links: [], skills: ["Swift"], experience: [], education: [], certifications: [] } }),
+				fakeCandidate({ id: "cand_blank", profile: { links: [], skills: [], experience: [], education: [], certifications: [] } }),
+			];
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+
+			expect(await screen.findByText("No email provided")).toBeTruthy();
+			expect(screen.queryByRole("button", { name: "Onboard" })).toBeNull();
+			const card = screen.getByRole("region", { name: "Profile" });
+			expect(within(card).getByRole("region", { name: "Skills" })).toBeTruthy();
+			expect(within(card).queryByRole("region", { name: "Experience" })).toBeNull();
+			expect(within(card).queryByRole("region", { name: "Links" })).toBeNull();
+			expect(screen.queryByText(/^Decided /)).toBeNull();
+
+			cleanup();
+			renderAt("/dashboard/jobs/job_1/candidates/cand_blank");
+			expect(await screen.findByText("No email provided")).toBeTruthy();
+			expect(screen.queryByRole("region", { name: "Profile" })).toBeNull();
+		});
+
+		it("opens a Gmail draft with Onboard and shortlists the candidate, once", async () => {
+			candidates = [grace({ profile })];
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+
+			fireEvent.click(await screen.findByRole("button", { name: "Onboard" }));
+
+			expect(open).toHaveBeenCalledTimes(1);
+			const [href, target, features] = open.mock.calls[0];
+			const url = new URL(href);
+			expect(url.origin + url.pathname).toBe("https://mail.google.com/mail/");
+			expect(url.searchParams.get("to")).toBe("grace@example.com");
+			expect(url.searchParams.get("su")).toBe("Next steps — Senior iOS Engineer");
+			expect(url.searchParams.get("body")).toMatch(/^Hi Grace,/);
+			expect(url.searchParams.get("body")).toMatch(/Sprite Labs$/);
+			expect([target, features]).toEqual(["_blank", "noopener,noreferrer"]);
+			expect(await screen.findByText("Gmail draft opened. Marked as shortlisted.")).toBeTruthy();
+			await waitFor(() => expect(candidates[0].decision).toBe("shortlisted"));
+			const decided = candidates[0].decidedAt;
+
+			// Already shortlisted: the draft opens again, and the decision is left alone.
+			fireEvent.click(screen.getByRole("button", { name: "Onboard" }));
+			expect(open).toHaveBeenCalledTimes(2);
+			expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1);
+			expect(candidates[0].decidedAt).toBe(decided);
+		});
+
+		it("writes to the address an applicant gave, and says they applied through the job page", async () => {
+			candidates = [grace({ profile, source: "apply", email: "grace.applied@example.com" })];
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+
+			expect(await screen.findByRole("link", { name: "grace.applied@example.com" })).toBeTruthy();
+			expect(screen.queryByRole("link", { name: "grace@example.com" })).toBeNull();
+			expect(screen.getByText("Applied through the job page")).toBeTruthy();
+		});
+
+		it("has no Onboard for a CV that is not scored yet", async () => {
+			candidates = [grace({ status: "scoring", score: null, profile })];
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+
+			expect(await screen.findByRole("link", { name: "grace@example.com" })).toBeTruthy();
+			expect(screen.queryByRole("button", { name: "Onboard" })).toBeNull();
+		});
+	});
+
 	describe("decisions", () => {
 		const decisionGroup = async () => screen.findByRole("radiogroup", { name: "Decision" });
 		const radio = (name: string) => screen.getByRole("radio", { name }) as HTMLInputElement;
@@ -2401,6 +2657,251 @@ describe("candidates", () => {
 		});
 
 		const patches = () => fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH");
+	});
+
+	describe("list tools", () => {
+		const ana = () => fakeCandidate({ id: "cand_ana", name: "Ana Silva", score: 65, headline: "Android dev" });
+		const kenji = () =>
+			fakeCandidate({
+				id: "cand_kenji",
+				name: "Kenji Tanaka",
+				score: 71,
+				summary: "Knows Kotlin Multiplatform well.",
+				profile: { email: "kenji@example.com", links: [], skills: [], experience: [], education: [], certifications: [] },
+			});
+		const queued = () => fakeCandidate({ id: "cand_new", fileName: "new_upload.pdf", status: "queued" });
+		const failed = () => fakeCandidate({ id: "cand_bad", fileName: "scan.pdf", status: "failed", error: "No." });
+		const search = () => screen.getByRole("searchbox", { name: "Search candidates" }) as HTMLInputElement;
+		const select = (name: string) => screen.getByRole("combobox", { name }) as HTMLSelectElement;
+
+		it("searches name, email and summary, and clears the search", async () => {
+			candidates = [grace(), kenji(), ana(), queued()];
+			renderAt("/dashboard/jobs/job_1");
+			await screen.findByText("Grace Turner");
+
+			fireEvent.change(search(), { target: { value: "kenji@EXAMPLE" } });
+			expect(rowTexts()).toEqual([expect.stringMatching(/Rank 2: Kenji Tanaka/)]);
+			expect(screen.getByText("Showing 1 of 4 candidates")).toBeTruthy();
+			fireEvent.change(search(), { target: { value: "multiplatform" } });
+			expect(rowTexts()).toEqual([expect.stringMatching(/Kenji Tanaka/)]);
+			fireEvent.change(search(), { target: { value: "android" } });
+			// The rank belongs to the CV, not to the row's place on screen.
+			expect(rowTexts()).toEqual([expect.stringMatching(/Rank 3: Ana Silva/)]);
+
+			fireEvent.change(search(), { target: { value: "nobody" } });
+			expect(screen.getByText("No candidates match your search and filters.")).toBeTruthy();
+			fireEvent.click(screen.getByRole("button", { name: "Clear search and filters" }));
+			expect(search().value).toBe("");
+			expect(rowTexts()).toHaveLength(4);
+		});
+
+		it("filters by status on top of the decision filter", async () => {
+			candidates = [grace({ decision: "shortlisted" }), kenji(), queued(), failed()];
+			renderAt("/dashboard/jobs/job_1");
+			await screen.findByText("Grace Turner");
+
+			expect(within(select("Status")).getAllByRole("option").map((option) => option.textContent)).toEqual([
+				"All",
+				"Scored",
+				"Queued",
+				"Scoring",
+				"Failed",
+			]);
+			fireEvent.change(select("Status"), { target: { value: "failed" } });
+			expect(rowTexts()).toEqual([expect.stringMatching(/scan\.pdf/)]);
+			fireEvent.change(select("Status"), { target: { value: "queued" } });
+			expect(rowTexts()).toEqual([expect.stringMatching(/new_upload\.pdf/)]);
+			fireEvent.change(select("Status"), { target: { value: "scored" } });
+			expect(rowTexts()).toHaveLength(2);
+			fireEvent.click(screen.getByRole("radio", { name: "Shortlisted 1" }));
+			expect(rowTexts()).toEqual([expect.stringMatching(/Rank 1: Grace Turner/)]);
+			// Nothing is both shortlisted and failed.
+			fireEvent.change(select("Status"), { target: { value: "failed" } });
+			expect(screen.getByText("No candidates match your search and filters.")).toBeTruthy();
+			// The "Show" counts and the header still count the whole list.
+			expect(screen.getByRole("radio", { name: "All 4" })).toBeTruthy();
+			expect(screen.getByText("2 of 4 read · 1 failed")).toBeTruthy();
+		});
+
+		it("sorts, and keeps CVs without a score after the scored ones every time", async () => {
+			candidates = [
+				grace({ createdAt: "2026-10-22T12:01:00Z" }),
+				kenji(),
+				ana(),
+				queued(),
+				failed(),
+			];
+			candidates[1].createdAt = "2026-10-22T12:03:00Z";
+			candidates[2].createdAt = "2026-10-22T12:02:00Z";
+			renderAt("/dashboard/jobs/job_1");
+			await screen.findByText("Grace Turner");
+
+			expect(within(select("Sort by")).getAllByRole("option").map((option) => option.textContent)).toEqual([
+				"Best match",
+				"Lowest score",
+				"Newest",
+				"Oldest",
+				"Name A–Z",
+			]);
+			const names = () => rowTexts().map((text) => text?.match(/(Grace Turner|Kenji Tanaka|Ana Silva|new_upload\.pdf|scan\.pdf)/)?.[0]);
+			const sorted = (value: string) => {
+				fireEvent.change(select("Sort by"), { target: { value } });
+				return names();
+			};
+			expect(names()).toEqual(["Grace Turner", "Kenji Tanaka", "Ana Silva", "new_upload.pdf", "scan.pdf"]);
+			expect(sorted("lowest")).toEqual(["Ana Silva", "Kenji Tanaka", "Grace Turner", "new_upload.pdf", "scan.pdf"]);
+			expect(sorted("newest")).toEqual(["Kenji Tanaka", "Ana Silva", "Grace Turner", "new_upload.pdf", "scan.pdf"]);
+			expect(sorted("oldest")).toEqual(["Grace Turner", "Ana Silva", "Kenji Tanaka", "new_upload.pdf", "scan.pdf"]);
+			expect(sorted("name")).toEqual(["Ana Silva", "Grace Turner", "Kenji Tanaka", "new_upload.pdf", "scan.pdf"]);
+			expect(sorted("best")).toEqual(["Grace Turner", "Kenji Tanaka", "Ana Silva", "new_upload.pdf", "scan.pdf"]);
+		});
+
+		it("shows 50 rows and adds 50 more at a time, at 120 candidates", async () => {
+			candidates = Array.from({ length: 120 }, (_, index) =>
+				fakeCandidate({ id: `cand_${index}`, name: `Candidate ${String(index).padStart(3, "0")}`, score: 100 - (index % 100) }),
+			);
+			// The list ranks the fake's order, so give each a distinct score.
+			candidates.forEach((candidate, index) => (candidate.score = 200 - index));
+			renderAt("/dashboard/jobs/job_1");
+			await screen.findByText("Candidate 000");
+
+			expect(rowTexts()).toHaveLength(50);
+			expect(screen.getByText("50 of 120 shown")).toBeTruthy();
+			fireEvent.click(screen.getByRole("button", { name: "Show 50 more" }));
+			expect(rowTexts()).toHaveLength(100);
+			// Only 20 are left, so that is what the button offers.
+			fireEvent.click(screen.getByRole("button", { name: "Show 20 more" }));
+			expect(rowTexts()).toHaveLength(120);
+			expect(screen.queryByRole("button", { name: /^Show \d+ more$/ })).toBeNull();
+
+			// A search starts again from the top of the matches, with their own ranks.
+			fireEvent.change(search(), { target: { value: "Candidate 11" } });
+			expect(rowTexts()).toHaveLength(10);
+			expect(rowTexts()[0]).toMatch(/Rank 111: Candidate 110/);
+		}, 30_000);
+
+		it("marks a row that has a note, and offers Open CV on each row", async () => {
+			candidates = [grace({ note: "Call Monday" }), kenji()];
+			const tab = { location: { href: "" }, close: vi.fn() };
+			const open = vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
+			Object.assign(URL, { createObjectURL: () => "blob:cv-1", revokeObjectURL: () => {} });
+			renderAt("/dashboard/jobs/job_1");
+			await screen.findByText("Grace Turner");
+
+			const rows = within(screen.getByRole("list", { name: "Candidates" })).getAllByRole("listitem");
+			expect(within(rows[0]).getByText("Has a note")).toBeTruthy();
+			expect(within(rows[1]).queryByText("Has a note")).toBeNull();
+
+			fireEvent.click(within(rows[1]).getByRole("button", { name: "Open CV for Kenji Tanaka" }));
+			expect(open).toHaveBeenCalledWith("", "_blank");
+			await waitFor(() => expect(tab.location.href).toBe("blob:cv-1"));
+			expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/candidates/cand_kenji/cv"))).toBe(true);
+			open.mockRestore();
+			Reflect.deleteProperty(URL, "createObjectURL");
+			Reflect.deleteProperty(URL, "revokeObjectURL");
+		});
+
+		it("exports the candidates as a CSV from the menu, with the session token", async () => {
+			candidates = [grace(), kenji()];
+			const clicked: { href: string; download: string }[] = [];
+			const createObjectURL = vi.fn((_blob: Blob) => "blob:csv-1");
+			Object.assign(URL, { createObjectURL, revokeObjectURL: () => {} });
+			const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+				clicked.push({ href: this.href, download: this.download });
+			});
+			renderAt("/dashboard/jobs/job_1");
+			const button = await screen.findByRole("button", { name: "Export CSV" });
+
+			expect(button.getAttribute("aria-expanded")).toBe("false");
+			fireEvent.click(button);
+			expect(button.getAttribute("aria-expanded")).toBe("true");
+			expect(["All candidates", "Shortlisted", "Undecided", "Rejected"].map((name) => screen.getByRole("button", { name }))).toHaveLength(4);
+			// Escape closes it and gives focus back.
+			fireEvent.keyDown(document, { key: "Escape" });
+			expect(screen.queryByRole("button", { name: "All candidates" })).toBeNull();
+			expect(document.activeElement).toBe(button);
+
+			fireEvent.click(button);
+			fireEvent.click(screen.getByRole("button", { name: "Shortlisted" }));
+			await waitFor(() => expect(clicked).toHaveLength(1));
+			expect(clicked[0]).toEqual({ href: "blob:csv-1", download: "senior-ios-engineer-shortlisted-applicants.csv" });
+			const request = fetchMock.mock.calls.find(([url]) => url.includes("export.csv"))!;
+			expect(request[0]).toBe("http://localhost:8787/jobs/job_1/candidates/export.csv?decision=shortlisted");
+			expect(request[1]).toEqual(expect.objectContaining({ headers: { Authorization: "Bearer session-token" } }));
+			const blob = createObjectURL.mock.calls[0][0];
+			expect(blob.type).toContain("text/csv");
+			expect(screen.queryByRole("alert")).toBeNull();
+
+			fireEvent.click(screen.getByRole("button", { name: "Export CSV" }));
+			fireEvent.click(screen.getByRole("button", { name: "All candidates" }));
+			await waitFor(() => expect(clicked).toHaveLength(2));
+			expect(clicked[1].download).toBe("senior-ios-engineer-applicants.csv");
+			click.mockRestore();
+			Reflect.deleteProperty(URL, "createObjectURL");
+			Reflect.deleteProperty(URL, "revokeObjectURL");
+		});
+
+		it("says so when the export fails", async () => {
+			candidates = [grace()];
+			renderAt("/dashboard/jobs/job_1");
+			fireEvent.click(await screen.findByRole("button", { name: "Export CSV" }));
+			const answer = fetchMock.getMockImplementation()!;
+			fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+				url.includes("export.csv") ? Promise.resolve(apiError(500, "server_error", "Boom")) : answer(url, init),
+			);
+			fireEvent.click(screen.getByRole("button", { name: "Rejected" }));
+
+			expect((await screen.findByRole("alert")).textContent).toBe("✕ We couldn't export the candidates. Try again.");
+		});
+
+		it("opens a row to show every requirement, then closes it", async () => {
+			candidates = [grace()];
+			renderAt("/dashboard/jobs/job_1");
+			const row = (await screen.findByText("Grace Turner")).closest("li")!;
+
+			// Closed: the matches and the missing must-have, but not the unmet nice-to-have.
+			expect(within(row).queryByText("✕ Accessibility")).toBeNull();
+			const toggle = within(row).getByRole("button", { name: "Show all requirements for Grace Turner" });
+			expect(toggle.getAttribute("aria-expanded")).toBe("false");
+			fireEvent.click(toggle);
+			expect(within(row).getByText("✕ Accessibility")).toBeTruthy();
+			const fewer = within(row).getByRole("button", { name: "Show fewer requirements for Grace Turner" });
+			expect(fewer.getAttribute("aria-expanded")).toBe("true");
+			fireEvent.click(fewer);
+			expect(within(row).queryByText("✕ Accessibility")).toBeNull();
+		});
+
+		it("deletes a candidate from the row after a confirmation, for admins", async () => {
+			candidates = [grace(), kenji()];
+			renderAt("/dashboard/jobs/job_1");
+			await screen.findByText("Grace Turner");
+
+			fireEvent.click(screen.getByRole("button", { name: "Delete candidate Kenji Tanaka" }));
+			const dialog = screen.getByRole("alertdialog", { name: "Delete “Kenji Tanaka”?" });
+			// Cancel changes nothing.
+			fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+			expect(candidates).toHaveLength(2);
+
+			// A click focuses the button in a browser; jsdom's doesn't.
+			screen.getByRole("button", { name: "Delete candidate Kenji Tanaka" }).focus();
+			fireEvent.click(screen.getByRole("button", { name: "Delete candidate Kenji Tanaka" }));
+			fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete candidate" }));
+
+			expect(await screen.findByText("Deleted “Kenji Tanaka”")).toBeTruthy();
+			expect(candidates.map(({ id }) => id)).toEqual(["cand_grace"]);
+			expect(rowTexts()).toEqual([expect.stringMatching(/Grace Turner/)]);
+			expect(document.activeElement).toBe(screen.getByRole("heading", { level: 2, name: "Candidates" }));
+		});
+
+		it("leaves the delete button to admins", async () => {
+			org = { id: "org_1", name: "Sprite Labs", role: "member" };
+			candidates = [grace()];
+			renderAt("/dashboard/jobs/job_1");
+			await screen.findByText("Grace Turner");
+
+			expect(screen.getByRole("button", { name: "Open CV for Grace Turner" })).toBeTruthy();
+			expect(screen.queryByRole("button", { name: /^Delete candidate/ })).toBeNull();
+		});
 	});
 
 	describe("Open CV", () => {

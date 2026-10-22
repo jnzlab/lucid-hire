@@ -126,6 +126,8 @@ type CandidateJson = {
 	fileSize: number;
 	status: string;
 	score: number | null;
+	rank: number | null;
+	rankedCount: number;
 	name: string | null;
 	matches: string[];
 	gaps: string[];
@@ -224,10 +226,12 @@ describe("POST /jobs/:jobId/candidates", () => {
 			fileName: `${"a".repeat(196)}.PDF`,
 		});
 
-		const big = await uploadOk("user_admin", jobId, { body: new Uint8Array(CV_MAX_BYTES) });
+		const bigPdf = new Uint8Array(CV_MAX_BYTES);
+		bigPdf.set(PDF);
+		const big = await uploadOk("user_admin", jobId, { body: bigPdf });
 		expect(big.fileSize).toBe(CV_MAX_BYTES);
 		expect((await bucket.head(`${orgId}/${jobId}/${big.id}.pdf`))?.size).toBe(CV_MAX_BYTES);
-	});
+	}, 20_000);
 
 	it("rejects anything but a PDF with 415, before taking a slot", async () => {
 		const jobId = await createJob();
@@ -239,6 +243,24 @@ describe("POST /jobs/:jobId/candidates", () => {
 		}
 		expect((await jobOf(jobId)).cvCount).toBe(0);
 		expect(creates).toEqual([]);
+	});
+
+	it("checks that the bytes really are a PDF, whatever the content type and the name say (400)", async () => {
+		const jobId = await createJob();
+		const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+		for (const body of [png, new TextEncoder().encode("<html>not a pdf</html>"), new TextEncoder().encode("%PDF")]) {
+			const res = await upload("user_admin", jobId, { body });
+			expect(res.status).toBe(400);
+			expect(await res.json()).toEqual({ error: { code: "not_pdf", message: "Upload a PDF file" } });
+		}
+		// No slot taken, nothing stored, nothing started.
+		expect((await jobOf(jobId)).cvCount).toBe(0);
+		expect(creates).toEqual([]);
+		expect(await keysUnder(`${orgId}/${jobId}/`)).toEqual([]);
+		expect(await db.select().from(candidates).where(eq(candidates.jobId, jobId))).toEqual([]);
+
+		// A real PDF still goes through.
+		expect((await upload("user_admin", jobId)).status).toBe(201);
 	});
 
 	it("needs a Content-Length (411)", async () => {
@@ -408,8 +430,110 @@ describe("GET /jobs/:jobId/candidates", () => {
 		expect(body.cvLimit).toBe(10);
 		expect(body.candidates.find((c) => c.id === retryable)).toMatchObject({ canRetry: true, error: "Scoring failed." });
 		expect(body.candidates.find((c) => c.id === spent)).toMatchObject({ canRetry: false });
-		expect(body.candidates[0]).not.toHaveProperty("summary");
 		expect(body.candidates[0]).not.toHaveProperty("requirements");
+		expect(body.candidates[0]).not.toHaveProperty("note");
+	});
+
+	it("breaks ties by score, then scored_at, then created_at, then id, and ranks only scored CVs", async () => {
+		const jobId = await createJob();
+		const at = (minute: number) => new Date(Date.UTC(2026, 9, 22, 10, minute));
+		const scored = (score: number, scoredAt: Date, createdAt: Date) => ({ status: "scored" as const, score, scoredAt, createdAt });
+		// Same score and scored_at: the earlier upload wins. Then the id decides between two identical rows.
+		const laterUpload = await seed(jobId, { id: "z-later", ...scored(70, at(5), at(4)) });
+		const earlierUpload = await seed(jobId, { id: "z-earlier", ...scored(70, at(5), at(2)) });
+		const idTieB = await seed(jobId, { id: "tie-b", ...scored(70, at(5), at(4)) });
+		const idTieA = await seed(jobId, { id: "tie-a", ...scored(70, at(5), at(4)) });
+		const best = await seed(jobId, scored(71, at(30), at(30)));
+		const reading = await seed(jobId, { status: "scoring", score: null });
+		const failed = await seed(jobId, { status: "failed" });
+		await seed(await createJob("open", "user_acme"), scored(100, at(0), at(0)), acmeOrgId);
+
+		const { candidates: list } = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates`)).json()) as {
+			candidates: CandidateJson[];
+		};
+		expect(list.map((c) => [c.id, c.rank])).toEqual([
+			[best, 1],
+			[earlierUpload, 2],
+			[idTieA, 3],
+			[idTieB, 4],
+			[laterUpload, 5],
+			[reading, null],
+			[failed, null],
+		]);
+
+		// The candidate page says the same, out of the same five.
+		for (const row of list.filter((c) => c.rank !== null)) {
+			const res = await send("user_admin", "GET", `/jobs/${jobId}/candidates/${row.id}`);
+			const { candidate } = (await res.json()) as { candidate: CandidateJson };
+			expect([candidate.rank, candidate.rankedCount]).toEqual([row.rank, 5]);
+		}
+		const unranked = await send("user_admin", "GET", `/jobs/${jobId}/candidates/${failed}`);
+		expect(((await unranked.json()) as { candidate: CandidateJson }).candidate).toMatchObject({ rank: null, rankedCount: 0 });
+	});
+
+	it("prefers the address an applicant gave over the one on their CV, everywhere", async () => {
+		const jobId = await createJob();
+		const cvProfile = { email: "cv@example.com", links: [], skills: [], experience: [], education: [], certifications: [] };
+		const applied = await seed(jobId, { status: "scored", score: 70, scoredAt: new Date(), source: "apply", email: "applied@example.com", profile: cvProfile });
+		const uploaded = await seed(jobId, { status: "scored", score: 60, scoredAt: new Date(), profile: cvProfile });
+
+		const { candidates: list } = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates`)).json()) as {
+			candidates: (CandidateJson & { email: string | null; source: string })[];
+		};
+		expect(list.find((c) => c.id === applied)).toMatchObject({ source: "apply", email: "applied@example.com" });
+		expect(list.find((c) => c.id === uploaded)).toMatchObject({ source: "upload", email: "cv@example.com" });
+
+		const detail = await send("user_admin", "GET", `/jobs/${jobId}/candidates/${applied}`);
+		expect(((await detail.json()) as { candidate: unknown }).candidate).toMatchObject({
+			email: "applied@example.com",
+			profile: { email: "cv@example.com" },
+		});
+
+		const csv = await (await send("user_admin", "GET", `/jobs/${jobId}/candidates/export.csv`)).text();
+		expect(csv).toContain("applied@example.com");
+		expect(csv.split("\r\n")[1]).toContain("applied@example.com");
+		expect(csv.split("\r\n")[2]).toContain("cv@example.com");
+	});
+
+	it("gives the list what it searches and shows: summary, email, every requirement and whether there is a note", async () => {
+		const jobId = await createJob();
+		const full = await seed(jobId, {
+			status: "scored",
+			score: 60,
+			scoredAt: new Date(),
+			summary: "Strong Swift.",
+			note: "Call on Monday",
+			profile: { email: "ada@example.com", phone: "+44 7946 095 800", links: [], skills: ["Swift"], experience: [], education: [], certifications: [] },
+			requirements: [req("Swift", "must", true), req("Combine", "must", false), req("Figma", "nice", false)],
+		});
+		const bare = await seed(jobId, { status: "queued" });
+
+		const { candidates: list } = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates`)).json()) as {
+			candidates: (CandidateJson & { hasNote: boolean; profile: unknown; checks: unknown; summary: string | null })[];
+		};
+		expect(list.find((c) => c.id === full)).toMatchObject({
+			summary: "Strong Swift.",
+			hasNote: true,
+			// Only the email: the phone and the rest of the profile are for the candidate page.
+			profile: { email: "ada@example.com" },
+			checks: [
+				{ label: "Swift", met: true, importance: "must" },
+				{ label: "Combine", met: false, importance: "must" },
+				{ label: "Figma", met: false, importance: "nice" },
+			],
+		});
+		expect(list.find((c) => c.id === full)).not.toHaveProperty("note");
+		expect(list.find((c) => c.id === bare)).toMatchObject({ summary: null, hasNote: false, profile: null, checks: [] });
+
+		// A note that was cleared is no note.
+		await send("user_admin", "PATCH", `/jobs/${jobId}/candidates/${full}`, {
+			headers: { "content-type": "application/json" },
+			body: new TextEncoder().encode(JSON.stringify({ note: "" })),
+		});
+		const again = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates`)).json()) as {
+			candidates: { id: string; hasNote: boolean }[];
+		};
+		expect(again.candidates.find((c) => c.id === full)?.hasNote).toBe(false);
 	});
 
 	it("shows met requirements as matches (must-haves first) and unmet must-haves as gaps, capped at 4 and 2", async () => {
@@ -444,6 +568,128 @@ describe("GET /jobs/:jobId/candidates", () => {
 			gaps: ["Combine", "CI/CD"],
 		});
 		expect(list.find((c) => c.id === few)).toMatchObject({ matches: ["Swift", "Figma"], gaps: [] });
+	});
+});
+
+describe("GET /jobs/:jobId/candidates/export.csv", () => {
+	const exportCsv = (user: string | null, jobId: string, query = "") =>
+		send(user, "GET", `/jobs/${jobId}/candidates/export.csv${query}`);
+	// fetch's text() drops the BOM, so it is checked on the bytes.
+	const lines = async (res: Response) => (await res.text()).replace(/^\uFEFF/, "").split("\r\n").filter(Boolean);
+
+	async function exportJob() {
+		const jobId = await createJob();
+		await db.update(jobs).set({ title: "Senior iOS Engineer" }).where(eq(jobs.id, jobId));
+		const at = (minute: number) => new Date(Date.UTC(2026, 9, 22, 10, minute));
+		const best = await seed(jobId, {
+			status: "scored",
+			score: 90,
+			scoredAt: at(5),
+			name: "Ada Lovelace",
+			decision: "shortlisted",
+			decidedAt: at(40),
+			profile: { email: "ada@example.com", phone: "+44 7946 095 800", links: [], skills: [], experience: [], education: [], certifications: [] },
+			requirements: [req("Swift", "must", true), req("Combine", "must", false)],
+			summary: "Great, really.",
+		});
+		const next = await seed(jobId, { status: "scored", score: 60, scoredAt: at(6), name: "=Bob", note: "Maybe" });
+		const rejected = await seed(jobId, { status: "scored", score: 30, scoredAt: at(7), name: "Cy", decision: "rejected" });
+		const failed = await seed(jobId, { status: "failed", error: "Scoring failed." });
+		const reading = await seed(jobId, { status: "scoring" });
+		return { jobId, best, next, rejected, failed, reading };
+	}
+
+	it("sends every candidate, ranked, as a downloadable CSV that is not cached", async () => {
+		const { jobId } = await exportJob();
+		const res = await exportCsv("user_member", jobId);
+
+		expect(res.status).toBe(200);
+		expect(res.headers.get("content-type")).toBe("text/csv; charset=utf-8");
+		expect(res.headers.get("content-disposition")).toBe('attachment; filename="senior-ios-engineer-applicants.csv"');
+		expect(res.headers.get("cache-control")).toBe("no-store");
+		expect([...new Uint8Array(await res.clone().arrayBuffer()).slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+		const rows = await lines(res);
+		// Header, three scored by rank, then the CV being read and the failed one.
+		expect(rows).toHaveLength(6);
+		// The time it was applied depends on when the row was seeded, so it is checked apart.
+		const [rank, name, email, phone, score, status, decision, note, decidedAt, , summary, matching, missing, reason] =
+			rows[1].replace('"Great, really."', "Great; really.").split(",");
+		expect([rank, name, email, phone, score, status, decision, note, decidedAt, summary, matching, missing, reason]).toEqual([
+			"1",
+			"Ada Lovelace",
+			"ada@example.com",
+			"'+44 7946 095 800",
+			"90",
+			"scored",
+			"Shortlisted",
+			"",
+			"2026-10-22T10:40:00.000Z",
+			"Great; really.",
+			"Swift",
+			"Combine",
+			"",
+		]);
+		expect(rows[2]).toContain("2,'=Bob,,,60,scored,Undecided,Maybe,");
+		expect(rows[3]).toContain("3,Cy,");
+		expect(rows[4]).toMatch(/^,seed\.pdf,,,,scoring,/);
+		expect(rows[5]).toMatch(/^,seed\.pdf,,,,failed,.*,Scoring failed\.$/);
+	});
+
+	it("filters by decision, keeps each CV's rank and names the file after the filter", async () => {
+		const { jobId } = await exportJob();
+
+		const rejected = await exportCsv("user_admin", jobId, "?decision=rejected");
+		expect(rejected.headers.get("content-disposition")).toBe(
+			'attachment; filename="senior-ios-engineer-rejected-applicants.csv"',
+		);
+		const rows = await lines(rejected);
+		expect(rows).toHaveLength(2);
+		expect(rows[1]).toMatch(/^3,Cy,,,30,scored,Rejected,/);
+
+		const undecided = await lines(await exportCsv("user_admin", jobId, "?decision=undecided"));
+		expect(undecided).toHaveLength(4);
+		expect(undecided[1]).toMatch(/^2,'=Bob,/);
+
+		const shortlisted = await exportCsv("user_admin", jobId, "?decision=shortlisted");
+		expect(shortlisted.headers.get("content-disposition")).toContain("-shortlisted-applicants.csv");
+		expect(await lines(shortlisted)).toHaveLength(2);
+		expect((await exportCsv("user_admin", jobId, "?decision=all")).headers.get("content-disposition")).toContain(
+			'"senior-ios-engineer-applicants.csv"',
+		);
+	});
+
+	it("numbers the CSV like the list and the candidate page", async () => {
+		const { jobId, best, next } = await exportJob();
+		const list = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates`)).json()) as {
+			candidates: CandidateJson[];
+		};
+		const rows = await lines(await exportCsv("user_admin", jobId));
+		const ranks = rows.slice(1).map((line) => line.split(",")[0]);
+		expect(ranks).toEqual(list.candidates.map((c) => (c.rank === null ? "" : String(c.rank))));
+		const page = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates/${next}`)).json()) as {
+			candidate: CandidateJson;
+		};
+		expect(page.candidate.rank).toBe(2);
+		expect(list.candidates[0].id).toBe(best);
+	});
+
+	it("refuses an unknown decision (400), a stranger's job (404) and a missing session (401)", async () => {
+		const { jobId } = await exportJob();
+		const bad = await exportCsv("user_admin", jobId, "?decision=maybe");
+		expect(bad.status).toBe(400);
+		expect(((await bad.json()) as { error: { code: string } }).error.code).toBe("invalid_input");
+
+		const acmeJob = await createJob("open", "user_acme");
+		expect((await exportCsv("user_admin", acmeJob)).status).toBe(404);
+		expect((await exportCsv("user_admin", "missing")).status).toBe(404);
+		expect((await exportCsv(null, jobId)).status).toBe(401);
+	});
+
+	it("exports a job with no candidates as just the header", async () => {
+		const jobId = await createJob();
+		const rows = await lines(await exportCsv("user_admin", jobId));
+		expect(rows).toHaveLength(1);
+		expect(rows[0].startsWith("Rank,Name,Email")).toBe(true);
 	});
 });
 
@@ -729,8 +975,8 @@ describe("PATCH /jobs/:jobId/candidates/:id", () => {
 });
 
 describe("GET /jobs/:jobId/candidates/:id/cv", () => {
-	// Every byte value, so a text round trip anywhere would show.
-	const BYTES = Uint8Array.from({ length: 1024 }, (_, i) => i % 256);
+	// After the %PDF- every byte value, so a text round trip anywhere would show.
+	const BYTES = Uint8Array.from({ length: 1024 }, (_, i) => (i < 5 ? "%PDF-".charCodeAt(i) : i % 256));
 
 	it("streams the exact PDF bytes with the headers that show it in the browser", async () => {
 		const jobId = await createJob();

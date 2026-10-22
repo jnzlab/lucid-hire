@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { stubXhr } from "../test/fake-xhr.ts";
 import {
 	ApiError,
 	NETWORK_ERROR_MESSAGE,
@@ -29,7 +30,6 @@ describe("API errors", () => {
 			apiGet("/jobs"),
 			apiPost("/jobs", {}),
 			apiGetBlob("/jobs/job_1/candidates/cand_1/cv"),
-			apiUploadPdf("/jobs/job_1/candidates", new File(["%PDF"], "cv.pdf")),
 		]) {
 			const error = await rejection(call);
 			expect(error).toBeInstanceOf(ApiError);
@@ -69,5 +69,55 @@ describe("API errors", () => {
 		const refused = (await rejection(apiGet("/jobs"))) as ApiError;
 		expect(refused.message).toBe("Something went wrong. Try again.");
 		expect(refused.message).not.toMatch(/Request failed|Failed to fetch/);
+	});
+});
+
+describe("apiUploadPdf", () => {
+	const pdf = () => new File(["%PDF-1.4"], "cv.pdf", { type: "application/pdf" });
+
+	it("sends the raw file with the token, reports progress and returns the JSON answer", async () => {
+		const seen: unknown[] = [];
+		stubXhr(async (request, progress) => {
+			seen.push([request.method, request.url, request.headers, request.body.name]);
+			progress(25, 100);
+			progress(100, 100);
+			return { status: 201, body: JSON.stringify({ candidate: { id: "cand_1" } }) };
+		});
+		const percents: number[] = [];
+
+		const answer = await apiUploadPdf("/jobs/job_1/candidates?fileName=cv.pdf", pdf(), {
+			token: "tok",
+			onProgress: (percent) => percents.push(percent),
+		});
+
+		expect(answer).toEqual({ candidate: { id: "cand_1" } });
+		expect(percents).toEqual([25, 100]);
+		expect(seen).toEqual([
+			[
+				"POST",
+				"http://localhost:8787/jobs/job_1/candidates?fileName=cv.pdf",
+				{ "Content-Type": "application/pdf", Authorization: "Bearer tok" },
+				"cv.pdf",
+			],
+		]);
+	});
+
+	it("throws the API's error, and says it was on our side for a 5xx with no message", async () => {
+		stubXhr(async () => ({ status: 403, body: JSON.stringify({ error: { code: "cv_limit", message: "This job is full" } }) }));
+		const refused = (await rejection(apiUploadPdf("/x", pdf()))) as ApiError;
+		expect([refused.status, refused.code, refused.message]).toEqual([403, "cv_limit", "This job is full"]);
+
+		stubXhr(async () => ({ status: 502, body: "<html>Bad gateway</html>" }));
+		const bad = (await rejection(apiUploadPdf("/x", pdf()))) as ApiError;
+		expect([bad.status, bad.message]).toEqual([502, SERVER_ERROR_MESSAGE]);
+	});
+
+	it("says in plain words when the API can't be reached", async () => {
+		stubXhr(async () => {
+			throw new Error("offline");
+		});
+		const error = (await rejection(apiUploadPdf("/x", pdf()))) as ApiError;
+		expect(error).toBeInstanceOf(ApiError);
+		expect([error.status, error.message]).toEqual([0, NETWORK_ERROR_MESSAGE]);
 	});
 });

@@ -3,10 +3,12 @@ import { type DragEvent, useEffect, useId, useRef, useState } from "react";
 import { Check } from "../components/icons.tsx";
 import { CV_MAX_BYTES, type UploadItem, type useUploadCvs } from "../lib/candidates.ts";
 import { useCoarsePointer } from "../lib/use-coarse-pointer.ts";
+import { ROW_ACTION } from "./row-action.ts";
 
 const hasFiles = (event: DragEvent) => event.dataTransfer.types.includes("Files");
 
-// What to say about a file while it goes up, and after.
+// What to say about a file while it goes up, and after. A file that is uploading shows how far along it is, in a bar
+// and in words; the bar is for the eyes, the percentage is what a screen reader gets.
 function UploadState({ item }: { item: UploadItem }) {
 	if (item.state === "failed") return <span className="text-gap-ink">✕ {item.error}</span>;
 	if (item.state === "done")
@@ -15,7 +17,24 @@ function UploadState({ item }: { item: UploadItem }) {
 				<Check /> Uploaded
 			</span>
 		);
-	return <span className="text-ink-muted">{item.state === "uploading" ? "Uploading" : "Waiting"}</span>;
+	if (item.state === "waiting") return <span className="text-ink-muted">Waiting</span>;
+	const percent = item.progress ?? 0;
+	return (
+		<span className="inline-flex items-center gap-2 text-ink-muted">
+			Uploading
+			<span
+				role="progressbar"
+				aria-label={`Uploading ${item.fileName}`}
+				aria-valuemin={0}
+				aria-valuemax={100}
+				aria-valuenow={percent}
+				className="block h-2 w-24 overflow-hidden rounded-full border border-line bg-paper-2"
+			>
+				<span className="block h-full bg-ink transition-[width] duration-200" style={{ width: `${percent}%` }} />
+			</span>
+			<span className="tabular-nums">{percent}%</span>
+		</span>
+	);
 }
 
 // The tally read out to screen readers: the file list below it is for the eyes.
@@ -33,7 +52,7 @@ function summarise(items: UploadItem[]) {
 // result, or the reason it was refused, is listed under the zone. When the job can't take CVs the
 // `note` says why and takes the place of the chooser, but the results of the last batch stay.
 export function UploadZone({
-	uploads: { items, upload, clear },
+	uploads: { items, upload, remove, retry, clear },
 	note,
 	slotsLeft,
 }: {
@@ -59,6 +78,11 @@ export function UploadZone({
 	const summary = summarise(items);
 	const takeFiles = (files: FileList | null) => {
 		if (files) void upload([...files], slotsLeft);
+	};
+	// The button that was pressed goes away with its row, so focus moves to the next thing that can take it.
+	const removeFile = (key: number) => {
+		remove(key);
+		(inputRef.current ?? noteRef.current)?.focus();
 	};
 	// "Clear list" goes away with the list, so focus moves on to the chooser (or, when the job can't take CVs, its note).
 	const clearList = () => {
@@ -140,13 +164,34 @@ export function UploadZone({
 							>
 								<span className="min-w-0 text-ink [overflow-wrap:anywhere]">{item.fileName}</span>
 								<UploadState item={item} />
+								{/* Only a file that hasn't started can be taken out, and only one that dropped on the way can be sent again. */}
+								{item.state === "waiting" && (
+									<button
+										type="button"
+										className={ROW_ACTION}
+										aria-label={`Remove ${item.fileName}`}
+										onClick={() => removeFile(item.key)}
+									>
+										Remove
+									</button>
+								)}
+								{item.state === "failed" && item.canRetry && (
+									<button
+										type="button"
+										className={ROW_ACTION}
+										aria-label={`Retry upload ${item.fileName}`}
+										onClick={() => retry(item.key)}
+									>
+										Retry upload
+									</button>
+								)}
 							</li>
 						))}
 					</ul>
 					{!busy && (
 						<button
 							type="button"
-							className="mt-1 min-h-11 rounded-[3px] px-1 text-[14px] font-semibold underline underline-offset-[.18em]"
+							className={`mt-1 ${ROW_ACTION}`}
 							onClick={clearList}
 						>
 							Clear list

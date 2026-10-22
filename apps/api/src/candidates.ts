@@ -1,9 +1,10 @@
-import { and, asc, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, lt, or, sql } from "drizzle-orm";
 import type { SQLiteColumn } from "drizzle-orm/sqlite-core";
 import { z } from "zod";
 import type { Db } from "./db/client.ts";
 import {
 	CANDIDATE_DECISIONS,
+	type CandidateProfile,
 	type CandidateStatus,
 	type Decision,
 	type Requirement,
@@ -39,9 +40,24 @@ export type CandidateSummary = {
 	name: string | null;
 	headline: string | null;
 	score: number | null;
+	// Place among the job's scored CVs (1 is best), or null while the CV has no score. The list, the candidate page
+	// and the CSV export all take it from rankOrder.
+	rank: number | null;
 	// Labels of met requirements (must-haves first, at most 4) and of unmet must-haves (at most 2).
 	matches: string[];
 	gaps: string[];
+	// Every requirement of the job with whether the CV met it, for the row's "show all requirements".
+	checks: { label: string; met: boolean; importance: "must" | "nice" }[];
+	// The AI's two sentences on the fit, so the list can be searched by them.
+	summary: string | null;
+	// Whether a recruiter has written a note. The note itself stays on the candidate.
+	hasNote: boolean;
+	// Where the CV came from: a recruiter's upload, or the applicant through the job's public page.
+	source: "upload" | "apply";
+	// The address the applicant gave when applying, else the one on the CV. The list shows and searches it.
+	email: string | null;
+	// Just the email from the CV; the rest of the profile is on the candidate.
+	profile: { email?: string } | null;
 	error: string | null;
 	canRetry: boolean;
 	createdAt: Date;
@@ -49,9 +65,12 @@ export type CandidateSummary = {
 	updatedAt: Date;
 	scoredAt: Date | null;
 };
-export type Candidate = CandidateSummary & {
-	summary: string | null;
+export type Candidate = Omit<CandidateSummary, "profile"> & {
+	// How many CVs of the job are ranked, for "#2 of 7".
+	rankedCount: number;
 	requirements: Requirement[] | null;
+	// What the CV states about the candidate. Null for a CV that hasn't been read.
+	profile: CandidateProfile | null;
 	fileSize: number;
 	note: string | null;
 	// When the decision last changed. Null while it is undecided.
@@ -67,6 +86,11 @@ const summaryColumns = {
 	headline: candidates.headline,
 	score: candidates.score,
 	requirements: candidates.requirements,
+	summary: candidates.summary,
+	hasNote: sql<number>`${candidates.note} is not null`,
+	source: candidates.source,
+	email: sql<string | null>`coalesce(${candidates.email}, json_extract(${candidates.profile}, '$.email'))`,
+	cvEmail: sql<string | null>`json_extract(${candidates.profile}, '$.email')`,
 	runs: candidates.runs,
 	error: candidates.error,
 	createdAt: candidates.createdAt,
@@ -75,14 +99,19 @@ const summaryColumns = {
 };
 const candidateColumns = {
 	...summaryColumns,
-	summary: candidates.summary,
+	profile: candidates.profile,
 	fileSize: candidates.fileSize,
 	note: candidates.note,
 	decidedAt: candidates.decidedAt,
 };
 
-type SummaryRow = Pick<typeof candidates.$inferSelect, keyof typeof summaryColumns>;
-type CandidateRow = Pick<typeof candidates.$inferSelect, keyof typeof candidateColumns>;
+// What the select returns: the table's columns, plus the two computed ones.
+type SummaryRow = Pick<typeof candidates.$inferSelect, Exclude<keyof typeof summaryColumns, "hasNote" | "email" | "cvEmail">> & {
+	hasNote: number;
+	email: string | null;
+	cvEmail: string | null;
+};
+type CandidateRow = SummaryRow & Pick<typeof candidates.$inferSelect, "profile" | "fileSize" | "note" | "decidedAt">;
 
 const isMust = (r: Requirement) => Number(r.importance === "must");
 const mustFirst = (a: Requirement, b: Requirement) => isMust(b) - isMust(a);
@@ -93,7 +122,7 @@ function isRetryable(status: CandidateStatus, updatedAt: Date): boolean {
 	return status === "failed" || stuck;
 }
 
-function toSummary(row: SummaryRow): CandidateSummary {
+function toSummary(row: SummaryRow, rank: number | null = null): CandidateSummary {
 	const requirements = row.requirements ?? [];
 	return {
 		id: row.id,
@@ -103,6 +132,7 @@ function toSummary(row: SummaryRow): CandidateSummary {
 		name: row.name,
 		headline: row.headline,
 		score: row.score,
+		rank,
 		matches: requirements
 			.filter((r) => r.met)
 			.sort(mustFirst)
@@ -112,6 +142,12 @@ function toSummary(row: SummaryRow): CandidateSummary {
 			.filter((r) => r.importance === "must" && !r.met)
 			.slice(0, 2)
 			.map((r) => r.label),
+		checks: requirements.map(({ label, met, importance }) => ({ label, met, importance })),
+		summary: row.summary,
+		hasNote: Boolean(row.hasNote),
+		source: row.source,
+		email: row.email,
+		profile: row.cvEmail ? { email: row.cvEmail } : null,
 		error: row.error,
 		canRetry: isRetryable(row.status, row.updatedAt) && row.runs < MAX_SCORING_RUNS,
 		createdAt: row.createdAt,
@@ -120,10 +156,11 @@ function toSummary(row: SummaryRow): CandidateSummary {
 	};
 }
 
-const toCandidate = (row: CandidateRow): Candidate => ({
-	...toSummary(row),
-	summary: row.summary,
+const toCandidate = (row: CandidateRow, rank: number | null = null, rankedCount = 0): Candidate => ({
+	...toSummary(row, rank),
+	rankedCount,
 	requirements: row.requirements,
+	profile: row.profile,
 	fileSize: row.fileSize,
 	note: row.note,
 	decidedAt: row.decidedAt,
@@ -151,24 +188,68 @@ export async function getCvCount(db: Db, orgId: string, jobId: string): Promise<
 	return job?.cvCount ?? null;
 }
 
-// Scored by score (ties: scored first), then CVs still being read, then failed ones.
+// THE ranking, used by the list, the candidate page and the CSV export so their ranks agree: higher score first,
+// then whoever was scored first, then whoever uploaded first, then the id so that two rows never tie.
+const rankOrder = [desc(candidates.score), asc(candidates.scoredAt), asc(candidates.createdAt), asc(candidates.id)];
+// Only a CV that has been scored has a rank.
+const isRanked = and(eq(candidates.status, "scored"), isNotNull(candidates.score));
+
+// The job's ranked CVs, best first.
+async function rankedIds(db: Db, orgId: string, jobId: string): Promise<string[]> {
+	const rows = await db
+		.select({ id: candidates.id })
+		.from(candidates)
+		.where(and(inJob(orgId, jobId), isRanked))
+		.orderBy(...rankOrder);
+	return rows.map(({ id }) => id);
+}
+
+// Scored by rank, then CVs still being read, then failed ones. Ranks are counted over the whole job, so they
+// don't depend on what the list shows.
 export async function listCandidates(db: Db, orgId: string, jobId: string): Promise<CandidateSummary[]> {
 	const rows = await db
 		.select(summaryColumns)
 		.from(candidates)
 		.where(inJob(orgId, jobId))
-		.orderBy(
-			sql`case ${candidates.status} when 'scored' then 0 when 'failed' then 2 else 1 end`,
-			desc(candidates.score),
-			asc(candidates.scoredAt),
-			asc(candidates.createdAt),
-		);
-	return rows.map(toSummary);
+		.orderBy(sql`case ${candidates.status} when 'scored' then 0 when 'failed' then 2 else 1 end`, ...rankOrder);
+	let rank = 0;
+	return rows.map((row) => toSummary(row, row.status === "scored" && row.score !== null ? ++rank : null));
+}
+
+// The candidate with its place among the job's scored CVs.
+async function ranked(db: Db, orgId: string, jobId: string, row: CandidateRow): Promise<Candidate> {
+	if (row.status !== "scored" || row.score === null) return toCandidate(row);
+	const ids = await rankedIds(db, orgId, jobId);
+	const index = ids.indexOf(row.id);
+	return toCandidate(row, index === -1 ? null : index + 1, ids.length);
+}
+
+// Everything the CSV export holds, ranked as the list is. Ranks count the whole job, so they don't change with the
+// decision filter.
+export async function listForExport(
+	db: Db,
+	orgId: string,
+	jobId: string,
+	decision: Decision | "all",
+): Promise<(Candidate & { phone: string | null })[]> {
+	const rows = await db
+		.select(candidateColumns)
+		.from(candidates)
+		.where(inJob(orgId, jobId))
+		.orderBy(sql`case ${candidates.status} when 'scored' then 0 when 'failed' then 2 else 1 end`, ...rankOrder);
+	let rank = 0;
+	return rows
+		.map((row) => ({ row, place: row.status === "scored" && row.score !== null ? ++rank : null }))
+		.filter(({ row }) => decision === "all" || row.decision === decision)
+		.map(({ row, place }) => ({
+			...toCandidate(row, place, rank),
+			phone: row.profile?.phone ?? null,
+		}));
 }
 
 export async function getCandidate(db: Db, orgId: string, jobId: string, id: string): Promise<Candidate | null> {
 	const [row] = await db.select(candidateColumns).from(candidates).where(inJobById(orgId, jobId, id)).limit(1);
-	return row ? toCandidate(row) : null;
+	return row ? ranked(db, orgId, jobId, row) : null;
 }
 
 export type SlotResult = { ok: true } | { ok: false; reason: "job_not_found" | "job_not_open" | "cv_limit" };
@@ -305,7 +386,7 @@ export async function decideCandidate(
 		})
 		.where(inJobById(orgId, jobId, id))
 		.returning(candidateColumns);
-	return row ? toCandidate(row) : null;
+	return row ? ranked(db, orgId, jobId, row) : null;
 }
 
 // The R2 key and name of a CV file, or null when the candidate isn't the company's.

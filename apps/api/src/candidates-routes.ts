@@ -15,14 +15,18 @@ import {
 	getCvCount,
 	getCvFile,
 	listCandidates,
+	listForExport,
 	markStartFailed,
 	releaseSlot,
 	startRetry,
 	takeSlot,
 } from "./candidates.ts";
+import { buildCsv, exportFileName, exportQuery } from "./candidates-export.ts";
 import { type Db, getDb } from "./db/client.ts";
+import { getJob } from "./jobs.ts";
+import { peekPdf } from "./pdf-stream.ts";
 import type { AppEnv } from "./types.ts";
-import { validJson } from "./validation.ts";
+import { validJson, validQuery } from "./validation.ts";
 
 const jobNotFound = { error: { code: "job_not_found", message: "That job doesn't exist or isn't yours" } };
 const candidateNotFound = {
@@ -72,6 +76,25 @@ export function candidateRoutes() {
 		return c.json({ candidates, cvCount, cvLimit: CV_LIMIT_PER_JOB }, 200, { "Cache-Control": "no-store" });
 	});
 
+	// The job's candidates as a spreadsheet, for any member of the company. Registered before "/:id" so the path is
+	// not taken for a candidate. The file is built from one query: a CPU-light loop over the job's few hundred rows at most.
+	routes.get("/export.csv", validQuery(exportQuery), async (c) => {
+		const db = getDb(c.env.DB);
+		const org = c.get("org");
+		const jobId = c.req.param("jobId");
+		const job = await getJob(db, org.id, jobId);
+		if (!job) return c.json(jobNotFound, 404);
+
+		const { decision } = c.req.valid("query");
+		const rows = await listForExport(db, org.id, jobId, decision);
+		return c.body(buildCsv(rows), 200, {
+			"Content-Type": "text/csv; charset=utf-8",
+			"Content-Disposition": `attachment; filename="${exportFileName(job.title, decision)}"`,
+			"Cache-Control": "no-store",
+			"X-Content-Type-Options": "nosniff",
+		});
+	});
+
 	// The body is the raw PDF. It is streamed straight into R2 and never buffered: a Worker on the free
 	// plan has 10 ms of CPU, which parsing 5 MB would not fit in.
 	routes.post("/", async (c) => {
@@ -95,6 +118,11 @@ export function candidateRoutes() {
 			return c.json({ error: { code: "empty_file", message: "That file is empty" } }, 400);
 		}
 
+		// The first bytes must say PDF: the content type and the name are only what the client claims. Looked at
+		// before a slot is taken, so a file that isn't a PDF costs nothing.
+		const pdf = c.req.raw.body ? await peekPdf(c.req.raw.body, fileSize) : null;
+		if (!pdf) return c.json({ error: { code: "not_pdf", message: "Upload a PDF file" } }, 400);
+
 		const db = getDb(c.env.DB);
 		const slot = await takeSlot(db, org.id, jobId);
 		if (!slot.ok) {
@@ -114,7 +142,10 @@ export function candidateRoutes() {
 		const id = crypto.randomUUID();
 		const fileKey = `${org.id}/${jobId}/${id}.pdf`;
 		try {
-			await c.env.CVS.put(fileKey, c.req.raw.body, { httpMetadata: { contentType: "application/pdf" } });
+			await Promise.all([
+				c.env.CVS.put(fileKey, pdf.readable, { httpMetadata: { contentType: "application/pdf" } }),
+				pdf.pumped,
+			]);
 		} catch (error) {
 			console.error(`[${c.get("requestId")}] cv upload to R2 failed`, error);
 			c.executionCtx.waitUntil(releaseSlot(db, org.id, jobId));

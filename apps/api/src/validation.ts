@@ -22,3 +22,4 @@ function validTarget<T extends z.ZodType>(target: "json" | "query", schema: T) {
 		);
 	});
 }
+

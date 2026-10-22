@@ -49,7 +49,8 @@ export function createApp({
 			origin: ALLOWED_ORIGINS,
 			allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 			allowHeaders: ["Authorization", "Content-Type", "X-Applicant-Email", "X-Turnstile-Token", "X-File-Name"],
-			exposeHeaders: [REQUEST_ID_HEADER],
+			// Content-Disposition: the web app names a download after it.
+			exposeHeaders: [REQUEST_ID_HEADER, "Content-Disposition"],
 			maxAge: 600,
 		}),
 	);

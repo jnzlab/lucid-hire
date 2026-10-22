@@ -12,21 +12,25 @@ import {
 	MAX_SCORING_RUNS,
 	type Requirement,
 	SLOW_CHECK_MS,
+	candidateEmail,
 	candidateName,
 	failureMessage,
 	isSlow,
 	isWorking,
 	useCandidate,
+	useDecideCandidate,
 	useDeleteCandidate,
 	useRetryCandidate,
 } from "../lib/candidates.ts";
 import { formatFileSize } from "../lib/format.ts";
+import { gmailComposeUrl } from "../lib/contact.ts";
 import { useJob } from "../lib/jobs.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
 import { useNow } from "../lib/use-now.ts";
 import { DecisionBlock } from "./decision-block.tsx";
 import { InterviewQuestions } from "./interview-questions.tsx";
 import { OpenCvButton } from "./open-cv-button.tsx";
+import { ProfileCard } from "./profile-card.tsx";
 import { RefreshFailed } from "./refresh-failed.tsx";
 
 export function CandidatePage({ jobId, candidateId }: { jobId: string; candidateId: string }) {
@@ -49,6 +53,7 @@ export function CandidatePage({ jobId, candidateId }: { jobId: string; candidate
 			) : candidate.data ? (
 				<CandidateDetails
 					jobId={jobId}
+					jobTitle={job.data?.title}
 					candidate={candidate.data}
 					remove={remove}
 					refreshFailed={candidate.isError}
@@ -94,16 +99,62 @@ function StillReading({ candidate, retry }: { candidate: Candidate; retry: React
 	);
 }
 
+// The applicant's email (or the one on the CV), or a note that there is none, and "Onboard" when there is one to
+// write to.
+function Contact({ candidate, jobId, jobTitle }: { candidate: Candidate; jobId: string; jobTitle: string | undefined }) {
+	const org = useOrg();
+	const decide = useDecideCandidate(jobId, candidate.id);
+	const [opened, setOpened] = useState(false);
+	const email = candidateEmail(candidate);
+	if (!email) return <p className="mt-2 font-mono text-[13px] text-ink-muted">No email provided</p>;
+
+	// A scored CV with a job to write about can be taken forward.
+	const canOnboard = candidate.status === "scored" && jobTitle !== undefined;
+	const onboard = () => {
+		if (!canOnboard) return;
+		// Opened inside the click, so the browser doesn't take it for a popup. The app sends nothing itself.
+		window.open(
+			gmailComposeUrl({ to: email, candidateName: candidate.name, jobTitle, companyName: org.name }),
+			"_blank",
+			"noopener,noreferrer",
+		);
+		setOpened(true);
+		if (candidate.decision !== "shortlisted") decide.mutate({ decision: "shortlisted" });
+	};
+
+	return (
+		<div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+			<a href={`mailto:${email}`} className="font-mono text-[13px] text-ink underline underline-offset-[.18em] [overflow-wrap:anywhere]">
+				{email}
+			</a>
+			{canOnboard && (
+				<button type="button" className="btn ghost" onClick={onboard}>
+					Onboard
+				</button>
+			)}
+			{candidate.source === "apply" && (
+				<span className="rounded-full bg-paper px-2.5 py-0.5 font-mono text-[12px] text-ink-2">Applied through the job page</span>
+			)}
+			<p aria-live="polite" className="font-mono text-[12.5px] text-ink-muted empty:hidden">
+				{opened && "Gmail draft opened. Marked as shortlisted."}
+			</p>
+		</div>
+	);
+}
+
 const count = (items: Requirement[]) => `${items.filter(({ met }) => met).length} of ${items.length}`;
 
 function CandidateDetails({
 	jobId,
+	jobTitle,
 	candidate,
 	remove,
 	refreshFailed,
 	onRefresh,
 }: {
 	jobId: string;
+	// Undefined until the job has loaded.
+	jobTitle: string | undefined;
 	candidate: Candidate;
 	remove: ReturnType<typeof useDeleteCandidate>;
 	refreshFailed: boolean;
@@ -176,6 +227,13 @@ function CandidateDetails({
 					{score !== null && `Scored ${score} · ${count(requirements)} requirements`}
 				</p>
 				{isWorking(candidate) && <StillReading candidate={candidate} retry={retryButton("btn ghost")} />}
+				{candidate.rank !== null && (
+					<p className="mt-3 font-mono text-[13.5px] text-ink">
+						Ranked #{candidate.rank} of {candidate.rankedCount} scored {candidate.rankedCount === 1 ? "CV" : "CVs"} for this
+						role
+					</p>
+				)}
+				<Contact candidate={candidate} jobId={jobId} jobTitle={jobTitle} />
 			</PageHeading>
 			{refreshFailed && (
 				<div className="mt-4">
@@ -213,6 +271,8 @@ function CandidateDetails({
 			)}
 
 			<DecisionBlock key={candidate.id} jobId={jobId} candidate={candidate} />
+
+			<ProfileCard profile={candidate.profile} />
 
 			{requirements.length > 0 && (
 				<section aria-labelledby="requirements-h" className="mt-10">

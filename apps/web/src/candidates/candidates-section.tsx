@@ -1,7 +1,10 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { AnnouncedBanner } from "../components/announced-banner.tsx";
+import { ConfirmDialog } from "../components/confirm-dialog.tsx";
+import { Check, NoteMark } from "../components/icons.tsx";
 import { ScoreRing } from "../components/score-ring.tsx";
+import { useOrg } from "../dashboard/org.ts";
 import { SectionError, SectionLoading } from "../jobs/job-ui.tsx";
 import {
 	type CandidateSummary,
@@ -14,13 +17,27 @@ import {
 	isSlow,
 	isWorking,
 	useCandidates,
+	useDeleteCandidate,
 	useRetryCandidate,
 	useUploadCvs,
 } from "../lib/candidates.ts";
+import {
+	DEFAULT_VIEW,
+	type ListView,
+	SORTS,
+	STATUS_FILTERS,
+	type SortKey,
+	type StatusFilter,
+	isFiltered,
+	visibleCandidates,
+} from "../lib/candidate-list.ts";
 import type { Job } from "../lib/jobs.ts";
 import { useNow } from "../lib/use-now.ts";
 import { CandidateTags, DecisionTag } from "./candidate-tags.tsx";
+import { ExportMenu } from "./export-menu.tsx";
+import { OpenCvButton } from "./open-cv-button.tsx";
 import { RefreshFailed } from "./refresh-failed.tsx";
+import { ROW_ACTION } from "./row-action.ts";
 import { type Segment, SegmentedControl } from "./segmented-control.tsx";
 import { UploadZone } from "./upload-zone.tsx";
 
@@ -42,7 +59,16 @@ export function CandidatesSection({ job }: { job: Job }) {
 	const candidates = useCandidates(job.id);
 	const uploads = useUploadCvs(job.id);
 	const deletedCandidate = useRouterState({ select: (state) => state.location.state.deletedCandidate });
+	// Set when a row is deleted here; the candidate page reports its own delete through the router state.
+	const [deletedHere, setDeletedHere] = useState<string>();
+	const headingRef = useRef<HTMLHeadingElement>(null);
 	const list = candidates.data?.candidates ?? [];
+	// "All CVs processed" says so when the last CV that was being read in this visit has finished. A list that was
+	// never working (opened with everything read already) says nothing.
+	const working = list.some(isWorking);
+	const [sawWork, setSawWork] = useState(false);
+	if (working && !sawWork) setSawWork(true);
+	const allProcessed = sawWork && !working && list.length > 0;
 	// The job's own count shows until the list arrives.
 	const used = candidates.data?.cvCount ?? job.cvCount;
 	const limit = candidates.data?.cvLimit ?? CV_LIMIT_PER_JOB;
@@ -58,7 +84,12 @@ export function CandidatesSection({ job }: { job: Job }) {
 	return (
 		<section aria-labelledby="candidates-h" className="mt-10">
 			<div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
-				<h2 id="candidates-h" className="text-[19px] leading-[1.2] font-[800] tracking-[-0.01em] [font-stretch:108%]">
+				<h2
+					ref={headingRef}
+					tabIndex={-1}
+					id="candidates-h"
+					className="text-[19px] leading-[1.2] font-[800] tracking-[-0.01em] focus:outline-none [font-stretch:108%]"
+				>
 					Candidates
 				</h2>
 				<div className="flex flex-wrap items-center gap-x-5 gap-y-1 font-mono text-[12.5px] text-ink-muted">
@@ -68,8 +99,17 @@ export function CandidatesSection({ job }: { job: Job }) {
 					<ReadProgress list={list} />
 				</div>
 			</div>
+			{/* Always on the page, so the screen reader hears the line when it appears. */}
+			<p aria-live="polite" className="mt-2 inline-flex items-center gap-2 font-mono text-[12.5px] text-ink empty:hidden">
+				{allProcessed && (
+					<>
+						<Check />
+						All CVs processed. The list is up to date.
+					</>
+				)}
+			</p>
 
-			<AnnouncedBanner message={deletedCandidate && `Deleted “${deletedCandidate}”`} className="mt-4" />
+			<AnnouncedBanner message={deletedHere ?? (deletedCandidate && `Deleted “${deletedCandidate}”`)} className="mt-4" />
 
 			<div className="mt-4">
 				<UploadZone uploads={uploads} note={note} slotsLeft={slotsLeft} />
@@ -95,7 +135,15 @@ export function CandidatesSection({ job }: { job: Job }) {
 							<RefreshFailed polling={list.some(isWorking)} onRetry={() => void candidates.refetch()} />
 						)}
 						{list.length > 0 ? (
-							<RankedList jobId={job.id} candidates={list} />
+							<RankedList
+								jobId={job.id}
+								candidates={list}
+								onDeleted={(name) => {
+									setDeletedHere(`Deleted “${name}”`);
+									// The row that had focus is gone.
+									headingRef.current?.focus();
+								}}
+							/>
 						) : (
 							<p className="rounded-xl bg-sheet px-6 py-5 text-[15px] text-ink-2 shadow-card">
 								No candidates yet. Uploaded CVs are ranked here.
@@ -130,33 +178,118 @@ const EMPTY_FILTER: Record<Decision, string> = {
 	undecided: "No undecided candidates yet.",
 	rejected: "No rejected candidates yet.",
 };
+// Rows drawn at first, and added by each "Show 50 more".
+const PAGE_SIZE = 50;
 
-function RankedList({ jobId, candidates }: { jobId: string; candidates: CandidateSummary[] }) {
-	const [show, setShow] = useState<Show>("all");
-	// Only a CV that has been scored has a rank. The API already sends them best first. A rank belongs to the
-	// CV, not to its place on screen: filtering hides rows and never renumbers the rest.
-	const ranks = new Map(
-		candidates
-			.filter(({ status, score }) => status === "scored" && score !== null)
-			.map(({ id }, index) => [id, index + 1]),
-	);
-	// The filter appears once there is something to decide on.
+function RankedList({
+	jobId,
+	candidates,
+	onDeleted,
+}: {
+	jobId: string;
+	candidates: CandidateSummary[];
+	onDeleted: (name: string) => void;
+}) {
+	const [view, setView] = useState<ListView>(DEFAULT_VIEW);
+	const [limit, setLimit] = useState(PAGE_SIZE);
+	// A rank belongs to the CV (the API sends it), not to its place on screen: searching and filtering hide rows
+	// and never renumber the rest.
+	const change = (patch: Partial<ListView>) => {
+		setView((current) => ({ ...current, ...patch }));
+		setLimit(PAGE_SIZE);
+	};
+	// The decision filter appears once there is something to decide on.
 	const filterable = candidates.some(({ status }) => status === "scored");
-	const shown = filterable && show !== "all" ? candidates.filter(({ decision }) => decision === show) : candidates;
+	const decision = filterable ? view.decision : "all";
+	const rows = visibleCandidates(candidates, { ...view, decision });
+	const shown = rows.slice(0, limit);
+	const filtered = isFiltered({ ...view, decision });
+	const onlyDecision = decision !== "all" && view.query.trim() === "" && view.status === "all";
 
 	return (
 		<>
-			{filterable && <DecisionFilter candidates={candidates} show={show} onChange={setShow} />}
-			{shown.length === 0 && show !== "all" ? (
-				<p className="rounded-xl bg-sheet px-6 py-5 text-[15px] text-ink-2 shadow-card">{EMPTY_FILTER[show]}</p>
+			<div className="mb-4 flex justify-end">
+				<ExportMenu jobId={jobId} />
+			</div>
+			<ListTools view={view} onChange={change} />
+			{filterable && <DecisionFilter candidates={candidates} show={view.decision} onChange={(show) => change({ decision: show })} />}
+			{filtered && (
+				<p aria-live="polite" className="mb-3 font-mono text-[12.5px] text-ink-muted">
+					{rows.length === candidates.length
+						? `Showing all ${candidates.length} candidates`
+						: `Showing ${rows.length} of ${candidates.length} candidates`}
+				</p>
+			)}
+			{rows.length === 0 ? (
+				<div className="rounded-xl bg-sheet px-6 py-5 text-[15px] text-ink-2 shadow-card">
+					<p>{onlyDecision ? EMPTY_FILTER[decision] : "No candidates match your search and filters."}</p>
+					{!onlyDecision && (
+						<button type="button" className={`mt-2 ${ROW_ACTION}`} onClick={() => change(DEFAULT_VIEW)}>
+							Clear search and filters
+						</button>
+					)}
+				</div>
 			) : (
 				<ol aria-labelledby="candidates-h" className="rounded-xl bg-sheet px-6 shadow-card">
 					{shown.map((candidate) => (
-						<CandidateItem key={candidate.id} jobId={jobId} candidate={candidate} rank={ranks.get(candidate.id)} />
+						<CandidateItem key={candidate.id} jobId={jobId} candidate={candidate} onDeleted={onDeleted} />
 					))}
 				</ol>
 			)}
+			{rows.length > shown.length && (
+				<div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
+					<button type="button" className="btn ghost" onClick={() => setLimit((current) => current + PAGE_SIZE)}>
+						Show {Math.min(PAGE_SIZE, rows.length - shown.length)} more
+					</button>
+					<p className="font-mono text-[12.5px] text-ink-muted">
+						{shown.length} of {rows.length} shown
+					</p>
+				</div>
+			)}
 		</>
+	);
+}
+
+// Search, status and sort. Search and status only hide rows; sort never moves a CV without a score ahead of one with.
+function ListTools({ view, onChange }: { view: ListView; onChange: (patch: Partial<ListView>) => void }) {
+	return (
+		<div className="mb-4 grid gap-3 min-[561px]:grid-cols-[minmax(0,1fr)_auto_auto]">
+			<label className="block">
+				<span className="mb-1 block font-mono text-[12.5px] text-ink-muted">Search candidates</span>
+				<input
+					type="search"
+					className="field"
+					value={view.query}
+					placeholder="Name, email or summary"
+					autoComplete="off"
+					onChange={(event) => onChange({ query: event.target.value })}
+				/>
+			</label>
+			<label className="block">
+				<span className="mb-1 block font-mono text-[12.5px] text-ink-muted">Status</span>
+				<select
+					className="field"
+					value={view.status}
+					onChange={(event) => onChange({ status: event.target.value as StatusFilter })}
+				>
+					{STATUS_FILTERS.map(({ value, label }) => (
+						<option key={value} value={value}>
+							{label}
+						</option>
+					))}
+				</select>
+			</label>
+			<label className="block">
+				<span className="mb-1 block font-mono text-[12.5px] text-ink-muted">Sort by</span>
+				<select className="field" value={view.sort} onChange={(event) => onChange({ sort: event.target.value as SortKey })}>
+					{SORTS.map(({ value, label }) => (
+						<option key={value} value={value}>
+							{label}
+						</option>
+					))}
+				</select>
+			</label>
+		</div>
 	);
 }
 
@@ -186,33 +319,54 @@ function DecisionFilter({
 	);
 }
 
-// A row with its tags and, when the API allows it, a Retry button. Each row keeps its own retry state.
+// A row with its tags, its actions and, when the API allows it, a Retry button. Each row keeps its own retry
+// state and whether all its requirements are open.
 function CandidateItem({
 	jobId,
 	candidate,
-	rank,
+	onDeleted,
 }: {
 	jobId: string;
 	candidate: CandidateSummary;
-	rank: number | undefined;
+	onDeleted: (name: string) => void;
 }) {
+	const org = useOrg();
 	const retry = useRetryCandidate(jobId);
+	const [expanded, setExpanded] = useState(false);
 	const retryLabel = retry.isPending ? "Retrying" : "Retry";
+	const name = candidateName(candidate);
+	const hidden = candidate.checks.length - candidate.matches.length - candidate.gaps.length;
+	// Open: every requirement, the met ones first. Closed: the four best matches and the two worst gaps.
+	const matches = expanded ? candidate.checks.filter(({ met }) => met).map(({ label }) => label) : candidate.matches;
+	const gaps = expanded ? candidate.checks.filter(({ met }) => !met).map(({ label }) => label) : candidate.gaps;
 	return (
 		<li className="border-b border-line-2 py-1 last:border-b-0">
-			<CandidateRow jobId={jobId} candidate={candidate} rank={rank} />
+			<CandidateRow jobId={jobId} candidate={candidate} />
 			<CandidateTags
-				matches={candidate.matches}
-				gaps={candidate.gaps}
-				className={`mt-1 mb-3 ml-[42px] ${candidate.decision === "rejected" ? "opacity-75" : ""}`}
+				matches={matches}
+				gaps={gaps}
+				className={`mt-1 mb-1 ml-[42px] ${candidate.decision === "rejected" ? "opacity-75" : ""}`}
 			/>
-			{candidate.canRetry && (
-				<div className="mb-3 ml-[42px]">
-					{/* Only looks disabled while it retries, so it keeps keyboard focus; the click is ignored. */}
+			<div className="mb-2 ml-[42px] flex flex-wrap items-center gap-x-4 gap-y-0">
+				{(hidden > 0 || expanded) && (
+					<button
+						type="button"
+						className={ROW_ACTION}
+						aria-expanded={expanded}
+						aria-label={`${expanded ? "Show fewer requirements" : "Show all requirements"} for ${name}`}
+						onClick={() => setExpanded(!expanded)}
+					>
+						{expanded ? "Show fewer requirements" : "Show all requirements"}
+					</button>
+				)}
+				<OpenCvButton jobId={jobId} candidateId={candidate.id} fileName={candidate.fileName} forName={name} />
+				{org.role === "admin" && <DeleteCandidate jobId={jobId} candidate={candidate} onDeleted={onDeleted} />}
+				{candidate.canRetry && (
+					/* Only looks disabled while it retries, so it keeps keyboard focus; the click is ignored. */
 					<button
 						type="button"
 						className="btn ghost"
-						aria-label={`${retryLabel} ${candidateName(candidate)}`}
+						aria-label={`${retryLabel} ${name}`}
 						aria-disabled={retry.isPending}
 						onClick={() => {
 							if (!retry.isPending) retry.mutate(candidate.id);
@@ -220,8 +374,8 @@ function CandidateItem({
 					>
 						{retryLabel}
 					</button>
-				</div>
-			)}
+				)}
+			</div>
 			{retry.isError && (
 				<p role="alert" className="mb-3 ml-[42px] text-[14px] text-gap-ink">
 					✕ {retry.error.message}
@@ -231,17 +385,61 @@ function CandidateItem({
 	);
 }
 
-// One candidate: rank, name and headline, score. The best match sits on the marker stroke with its score
-// ringed (design system §3). A CV still being read, or one that failed, says so where the headline would be.
-function CandidateRow({
+// Delete from the row, for admins, behind the same confirmation as on the candidate page. The row goes with the
+// CV, so the parent says what was deleted.
+function DeleteCandidate({
 	jobId,
 	candidate,
-	rank,
+	onDeleted,
 }: {
 	jobId: string;
 	candidate: CandidateSummary;
-	rank: number | undefined;
+	onDeleted: (name: string) => void;
 }) {
+	const org = useOrg();
+	const remove = useDeleteCandidate(jobId, candidate.id);
+	const [confirming, setConfirming] = useState(false);
+	const name = candidateName(candidate);
+	return (
+		<>
+			<button
+				type="button"
+				className={`${ROW_ACTION} text-gap-ink`}
+				aria-label={`Delete candidate ${name}`}
+				onClick={() => setConfirming(true)}
+			>
+				Delete candidate
+			</button>
+			{confirming && (
+				<ConfirmDialog
+					heading={`Delete “${name}”?`}
+					confirmLabel="Delete candidate"
+					busyLabel="Deleting"
+					busy={remove.isPending}
+					error={remove.isError ? remove.error.message : null}
+					onCancel={() => {
+						remove.reset();
+						setConfirming(false);
+					}}
+					onConfirm={() =>
+						// The row is gone once this lands, so the parent is told here, not by a callback on the mutation.
+						void remove
+							.mutateAsync()
+							.then(() => onDeleted(name))
+							.catch(() => {})
+					}
+				>
+					It's removed for everyone at {org.name}, with the CV file. You can't undo this.
+				</ConfirmDialog>
+			)}
+		</>
+	);
+}
+
+// One candidate: rank, name and headline, score. The best match sits on the marker stroke with its score
+// ringed (design system §3). A CV still being read, or one that failed, says so where the headline would be.
+function CandidateRow({ jobId, candidate }: { jobId: string; candidate: CandidateSummary }) {
+	const { rank } = candidate;
 	const top = rank === 1;
 	// Rejected: the name and score go grey, which stays above 4.5:1 on the sheet and on the marker stroke.
 	const rejected = candidate.decision === "rejected";
@@ -258,8 +456,14 @@ function CandidateRow({
 				<span
 					className={`block font-[800] [overflow-wrap:anywhere] [font-stretch:108%] group-hover:underline group-hover:underline-offset-[.18em] ${top ? "text-[24px] leading-[1.05] tracking-[-0.02em]" : "text-[17px] leading-[1.2] tracking-[-0.01em]"} ${rejected ? "text-ink-muted" : ""}`}
 				>
-					{rank !== undefined && <span className="sr-only">Rank {rank}: </span>}
+					{rank !== null && <span className="sr-only">Rank {rank}: </span>}
 					{candidateName(candidate)}
+					{candidate.hasNote && (
+						<span className="ml-2 inline-flex translate-y-0.5 text-ink-muted">
+							<NoteMark />
+							<span className="sr-only">Has a note</span>
+						</span>
+					)}
 				</span>
 				<Detail candidate={candidate} top={top} />
 				{candidate.decision !== "undecided" && <DecisionTag decision={candidate.decision} className="mt-2" />}

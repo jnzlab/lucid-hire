@@ -9,9 +9,9 @@ import {
 	takeSlot,
 } from "./candidates.ts";
 import { getDb } from "./db/client.ts";
+import { peekPdf } from "./pdf-stream.ts";
 import {
 	type CaptchaVerifier,
-	checkPdfBody,
 	getApplyTarget,
 	getCoverKey,
 	getPublicJob,
@@ -105,7 +105,7 @@ export function publicRoutes({ verifyCaptcha }: PublicRouteOptions) {
 		const email = normalizeEmail(c.req.header("x-applicant-email"));
 		if (!email) return c.json(err("invalid_email", "Enter a valid email address"), 400);
 		const body = c.req.raw.body;
-		const pdf = body ? await checkPdfBody(body, fileSize) : null;
+		const pdf = body ? await peekPdf(body, fileSize) : null;
 		if (!pdf) return c.json(err("not_pdf", "Upload your CV as a PDF file"), 400);
 
 		const ip = c.req.header("cf-connecting-ip");
@@ -133,7 +133,10 @@ export function publicRoutes({ verifyCaptcha }: PublicRouteOptions) {
 		const id = crypto.randomUUID();
 		const fileKey = `${job.orgId}/${job.id}/${id}.pdf`;
 		try {
-			await c.env.CVS.put(fileKey, pdf, { httpMetadata: { contentType: "application/pdf" } });
+			await Promise.all([
+				c.env.CVS.put(fileKey, pdf.readable, { httpMetadata: { contentType: "application/pdf" } }),
+				pdf.pumped,
+			]);
 		} catch (error) {
 			console.error(`[${c.get("requestId")}] applicant cv upload to R2 failed`, error);
 			c.executionCtx.waitUntil(releaseSlot(db, job.orgId, job.id));

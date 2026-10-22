@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { ApiError, apiDelete, apiGet, apiGetBlob, apiPatch, apiPost, apiUploadPdf } from "./api.ts";
+import { ApiError, apiDelete, apiGet, apiGetBlob, apiGetFile, apiPatch, apiPost, apiUploadPdf } from "./api.ts";
 import { jobKey, jobsKey } from "./jobs.ts";
 import { useSession } from "./session.ts";
 
@@ -39,6 +39,17 @@ export type Requirement = {
 	// A verbatim quote from the CV. Empty when the requirement isn't met.
 	evidence: string;
 };
+// What the CV states about the candidate, read when it was scored. Whatever the CV doesn't state is absent.
+export type CandidateProfile = {
+	email?: string;
+	phone?: string;
+	location?: string;
+	links: { label?: string; url: string }[];
+	skills: string[];
+	experience: { title: string; company?: string; start?: string; end?: string; summary?: string }[];
+	education: { qualification: string; institution?: string; year?: string }[];
+	certifications: string[];
+};
 export type CandidateSummary = {
 	id: string;
 	fileName: string;
@@ -48,9 +59,24 @@ export type CandidateSummary = {
 	name: string | null;
 	headline: string | null;
 	score: number | null;
+	// Place among the job's scored CVs (1 is best); null until the CV is scored. It belongs to the CV, so filtering
+	// the list never renumbers it.
+	rank: number | null;
 	// Labels of met requirements (must-haves first, at most 4) and of unmet must-haves (at most 2).
 	matches: string[];
 	gaps: string[];
+	// Every requirement of the job and whether the CV met it, for the row's "Show all requirements".
+	checks: { label: string; met: boolean; importance: "must" | "nice" }[];
+	// The AI's two sentences on the fit; the list searches them.
+	summary: string | null;
+	// Whether a recruiter has written a note on this CV.
+	hasNote: boolean;
+	// A recruiter's upload, or the applicant through the job's public page.
+	source: "upload" | "apply";
+	// The address the applicant gave when applying, else the one on the CV.
+	email: string | null;
+	// Only the email: the rest of the profile is on the candidate page.
+	profile: { email?: string } | null;
 	error: string | null;
 	canRetry: boolean;
 	createdAt: string;
@@ -58,13 +84,15 @@ export type CandidateSummary = {
 	updatedAt?: string;
 	scoredAt: string | null;
 };
-export type Candidate = CandidateSummary & {
-	summary: string | null;
+export type Candidate = Omit<CandidateSummary, "profile"> & {
+	// How many of the job's CVs are ranked, for "#2 of 7".
+	rankedCount: number;
 	requirements: Requirement[] | null;
 	fileSize: number;
 	note: string | null;
 	// When the decision last changed. Null while it is undecided.
 	decidedAt: string | null;
+	profile: CandidateProfile | null;
 };
 export type CandidateList = { candidates: CandidateSummary[]; cvCount: number; cvLimit: number };
 
@@ -85,6 +113,11 @@ export function failureMessage({ error, canRetry }: Pick<CandidateSummary, "erro
 	const message = error ?? "Scoring failed. Try again.";
 	return canRetry ? message : message.replace(/\s*Try again\.?$/, "");
 }
+
+// The candidate's email, if we have one. Every screen and the CSV go through here, so there is one place to say
+// where it comes from.
+export const candidateEmail = (candidate: { email?: string | null; profile?: { email?: string } | null }): string | null =>
+	candidate.email ?? candidate.profile?.email ?? null;
 
 // The name from the CV, or the file name until the CV has been read (or when it has no name on it).
 export const candidateName = ({ name, fileName }: Pick<CandidateSummary, "name" | "fileName">) =>
@@ -234,59 +267,83 @@ export function useOpenCv(jobId: string, id: string, fileName: string) {
 	};
 }
 
+export type ExportChoice = "all" | Decision;
+export const EXPORT_FAILED = "We couldn't export the candidates. Try again.";
+
+// Downloads the job's candidates as a CSV. The API needs the session token, so the file is fetched and handed to the
+// browser as a temporary link instead of being opened by a plain link.
+export function useExportCsv(jobId: string) {
+	const { token } = useSession();
+	return useMutation({
+		mutationFn: async (choice: ExportChoice) => {
+			const { blob, fileName } = await apiGetFile(`/jobs/${jobId}/candidates/export.csv?decision=${choice}`, {
+				token: await token(),
+			});
+			const url = URL.createObjectURL(blob);
+			const link = document.createElement("a");
+			link.href = url;
+			link.download = fileName ?? "applicants.csv";
+			document.body.append(link);
+			link.click();
+			link.remove();
+			setTimeout(() => URL.revokeObjectURL(url), CV_URL_REVOKE_MS);
+		},
+	});
+}
+
 export type UploadItem = {
 	key: number;
 	fileName: string;
 	state: "waiting" | "uploading" | "done" | "failed";
+	// How much of the file has gone up, 0 to 100, while it uploads.
+	progress?: number;
 	// Why a file wasn't uploaded, in words the recruiter can act on.
 	error?: string;
+	// True when trying again could work: the connection dropped or our side failed. A refused file won't change.
+	canRetry?: boolean;
 };
 
-// Uploads the chosen PDFs one after another and reports each file's state. A file that fails the
-// client checks or the API doesn't stop the others.
+// Whether an upload failure is worth another go.
+const isTransient = (error: unknown) => !(error instanceof ApiError) || error.status === 0 || error.status >= 500;
+
+// Uploads the chosen PDFs one after another and reports each file's state and progress. A file that fails the
+// client checks or the API doesn't stop the others. A file can be taken out of the queue before its turn, and one
+// that failed to upload (not one that was refused) can be sent again.
 export function useUploadCvs(jobId: string) {
 	const { userId, token } = useSession();
 	const queryClient = useQueryClient();
 	const [items, setItems] = useState<UploadItem[]>([]);
 	const nextKey = useRef(0);
+	// The files of the current list by item key, and the keys still to upload, in order.
+	const files = useRef(new Map<number, File>());
+	const queue = useRef<number[]>([]);
 	const running = useRef(false);
+	// Once the API says the job can't take more CVs, the rest of the queue is not sent.
+	const refusal = useRef<string | null>(null);
 
 	const patch = (key: number, change: Partial<UploadItem>) =>
 		setItems((list) => list.map((item) => (item.key === key ? { ...item, ...change } : item)));
 
-	const upload = async (files: File[], slotsLeft: number) => {
-		if (running.current || files.length === 0) return;
+	// Works through the queue. A key added meanwhile (a retry) is picked up by the run already going.
+	const drain = async () => {
+		if (running.current) return;
 		running.current = true;
-
-		let free = slotsLeft;
-		const batch = files.map((file) => {
-			const error = checkCv(file, free);
-			if (!error) free -= 1;
-			const item: UploadItem = {
-				key: nextKey.current++,
-				fileName: file.name,
-				state: error ? "failed" : "waiting",
-				error: error ?? undefined,
-			};
-			return { file, item };
-		});
-		setItems(batch.map(({ item }) => item));
-
 		const key = listKey(userId, jobId);
-		// Once the API says the job can't take more CVs, the rest of the batch is not sent.
-		let refusal: string | null = null;
-		for (const { file, item } of batch) {
-			if (item.state === "failed") continue;
-			if (refusal) {
-				patch(item.key, { state: "failed", error: refusal });
+
+		for (let next = queue.current.shift(); next !== undefined; next = queue.current.shift()) {
+			const file = files.current.get(next);
+			// Removed while it waited.
+			if (!file) continue;
+			if (refusal.current) {
+				patch(next, { state: "failed", error: refusal.current, canRetry: false });
 				continue;
 			}
-			patch(item.key, { state: "uploading" });
+			patch(next, { state: "uploading", progress: 0, error: undefined, canRetry: undefined });
 			try {
 				const { candidate } = await apiUploadPdf<{ candidate: Candidate }>(
 					`/jobs/${jobId}/candidates?fileName=${encodeURIComponent(file.name)}`,
 					file,
-					{ token: await token() },
+					{ token: await token(), onProgress: (progress) => patch(next, { progress }) },
 				);
 				// Show it in the list at once; the refetch below brings the server's order and counts. A list
 				// fetch still in flight would land after this and wipe the new row, so stop it first.
@@ -295,14 +352,16 @@ export function useUploadCvs(jobId: string) {
 					key,
 					(list) => list && { ...list, candidates: withQueued(list, candidate), cvCount: list.cvCount + 1 },
 				);
-				patch(item.key, { state: "done" });
+				files.current.delete(next);
+				patch(next, { state: "done", progress: 100 });
 			} catch (error) {
 				if (error instanceof ApiError && (error.code === "cv_limit" || error.code === "job_not_open")) {
-					refusal = error.message;
+					refusal.current = error.message;
 				}
-				patch(item.key, {
+				patch(next, {
 					state: "failed",
 					error: error instanceof ApiError ? error.message : "We couldn't upload that file. Try again.",
+					canRetry: isTransient(error),
 				});
 			}
 		}
@@ -314,7 +373,56 @@ export function useUploadCvs(jobId: string) {
 		void queryClient.invalidateQueries({ queryKey: jobKey(userId, jobId), exact: true });
 	};
 
-	return { items, upload, clear: () => setItems([]) };
+	const upload = (chosen: File[], slotsLeft: number) => {
+		if (running.current || chosen.length === 0) return;
+		files.current.clear();
+		queue.current = [];
+		refusal.current = null;
+
+		let free = slotsLeft;
+		const batch = chosen.map((file) => {
+			const error = checkCv(file, free);
+			if (!error) free -= 1;
+			const item: UploadItem = {
+				key: nextKey.current++,
+				fileName: file.name,
+				state: error ? "failed" : "waiting",
+				error: error ?? undefined,
+			};
+			if (!error) {
+				files.current.set(item.key, file);
+				queue.current.push(item.key);
+			}
+			return item;
+		});
+		setItems(batch);
+		void drain();
+	};
+
+	// Takes a file that hasn't started uploading out of the batch.
+	const remove = (key: number) => {
+		if (!queue.current.includes(key)) return;
+		queue.current = queue.current.filter((queued) => queued !== key);
+		files.current.delete(key);
+		setItems((list) => list.filter((item) => item.key !== key));
+	};
+
+	// Sends a file again that failed to upload, behind whatever is still going up.
+	const retry = (key: number) => {
+		if (!files.current.has(key) || queue.current.includes(key)) return;
+		refusal.current = null;
+		queue.current.push(key);
+		patch(key, { state: "waiting", error: undefined, canRetry: undefined });
+		void drain();
+	};
+
+	const clear = () => {
+		files.current.clear();
+		queue.current = [];
+		setItems([]);
+	};
+
+	return { items, upload, remove, retry, clear };
 }
 
 // Runs the scoring again for a CV that failed. The row goes back to "queued" at once, which starts the polling.
