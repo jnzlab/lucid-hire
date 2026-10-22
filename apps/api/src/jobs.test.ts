@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { DescriptionEnhancer } from "./ai.ts";
+import { type DescriptionEnhancer, GEMINI_TEXT_MODEL } from "./ai.ts";
 import { createApp } from "./app.ts";
 import type { SessionVerifier } from "./auth.ts";
 import { type Db, getDb } from "./db/client.ts";
@@ -197,7 +197,7 @@ describe("POST /jobs/enhance", () => {
 		const [row] = await usageRows("user_admin");
 		expect(row).toMatchObject({
 			operation: "job_description_enhance",
-			model: "gemini-3.8-flash",
+			model: GEMINI_TEXT_MODEL,
 			ok: true,
 			inputTokens: 120,
 			outputTokens: 80,
