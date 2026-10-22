@@ -7,11 +7,12 @@ This repo is the rebuild of LucidHire on Cloudflare for TestSprite Hackathon
 Season 4. Every layer lands through a pull request that is gated by a
 TestSprite check against a live deployment.
 
-- **Status:** the landing page, sign-in and sign-out, onboarding, jobs (with
+- **Status:** the landing page, sign-in and sign-out, onboarding, a dashboard
+  with a sidebar and a company overview, jobs (search, filters, duplicate and
   the AI description rewrite), CV scoring, shortlisting, interview questions,
   the privacy and terms pages, and public job pages where candidates apply
-  with their CV are live. The rest of the legacy app's
-  features are landing layer by layer.
+  with their CV are live. The rest of the legacy app's features are landing
+  layer by layer.
 - **Live URL:** https://lucidhire.io (API: https://api.lucidhire.io)
 
 ## How scoring works
@@ -75,6 +76,10 @@ on failure.
 | A closed job's public page says applications are closed | After "Close job", the public page of "Sprite closed role" shows "Closed role" and "Applications closed" with no form. Deletes its job afterwards |
 | Unknown job link shows a friendly page | /jobs/no-such-job-00000000 shows "This job isn't available" |
 | Recruiter shares an open job's public link | "Sprite share role" shows its https://lucidhire.io/jobs/… link and a Share menu with Email, X, LinkedIn, WhatsApp, Facebook and "Copy caption". Deletes its job afterwards |
+| Recruiter searches and filters the jobs list | Saves "Sprite search role" as a draft, searches for it and filters to "Draft", and sees only that job. Deletes its job afterwards |
+| Recruiter duplicates a job as a draft | "Duplicate" on "Sprite duplicate role" opens "Sprite duplicate role (copy)" for editing with "Duplicated as a draft". Deletes both jobs afterwards |
+| Overview shows the company dashboard | The sidebar's "Overview" shows active roles, CVs screened, time to shortlist, top match, pipeline velocity, the 90-day funnel, the AI output mix and recent activity |
+| Collapsed sidebar stays collapsed after a reload | "Collapse sidebar", then a reload, still shows "Expand sidebar" |
 
 The recruiter test account's credentials live only in the TestSprite
 environment, never in this repo.
