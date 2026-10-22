@@ -26,3 +26,17 @@ export function buildShareLinks(job: { title: string; description: string; slug:
 		facebook: `https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`,
 	};
 }
+
+// The ways to hand a job on, in the order every share menu lists them: a link to open, or the caption to copy.
+export type ShareTarget = { label: string; href: string; external: boolean } | { label: string; caption: string };
+
+export function shareTargets(links: ShareLinks): ShareTarget[] {
+	return [
+		{ label: "Email", href: links.mailto, external: false },
+		{ label: "X", href: links.x, external: true },
+		{ label: "LinkedIn", href: links.linkedin, external: true },
+		{ label: "WhatsApp", href: links.whatsapp, external: true },
+		{ label: "Facebook", href: links.facebook, external: true },
+		{ label: "Copy caption", caption: links.caption },
+	];
+}

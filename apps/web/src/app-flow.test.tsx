@@ -89,6 +89,7 @@ function fakeJobs(path: string, method: string, body: Record<string, string>, qu
 			);
 		return Response.json({
 			jobs: matching.slice((page - 1) * 20, page * 20).map(({ id, title, status, cvCount, createdAt, updatedAt }) => ({
+				slug: `${id}-slug`,
 				id,
 				title,
 				status,
@@ -878,6 +879,8 @@ describe("jobs", () => {
 				"Candidates",
 				"Edit",
 				"Duplicate",
+				"Copy public link",
+				"Share",
 				"Delete",
 			]);
 			expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Candidates" }));
@@ -971,7 +974,73 @@ describe("jobs", () => {
 			renderAt("/dashboard");
 			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
 			open("Backend Engineer");
-			expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Candidates", "Edit", "Duplicate"]);
+			expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+				"Candidates",
+				"Edit",
+				"Duplicate",
+				"Copy public link",
+				"Share",
+			]);
+		});
+
+		it("copies the public link from the menu and says Copied", async () => {
+			const writeText = vi.fn(async () => {});
+			vi.stubGlobal("navigator", { clipboard: { writeText } });
+			renderAt("/dashboard");
+			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
+			open("Backend Engineer");
+			fireEvent.click(screen.getByRole("menuitem", { name: "Copy public link" }));
+
+			await waitFor(() => expect(writeText).toHaveBeenCalledWith("https://lucidhire.io/jobs/job_1-slug"));
+			expect(await screen.findByText("Copied")).toBeTruthy();
+			expect(screen.queryByRole("menu")).toBeNull();
+			expect(document.activeElement).toBe(screen.getByRole("button", { name: "Actions for Backend Engineer" }));
+		});
+
+		it("shares to the same places as the job page", async () => {
+			const writeText = vi.fn(async (_text: string) => {});
+			vi.stubGlobal("navigator", { clipboard: { writeText } });
+			renderAt("/dashboard");
+			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
+			open("Backend Engineer");
+			const share = screen.getByRole("menuitem", { name: "Share" });
+			expect(share.getAttribute("aria-expanded")).toBe("false");
+			fireEvent.click(share);
+
+			const group = screen.getByRole("group", { name: "Share this job" });
+			expect(within(group).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+				"Email",
+				"X",
+				"LinkedIn",
+				"WhatsApp",
+				"Facebook",
+				"Copy caption",
+			]);
+			const linkedin = within(group).getByRole("menuitem", { name: "LinkedIn" });
+			expect(linkedin.getAttribute("href")).toContain(encodeURIComponent("https://lucidhire.io/jobs/job_1-slug"));
+			expect(linkedin.getAttribute("target")).toBe("_blank");
+
+			fireEvent.click(within(group).getByRole("menuitem", { name: "Copy caption" }));
+			await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
+			expect(writeText.mock.calls[0]?.[0]).toContain("Apply here: https://lucidhire.io/jobs/job_1-slug");
+			expect(await screen.findByText("Caption copied")).toBeTruthy();
+		});
+
+		it("has no public link for a draft, and no sharing for a closed job", async () => {
+			jobs = [
+				{ ...jobs[0]!, status: "draft" },
+				{ ...jobs[0]!, id: "job_2", title: "Closed role", status: "closed" },
+			];
+			renderAt("/dashboard");
+			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
+			open("Backend Engineer");
+			expect(screen.queryByRole("menuitem", { name: "Copy public link" })).toBeNull();
+			expect(screen.queryByRole("menuitem", { name: "Share" })).toBeNull();
+			fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+
+			open("Closed role");
+			expect(screen.getByRole("menuitem", { name: "Copy public link" })).toBeTruthy();
+			expect(screen.queryByRole("menuitem", { name: "Share" })).toBeNull();
 		});
 	});
 });
