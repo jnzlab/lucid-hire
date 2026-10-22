@@ -39,6 +39,17 @@ export type Requirement = {
 	// A verbatim quote from the CV. Empty when the requirement isn't met.
 	evidence: string;
 };
+// What the CV states about the candidate, read when it was scored. Whatever the CV doesn't state is absent.
+export type CandidateProfile = {
+	email?: string;
+	phone?: string;
+	location?: string;
+	links: { label?: string; url: string }[];
+	skills: string[];
+	experience: { title: string; company?: string; start?: string; end?: string; summary?: string }[];
+	education: { qualification: string; institution?: string; year?: string }[];
+	certifications: string[];
+};
 export type CandidateSummary = {
 	id: string;
 	fileName: string;
@@ -70,6 +81,7 @@ export type Candidate = CandidateSummary & {
 	note: string | null;
 	// When the decision last changed. Null while it is undecided.
 	decidedAt: string | null;
+	profile: CandidateProfile | null;
 };
 export type CandidateList = { candidates: CandidateSummary[]; cvCount: number; cvLimit: number };
 
@@ -90,6 +102,11 @@ export function failureMessage({ error, canRetry }: Pick<CandidateSummary, "erro
 	const message = error ?? "Scoring failed. Try again.";
 	return canRetry ? message : message.replace(/\s*Try again\.?$/, "");
 }
+
+// The candidate's email, if we have one. Every screen and the CSV go through here, so there is one place to say
+// where it comes from.
+export const candidateEmail = (candidate: { profile?: { email?: string } | null }): string | null =>
+	candidate.profile?.email ?? null;
 
 // The name from the CV, or the file name until the CV has been read (or when it has no name on it).
 export const candidateName = ({ name, fileName }: Pick<CandidateSummary, "name" | "fileName">) =>

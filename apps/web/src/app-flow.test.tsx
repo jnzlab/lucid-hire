@@ -148,9 +148,17 @@ const summary = ({
 	fileSize: _size,
 	note: _note,
 	decidedAt: _decidedAt,
+	profile: _profile,
 	...rest
 }: FakeCandidate) => rest;
-const forPage = ({ jobId: _jobId, ...rest }: FakeCandidate): Candidate => rest;
+// The page also gets the place among the job's scored CVs, ordered by score as the list is.
+const forPage = ({ jobId, ...rest }: FakeCandidate): Candidate => {
+	const scored = candidates
+		.filter((c) => c.jobId === jobId && c.status === "scored" && c.score !== null)
+		.toSorted((a, b) => (b.score ?? 0) - (a.score ?? 0));
+	const index = scored.findIndex((c) => c.id === rest.id);
+	return index === -1 ? rest : { ...rest, rank: index + 1, rankedCount: scored.length };
+};
 // Scored first (best first), then the ones being read, then the failed, as the API orders them.
 const place = (candidate: FakeCandidate) => ({ scored: 0, queued: 1, scoring: 1, failed: 2 })[candidate.status];
 
@@ -253,6 +261,7 @@ function fakeCandidate(fields: Partial<FakeCandidate> & { id: string }): FakeCan
 		fileSize: 120_000,
 		note: null,
 		decidedAt: null,
+		profile: null,
 		...fields,
 	};
 }
@@ -2050,6 +2059,110 @@ describe("candidates", () => {
 		expect(await screen.findByText("Created 22 Oct 2026 · 3 CVs (0 scored)")).toBeTruthy();
 		expect(screen.getByText("Created 22 Oct 2026 · 1 CV (0 scored)")).toBeTruthy();
 		expect(screen.getAllByText("Created 22 Oct 2026")).toHaveLength(1);
+	});
+
+	describe("the candidate page", () => {
+		const profile = {
+			email: "grace@example.com",
+			phone: "+44 7946 095 800",
+			location: "London, UK",
+			links: [
+				{ label: "GitHub", url: "https://github.com/grace-turner/" },
+				{ url: "javascript:alert(1)" },
+			],
+			skills: ["Swift", "SwiftUI"],
+			experience: [{ title: "Senior iOS Engineer", company: "Barclays", start: "2019", end: "Present", summary: "Led the app." }],
+			education: [{ qualification: "BSc Computer Science", institution: "UCL", year: "2016" }],
+			certifications: ["Apple Developer Academy"],
+		};
+		let open: MockInstance;
+		beforeEach(() => {
+			open = vi.spyOn(window, "open").mockReturnValue(null);
+		});
+		afterEach(() => open.mockRestore());
+
+		it("shows the rank, the email, when it was decided and the profile from the CV", async () => {
+			candidates = [
+				grace({ profile, decision: "shortlisted", decidedAt: "2026-10-22T14:00:00Z" }),
+				fakeCandidate({ id: "cand_kenji", name: "Kenji Tanaka", score: 80, scoredAt: "2026-10-22T12:06:00Z" }),
+				fakeCandidate({ id: "cand_wait", status: "scoring" }),
+			];
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+
+			expect(await screen.findByText("Ranked #1 of 2 scored CVs for this role")).toBeTruthy();
+			expect(screen.getByRole("link", { name: "grace@example.com" }).getAttribute("href")).toBe("mailto:grace@example.com");
+			expect(screen.getByText("Decided 22 Oct 2026")).toBeTruthy();
+
+			const card = screen.getByRole("region", { name: "Profile" });
+			expect(within(card).getByRole("link", { name: "+44 7946 095 800" }).getAttribute("href")).toBe("tel:+447946095800");
+			expect(within(card).getByText("London, UK")).toBeTruthy();
+			const github = within(card).getByRole("link", { name: "github.com/grace-turner" });
+			expect(github.getAttribute("href")).toBe("https://github.com/grace-turner/");
+			expect(github.getAttribute("rel")).toBe("noopener noreferrer");
+			expect(github.getAttribute("target")).toBe("_blank");
+			// A link that is not http or https is text, never a link.
+			expect(within(card).getByText("javascript:alert(1)").closest("a")).toBeNull();
+			expect(within(card).getByText("SwiftUI")).toBeTruthy();
+			expect(within(card).getByText(/Senior iOS Engineer/)).toBeTruthy();
+			expect(within(card).getByText("2019 – Present")).toBeTruthy();
+			expect(within(card).getByText("BSc Computer Science")).toBeTruthy();
+			expect(within(card).getByText("Apple Developer Academy")).toBeTruthy();
+		});
+
+		it("says there is no email, and leaves out the profile card and the empty sections", async () => {
+			candidates = [
+				grace({ profile: { links: [], skills: ["Swift"], experience: [], education: [], certifications: [] } }),
+				fakeCandidate({ id: "cand_blank", profile: { links: [], skills: [], experience: [], education: [], certifications: [] } }),
+			];
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+
+			expect(await screen.findByText("No email provided")).toBeTruthy();
+			expect(screen.queryByRole("button", { name: "Onboard" })).toBeNull();
+			const card = screen.getByRole("region", { name: "Profile" });
+			expect(within(card).getByRole("region", { name: "Skills" })).toBeTruthy();
+			expect(within(card).queryByRole("region", { name: "Experience" })).toBeNull();
+			expect(within(card).queryByRole("region", { name: "Links" })).toBeNull();
+			expect(screen.queryByText(/^Decided /)).toBeNull();
+
+			cleanup();
+			renderAt("/dashboard/jobs/job_1/candidates/cand_blank");
+			expect(await screen.findByText("No email provided")).toBeTruthy();
+			expect(screen.queryByRole("region", { name: "Profile" })).toBeNull();
+		});
+
+		it("opens a Gmail draft with Onboard and shortlists the candidate, once", async () => {
+			candidates = [grace({ profile })];
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+
+			fireEvent.click(await screen.findByRole("button", { name: "Onboard" }));
+
+			expect(open).toHaveBeenCalledTimes(1);
+			const [href, target, features] = open.mock.calls[0];
+			const url = new URL(href);
+			expect(url.origin + url.pathname).toBe("https://mail.google.com/mail/");
+			expect(url.searchParams.get("to")).toBe("grace@example.com");
+			expect(url.searchParams.get("su")).toBe("Next steps — Senior iOS Engineer");
+			expect(url.searchParams.get("body")).toMatch(/^Hi Grace,/);
+			expect(url.searchParams.get("body")).toMatch(/Sprite Labs$/);
+			expect([target, features]).toEqual(["_blank", "noopener,noreferrer"]);
+			expect(await screen.findByText("Gmail draft opened. Marked as shortlisted.")).toBeTruthy();
+			await waitFor(() => expect(candidates[0].decision).toBe("shortlisted"));
+			const decided = candidates[0].decidedAt;
+
+			// Already shortlisted: the draft opens again, and the decision is left alone.
+			fireEvent.click(screen.getByRole("button", { name: "Onboard" }));
+			expect(open).toHaveBeenCalledTimes(2);
+			expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1);
+			expect(candidates[0].decidedAt).toBe(decided);
+		});
+
+		it("has no Onboard for a CV that is not scored yet", async () => {
+			candidates = [grace({ status: "scoring", score: null, profile })];
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+
+			expect(await screen.findByRole("link", { name: "grace@example.com" })).toBeTruthy();
+			expect(screen.queryByRole("button", { name: "Onboard" })).toBeNull();
+		});
 	});
 
 	describe("decisions", () => {

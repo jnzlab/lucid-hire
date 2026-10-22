@@ -2,7 +2,7 @@ import { useId, useState } from "react";
 import { Check } from "../components/icons.tsx";
 import { useOrg } from "../dashboard/org.ts";
 import { type Candidate, DECISION_LABEL, type Decision, NOTE_MAX, useDecideCandidate } from "../lib/candidates.ts";
-import { formatNumber } from "../lib/format.ts";
+import { formatDate, formatNumber } from "../lib/format.ts";
 import { type Segment, SegmentedControl } from "./segmented-control.tsx";
 
 const SEGMENTS: Segment<Decision>[] = [
@@ -37,6 +37,9 @@ export function DecisionBlock({ jobId, candidate }: { jobId: string; candidate: 
 				onChange={choose}
 				className="mt-4"
 			/>
+			{candidate.decision !== "undecided" && candidate.decidedAt && (
+				<p className="mt-3 font-mono text-[12.5px] text-ink-muted">Decided {formatDate(candidate.decidedAt)}</p>
+			)}
 			<p aria-live="polite" className="sr-only">
 				{announcement}
 			</p>

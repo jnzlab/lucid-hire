@@ -77,8 +77,9 @@ function list(values: unknown, limit: number, max: number): string[] {
 	return kept;
 }
 
-// Not a full RFC 5322 check; it only has to keep out text that isn't one address.
-const EMAIL = /^[^\s@<>"',;:()[\]\\]+@[^\s@<>"',;:()[\]\\]+\.[^\s@<>"',;:()[\]\\]{2,}$/;
+// Not a full RFC 5322 check: plain ASCII addresses only, which keeps out anything that is not one address (and,
+// in a mailto: link, anything that could add a header or a query).
+const EMAIL = /^[a-z0-9._%+-]+@[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/;
 
 export function cleanEmail(value: unknown): string | undefined {
 	const email = clip(value, 254)?.replace(/^mailto:/i, "").toLowerCase();

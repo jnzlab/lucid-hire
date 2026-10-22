@@ -8,7 +8,7 @@ describe("cleanEmail", () => {
 	});
 
 	it("drops anything that isn't one plain address", () => {
-		for (const bad of ["", "ada", "ada@", "@example.com", "ada@example", "a b@example.com", "a@b.com, c@d.com", "<a@b.com>", 42, null, {}]) {
+		for (const bad of ["", "ada", "ada@", "@example.com", "ada@example", "a b@example.com", "a@b.com, c@d.com", "<a@b.com>", "ada@example.com?bcc=eve@x.com", "ada@example.com?subject=hi", "ada@exa mple.com", 42, null, {}]) {
 			expect(cleanEmail(bad)).toBeUndefined();
 		}
 		expect(cleanEmail(`${"a".repeat(250)}@example.com`)).toBeUndefined();
