@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Disallow: /dashboard
+Disallow: /onboarding
+Disallow: /sign-in
+Disallow: /sign-up
+Disallow: /sign-out
+Disallow: /invite
+
+Sitemap: https://lucidhire.io/sitemap.xml
