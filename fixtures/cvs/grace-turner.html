@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Grace Turner - CV</title>
+<style>
+@page { size: A4; margin: 0; }
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: #fff; }
+body { font-family: "Helvetica Neue", Helvetica, Arial, "Liberation Sans", sans-serif; font-size: 10.5pt; line-height: 1.5; color: #1f2328; }
+.page { position: relative; width: 210mm; height: 296mm; padding: 17mm 18mm 16mm; overflow: hidden; }
+header { border-bottom: 2.5px solid #0b5cad; padding-bottom: 10px; margin-bottom: 14px; }
+h1 { margin: 0; font-size: 26pt; line-height: 1.1; }
+.headline { margin: 4px 0 0; font-size: 12.5pt; font-weight: 600; color: #0b5cad; }
+.contact { margin: 5px 0 0; font-size: 9.5pt; color: #57606a; }
+h2 { margin: 20px 0 7px; font-size: 9pt; text-transform: uppercase; color: #0b5cad; border-bottom: 1px solid #d0d7de; padding-bottom: 3px; }
+p { margin: 0; }
+.job { margin-top: 12px; }
+.job-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.job-head b { font-size: 10.5pt; }
+.job-head span { font-size: 9.5pt; color: #57606a; white-space: nowrap; }
+.job .sub { font-size: 9.5pt; color: #57606a; margin-bottom: 2px; }
+ul { margin: 3px 0 0; padding-left: 17px; }
+li { margin: 2px 0; }
+.skills p { margin: 2px 0; }
+.skills b { display: inline-block; min-width: 108px; }
+footer { position: absolute; left: 18mm; right: 18mm; bottom: 10mm; text-align: center; font-size: 8pt; color: #8c959f; border-top: 1px solid #eaeef2; padding-top: 5px; }
+</style>
+</head>
+<body>
+<div class="page">
+<header>
+  <h1>Grace Turner</h1>
+  <p class="headline">Senior iOS Engineer</p>
+  <p class="contact">London, UK &middot; grace.turner@example.com</p>
+</header>
+
+<h2>Summary</h2>
+<p>Senior iOS engineer with nine years in mobile and Swift in production since 2019. Led a 400k-user app to SwiftUI, cut cold start by 38% with Instruments, and runs accessibility audits every quarter. Comfortable owning a feature from design review to App Store release, and mentoring the engineers around her.</p>
+
+<h2>Experience</h2>
+<div class="job">
+  <div class="job-head"><b>Lead iOS Engineer, Kestrel Health</b><span>2021 &ndash; present &middot; London</span></div>
+  <div class="sub">Health and wellbeing app with 400,000 users</div>
+  <ul>
+    <li>Led the move of a 400k-user app to SwiftUI, shipping it screen by screen with no big-bang release.</li>
+    <li>Built the app's SwiftUI design system: 40 reusable components with previews and snapshot tests.</li>
+    <li>Profiled launch time with Instruments (Time Profiler, App Launch) and cut cold start by 38% by deferring non-essential work.</li>
+    <li>Used the Allocations and Leaks instruments to fix a memory growth issue in the photo upload flow.</li>
+    <li>Runs quarterly accessibility audits with VoiceOver and Dynamic Type; fixed 120 issues in the last year.</li>
+    <li>Mentors four engineers and sets the code review standards for the iOS team.</li>
+  </ul>
+</div>
+<div class="job">
+  <div class="job-head"><b>iOS Engineer, Parcel Pigeon</b><span>2019 &ndash; 2021 &middot; London</span></div>
+  <div class="sub">Courier and delivery startup</div>
+  <ul>
+    <li>Built the offline sync layer in Swift, with Core Data, background tasks and conflict resolution.</li>
+    <li>Shipped a GraphQL client with Apollo for the courier app, replacing 30 REST calls.</li>
+    <li>Wrote the XCTest suites that took unit test coverage from 20% to 70%.</li>
+  </ul>
+</div>
+<div class="job">
+  <div class="job-head"><b>Junior iOS Developer, Brightwell Digital</b><span>2017 &ndash; 2019 &middot; London</span></div>
+  <div class="sub">Digital agency</div>
+  <ul>
+    <li>Built client apps in Objective-C and UIKit for retail and media brands.</li>
+  </ul>
+</div>
+
+<h2>Skills</h2>
+<div class="skills">
+  <p><b>Languages</b>Swift, Objective-C</p>
+  <p><b>Frameworks</b>SwiftUI, UIKit, Combine, Core Data, XCTest</p>
+  <p><b>Performance</b>Instruments (Time Profiler, Allocations, Leaks), MetricKit</p>
+  <p><b>Accessibility</b>VoiceOver, Dynamic Type, Accessibility Inspector</p>
+  <p><b>Data and tools</b>GraphQL (Apollo), REST, Fastlane, Git</p>
+</div>
+
+<h2>Education</h2>
+<div class="job" style="margin-top:0">
+  <div class="job-head"><b>BSc Computer Science, a university in London</b><span>2014 &ndash; 2017</span></div>
+</div>
+
+<footer>Fictional sample CV for LucidHire testing</footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Amelia Nguyen - CV</title>
+<style>
+@page { size: A4; margin: 0; }
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: #fff; }
+body { font-family: "Helvetica Neue", Helvetica, Arial, "Liberation Sans", sans-serif; font-size: 10.5pt; line-height: 1.5; color: #1f2328; }
+.page { position: relative; width: 210mm; height: 296mm; padding: 17mm 18mm 16mm; overflow: hidden; }
+header { border-bottom: 2.5px solid #7a3db8; padding-bottom: 10px; margin-bottom: 14px; }
+h1 { margin: 0; font-size: 26pt; line-height: 1.1; }
+.headline { margin: 4px 0 0; font-size: 12.5pt; font-weight: 600; color: #7a3db8; }
+.contact { margin: 5px 0 0; font-size: 9.5pt; color: #57606a; }
+h2 { margin: 20px 0 7px; font-size: 9pt; text-transform: uppercase; color: #7a3db8; border-bottom: 1px solid #d0d7de; padding-bottom: 3px; }
+p { margin: 0; }
+.job { margin-top: 12px; }
+.job-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.job-head b { font-size: 10.5pt; }
+.job-head span { font-size: 9.5pt; color: #57606a; white-space: nowrap; }
+.job .sub { font-size: 9.5pt; color: #57606a; margin-bottom: 2px; }
+ul { margin: 3px 0 0; padding-left: 17px; }
+li { margin: 2px 0; }
+.skills p { margin: 2px 0; }
+.skills b { display: inline-block; min-width: 108px; }
+footer { position: absolute; left: 18mm; right: 18mm; bottom: 10mm; text-align: center; font-size: 8pt; color: #8c959f; border-top: 1px solid #eaeef2; padding-top: 5px; }
+</style>
+</head>
+<body>
+<div class="page">
+<header>
+  <h1>Amelia Nguyen</h1>
+  <p class="headline">Mobile Engineer</p>
+  <p class="contact">Melbourne, Australia &middot; amelia.nguyen@example.com</p>
+</header>
+
+<h2>Summary</h2>
+<p>Mobile engineer with five years in React Native and some native iOS. Strongest on accessibility and GraphQL data layers. Swift is a growing skill: two small native modules shipped and a SwiftUI prototype built.</p>
+
+<h2>Experience</h2>
+<div class="job">
+  <div class="job-head"><b>Mobile Engineer, Harbourlight Fitness</b><span>2023 &ndash; present &middot; Melbourne</span></div>
+  <div class="sub">Workout and coaching app</div>
+  <ul>
+    <li>Led accessibility across the React Native app, with VoiceOver, TalkBack and Dynamic Type support on every core screen.</li>
+    <li>Fixed 90 accessibility issues from a manual audit and added automated accessibility checks to CI.</li>
+    <li>Built the app's data layer with GraphQL and Apollo Client.</li>
+    <li>Wrote two small native iOS modules in Swift for workout tracking, bridged into React Native.</li>
+    <li>Built a SwiftUI settings screen as a hackathon prototype; it has not shipped.</li>
+  </ul>
+</div>
+<div class="job">
+  <div class="job-head"><b>Junior Mobile Developer, a retail startup</b><span>2021 &ndash; 2023 &middot; Melbourne</span></div>
+  <div class="sub">Online shopping app</div>
+  <ul>
+    <li>Built React Native screens for browsing, cart and checkout.</li>
+    <li>Fixed Objective-C bridging bugs and maintained REST integrations.</li>
+  </ul>
+</div>
+
+<h2>Skills</h2>
+<div class="skills">
+  <p><b>Mobile</b>React Native, TypeScript, Swift (basic), Objective-C (basic)</p>
+  <p><b>Accessibility</b>VoiceOver, TalkBack, Dynamic Type</p>
+  <p><b>Data and tools</b>GraphQL, Apollo Client, Jest, Detox, Git</p>
+  <p><b>Spoken</b>English (native), Vietnamese (conversational)</p>
+</div>
+
+<h2>Education</h2>
+<div class="job" style="margin-top:0">
+  <div class="job-head"><b>BSc Information Technology, a university in Melbourne</b><span>2018 &ndash; 2021</span></div>
+</div>
+
+<footer>Fictional sample CV for LucidHire testing</footer>
+</div>
+</body>
+</html>
