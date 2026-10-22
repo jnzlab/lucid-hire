@@ -1,11 +1,13 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
+import { CandidatesSection } from "../candidates/candidates-section.tsx";
+import { DeleteDialog } from "../components/delete-dialog.tsx";
 import { ArrowRight } from "../components/icons.tsx";
 import { useOrg } from "../dashboard/org.ts";
 import { ApiError } from "../lib/api.ts";
+import { useCandidates } from "../lib/candidates.ts";
 import { type Job, type JobStatus, formatDate, useDeleteJob, useJob, useUpdateJob } from "../lib/jobs.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
-import { DeleteJobDialog } from "./delete-job-dialog.tsx";
 import { BackToJobs, JobStatusTag, PageHeading, SectionError, SectionLoading } from "./job-ui.tsx";
 
 export function JobPage({ jobId }: { jobId: string }) {
@@ -59,6 +61,9 @@ function JobDetails({ job }: { job: Job }) {
 	const navigate = useNavigate();
 	const update = useUpdateJob(job.id);
 	const remove = useDeleteJob(job.id);
+	// The CVs that go with the job: the ones listed now, or the upload count until the list has loaded.
+	const cvs = useCandidates(job.id).data?.candidates.length ?? job.cvCount;
+	const removed = cvs > 0 ? `It and its ${cvs} ${cvs === 1 ? "CV are" : "CVs are"} removed` : "It's removed";
 	const [confirmingDelete, setConfirmingDelete] = useState(false);
 	const next = NEXT_STATUS[job.status];
 
@@ -103,7 +108,9 @@ function JobDetails({ job }: { job: Job }) {
 				</p>
 			)}
 
-			<article aria-label="Job description" className="desk mt-8 rounded-2xl p-[clamp(16px,4vw,40px)]">
+			<CandidatesSection job={job} />
+
+			<article aria-label="Job description" className="desk mt-10 rounded-2xl p-[clamp(16px,4vw,40px)]">
 				<div className="mx-auto max-w-[760px] rounded-sheet bg-sheet p-[clamp(20px,4vw,48px)] shadow-sheet">
 					<p className="text-[16px] leading-[1.6] whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">
 						{job.description}
@@ -126,17 +133,20 @@ function JobDetails({ job }: { job: Job }) {
 			)}
 
 			{confirmingDelete && (
-				<DeleteJobDialog
-					title={job.title}
-					companyName={org.name}
-					deleting={remove.isPending}
+				<DeleteDialog
+					heading={`Delete “${job.title}”?`}
+					confirmLabel="Delete job"
+					busyLabel="Deleting"
+					busy={remove.isPending}
 					error={remove.isError ? remove.error.message : null}
 					onCancel={() => {
 						remove.reset();
 						setConfirmingDelete(false);
 					}}
 					onConfirm={confirmDelete}
-				/>
+				>
+					{removed} for everyone at {org.name}. You can't undo this.
+				</DeleteDialog>
 			)}
 		</>
 	);

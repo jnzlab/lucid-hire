@@ -79,6 +79,7 @@ function JobList({ jobs }: { jobs: JobSummary[] }) {
 								</span>
 								<span className="mt-1 block font-mono text-[12px] text-ink-muted">
 									Created {formatDate(job.createdAt)}
+									{job.cvCount > 0 && ` · ${job.cvCount} ${job.cvCount === 1 ? "CV" : "CVs"}`}
 								</span>
 							</span>
 							<JobStatusTag status={job.status} />

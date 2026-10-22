@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kenji Tanaka - CV</title>
+<style>
+@page { size: A4; margin: 0; }
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: #fff; }
+body { font-family: "Helvetica Neue", Helvetica, Arial, "Liberation Sans", sans-serif; font-size: 10.5pt; line-height: 1.5; color: #1f2328; }
+.page { position: relative; width: 210mm; height: 296mm; padding: 17mm 18mm 16mm; overflow: hidden; }
+header { border-bottom: 2.5px solid #b3261e; padding-bottom: 10px; margin-bottom: 14px; }
+h1 { margin: 0; font-size: 26pt; line-height: 1.1; }
+.headline { margin: 4px 0 0; font-size: 12.5pt; font-weight: 600; color: #b3261e; }
+.contact { margin: 5px 0 0; font-size: 9.5pt; color: #57606a; }
+h2 { margin: 20px 0 7px; font-size: 9pt; text-transform: uppercase; color: #b3261e; border-bottom: 1px solid #d0d7de; padding-bottom: 3px; }
+p { margin: 0; }
+.job { margin-top: 12px; }
+.job-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.job-head b { font-size: 10.5pt; }
+.job-head span { font-size: 9.5pt; color: #57606a; white-space: nowrap; }
+.job .sub { font-size: 9.5pt; color: #57606a; margin-bottom: 2px; }
+ul { margin: 3px 0 0; padding-left: 17px; }
+li { margin: 2px 0; }
+.skills p { margin: 2px 0; }
+.skills b { display: inline-block; min-width: 108px; }
+footer { position: absolute; left: 18mm; right: 18mm; bottom: 10mm; text-align: center; font-size: 8pt; color: #8c959f; border-top: 1px solid #eaeef2; padding-top: 5px; }
+</style>
+</head>
+<body>
+<div class="page">
+<header>
+  <h1>Kenji Tanaka</h1>
+  <p class="headline">iOS Developer</p>
+  <p class="contact">Tokyo, Japan &middot; kenji.tanaka@example.com</p>
+</header>
+
+<h2>Summary</h2>
+<p>iOS developer with eight years of Swift in production, building a commuter app used daily across Tokyo. Ships SwiftUI screens and GraphQL features in a live app. Looking to go deeper on performance tuning and accessibility in a senior role.</p>
+
+<h2>Experience</h2>
+<div class="job">
+  <div class="job-head"><b>iOS Developer, Mirai Commute</b><span>2021 &ndash; present &middot; Tokyo</span></div>
+  <div class="sub">Train and bus journey planner for commuters</div>
+  <ul>
+    <li>Shipped the SwiftUI timetable and route-planner screens in the live app.</li>
+    <li>Integrated a GraphQL client with Apollo iOS and moved route search off REST.</li>
+    <li>Improved scrolling in the home feed by prefetching and caching images.</li>
+    <li>Added Dynamic Type support to the settings and onboarding screens.</li>
+    <li>Wrote XCTest unit tests for the fare calculation module and set up Fastlane releases.</li>
+  </ul>
+</div>
+<div class="job">
+  <div class="job-head"><b>iOS Developer, Kumo Studio</b><span>2018 &ndash; 2021 &middot; Tokyo</span></div>
+  <div class="sub">Mobile app agency</div>
+  <ul>
+    <li>Built and shipped Swift apps for retail and event clients, working in UIKit with Core Data.</li>
+    <li>Connected apps to REST backends and handled App Store submissions for ten client apps.</li>
+    <li>Fixed crashes reported through the crash dashboard and kept crash-free sessions above 99%.</li>
+  </ul>
+</div>
+
+<h2>Skills</h2>
+<div class="skills">
+  <p><b>Languages</b>Swift, some Objective-C</p>
+  <p><b>Frameworks</b>SwiftUI, UIKit, Combine, Core Data, XCTest</p>
+  <p><b>Data and tools</b>GraphQL (Apollo iOS), REST, Fastlane, Git</p>
+  <p><b>Spoken</b>Japanese (native), English (professional)</p>
+</div>
+
+<h2>Education</h2>
+<div class="job" style="margin-top:0">
+  <div class="job-head"><b>BEng Information Engineering, a university in Tokyo</b><span>2014 &ndash; 2018</span></div>
+</div>
+
+<footer>Fictional sample CV for LucidHire testing</footer>
+</div>
+</body>
+</html>

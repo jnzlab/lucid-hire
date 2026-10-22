@@ -7,9 +7,24 @@ This repo is the rebuild of LucidHire on Cloudflare for TestSprite Hackathon
 Season 4. Every layer lands through a pull request that is gated by a
 TestSprite check against a live deployment.
 
-- **Status:** the landing page, sign-in, onboarding and jobs (with the AI
-  description rewrite) are live. CV upload and scoring land next.
+- **Status:** the landing page, sign-in, onboarding, jobs (with the AI
+  description rewrite) and CV scoring are live. Next comes polish. Billing and
+  the public apply portal are out of scope.
 - **Live URL:** https://lucidhire.io (API: https://api.lucidhire.io)
+
+## How scoring works
+
+A recruiter uploads PDFs on an open job: up to 10 per job, 5 MB each. The API
+streams each file into the private R2 bucket `lucidhire-cvs`.
+
+Each CV starts its own Workflow (`lucidhire-score-cv`). It sends the PDF to
+gemini-3.5-flash-lite through the Gemini Files API, in one call. Gemini returns
+every requirement of the job as met or not met, with a quote from the CV as
+evidence.
+
+LucidHire computes the score itself, and must-haves count double. So the
+same CV always gets the same score, and every point traces back to a quote.
+The job page polls while CVs are scoring.
 
 ## TestSprite coverage
 
@@ -33,8 +48,11 @@ on failure.
 | Recruiter posts a job and sees it in the list | "New job" → "Sprite post role" → "Open job"; the list shows it marked Open, then the test deletes it |
 | Recruiter deletes a job after confirming | An admin saves a "Sprite delete role" draft, deletes it through the confirm dialog, and the list says "Deleted “Sprite delete role”" without showing it |
 | Recruiter closes an open job | "Sprite archive role" (reused every run) is closed and offers "Reopen job" |
-| Recruiter rewrites rough job notes with AI | "Improve with AI" turns rough notes into sections with gemini-3.8-flash, without saving |
+| Recruiter rewrites rough job notes with AI | "Improve with AI" turns rough notes into sections with gemini-3.5-flash-lite, without saving |
 | New job form asks for a title | Saving without a title shows "Enter a job title between 2 and 120 characters" |
+| Recruiter uploads a CV and sees it scored with evidence | Opens "Sprite scoring role", uploads grace-turner.pdf, waits for her score, then checks her page for met requirements with quotes and a "Not shown in the CV" gap. Deletes its job afterwards |
+| Admin deletes a candidate after confirming | Uploads kenji-tanaka.pdf to "Sprite candidate role", deletes the candidate through the confirm dialog, and sees "Deleted …". Deletes its job afterwards |
+| Jobs take PDF CVs only while open | A draft job explains it can't take CVs; once opened, a .txt file is refused with "Upload a PDF file" and no slot is used. Deletes its job afterwards |
 
 The recruiter test account's credentials live only in the TestSprite
 environment, never in this repo.

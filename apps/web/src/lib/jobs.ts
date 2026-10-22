@@ -1,9 +1,17 @@
-import { useAuth } from "@clerk/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiDelete, apiGet, apiPatch, apiPost } from "./api.ts";
+import { useSession } from "./session.ts";
 
 export type JobStatus = "draft" | "open" | "closed";
-export type JobSummary = { id: string; title: string; status: JobStatus; createdAt: string; updatedAt: string };
+// `cvCount` is the CVs ever uploaded to the job. Deleting a candidate doesn't lower it.
+export type JobSummary = {
+	id: string;
+	title: string;
+	status: JobStatus;
+	cvCount: number;
+	createdAt: string;
+	updatedAt: string;
+};
 export type Job = JobSummary & { description: string };
 export type JobInput = { title: string; description: string };
 
@@ -16,15 +24,9 @@ export const JOB_TITLE_HINT = `Enter a job title between ${JOB_TITLE_MIN} and ${
 export const STATUS_LABEL: Record<JobStatus, string> = { draft: "Draft", open: "Open", closed: "Closed" };
 
 // Keyed by user, so a different account in the same tab never sees another company's cached jobs.
-const jobsKey = (userId: Nullable) => ["jobs", userId] as const;
-const jobKey = (userId: Nullable, id: string) => ["jobs", userId, id] as const;
+export const jobsKey = (userId: Nullable) => ["jobs", userId] as const;
+export const jobKey = (userId: Nullable, id: string) => ["jobs", userId, id] as const;
 type Nullable = string | null | undefined;
-
-// The signed-in user, and a fresh Clerk session token for each API call.
-function useSession() {
-	const { getToken, userId } = useAuth();
-	return { userId, token: () => getToken() };
-}
 
 export function useJobs() {
 	const { userId, token } = useSession();

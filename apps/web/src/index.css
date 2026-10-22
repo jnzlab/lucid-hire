@@ -125,9 +125,19 @@
   .field:focus-visible{border-color:var(--ink)}
   .field[aria-invalid="true"]{border-color:var(--gap-ink)}
   .field::placeholder{color:var(--ink-faint)}
+
+  /* Ranked list (design system §3, §4): the first row sits on the wobbly marker stroke, and its score is
+     ringed in ink. Text on the stroke is always on-marker. Both draw in once and rest finished. */
+  .rank-band{position:relative;isolation:isolate;color:var(--on-marker)}
+  .rank-band::before{content:"";position:absolute;inset:0;z-index:-1;background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 64' preserveAspectRatio='none'%3E%3Cpath fill='%23FFE84A' d='M8 9C70 5 150 8 230 6s120-2 163 1c4 6 5 16 4 25s0 20-3 27c-60 3-150 1-230 2S50 63 7 60c-4-9-5-19-4-28s1-17 5-23z'/%3E%3C/svg%3E") 0 0/100% 100% no-repeat;animation:rank-band-in .85s --theme(--ease-out) backwards}
+  .score-ring{position:relative;display:inline-block}
+  .score-ring svg{position:absolute;left:-.24em;top:-.14em;width:calc(100% + .48em);height:calc(100% + .28em);overflow:visible}
+  .score-ring path{fill:none;stroke:currentColor;stroke-width:3.2;stroke-linecap:round;stroke-dasharray:1;animation:ring-draw 1s --theme(--ease-out) .15s backwards}
 }
 
 @keyframes live-blink { to { opacity:.15; } }
+@keyframes rank-band-in { from { clip-path:inset(0 100% 0 0); } }
+@keyframes ring-draw { from { stroke-dashoffset:1; } }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; }

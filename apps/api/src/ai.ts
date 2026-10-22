@@ -4,7 +4,7 @@ import type { Db } from "./db/client.ts";
 import { aiUsage } from "./db/schema.ts";
 
 // The only text model in the app (docs/hackathon-s4.md, fixed decisions). Usage rows record it.
-export const GEMINI_TEXT_MODEL = "gemini-3.8-flash";
+export const GEMINI_TEXT_MODEL = "gemini-3.5-flash-lite";
 
 export type AiResult<T> = { value: T; inputTokens: number | undefined; outputTokens: number | undefined };
 

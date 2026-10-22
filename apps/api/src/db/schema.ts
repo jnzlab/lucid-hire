@@ -49,6 +49,9 @@ export const jobs = sqliteTable(
 		title: text("title").notNull(),
 		description: text("description").notNull(),
 		status: text("status", { enum: JOB_STATUSES }).notNull().default("draft"),
+		// CVs uploaded so far, including deleted ones: each upload spends a Gemini call, so deleting one
+		// doesn't give its slot back. Bumped by a single guarded UPDATE, which is what enforces the limit.
+		cvCount: integer("cv_count").notNull().default(0),
 		createdBy: text("created_by").notNull(),
 		createdAt: createdAt(),
 		updatedAt: integer("updated_at", { mode: "timestamp_ms" })
@@ -58,6 +61,54 @@ export const jobs = sqliteTable(
 	},
 	// The dashboard list is always "this company's jobs, newest first".
 	(t) => [index("jobs_org_created_idx").on(t.orgId, t.createdAt)],
+);
+
+export const CANDIDATE_STATUSES = ["queued", "scoring", "scored", "failed"] as const;
+export type CandidateStatus = (typeof CANDIDATE_STATUSES)[number];
+
+// One checked requirement from the job, with the CV quote that shows it was met.
+export type Requirement = {
+	label: string;
+	requirement: string;
+	importance: "must" | "nice";
+	met: boolean;
+	evidence: string;
+};
+
+// One uploaded CV for a job. The PDF lives in R2 under `file_key`; a Workflow scores it with Gemini and
+// fills in the rest. `runs` counts scoring runs started, which caps manual retries.
+export const candidates = sqliteTable(
+	"candidates",
+	{
+		id: text("id").primaryKey(),
+		orgId: text("org_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		jobId: text("job_id")
+			.notNull()
+			.references(() => jobs.id, { onDelete: "cascade" }),
+		fileKey: text("file_key").notNull(),
+		fileName: text("file_name").notNull(),
+		fileSize: integer("file_size").notNull(),
+		status: text("status", { enum: CANDIDATE_STATUSES }).notNull().default("queued"),
+		runs: integer("runs").notNull().default(1),
+		// What the recruiter sees when scoring failed.
+		error: text("error"),
+		name: text("name"),
+		headline: text("headline"),
+		summary: text("summary"),
+		score: integer("score"),
+		requirements: text("requirements", { mode: "json" }).$type<Requirement[]>(),
+		createdBy: text("created_by").notNull(),
+		createdAt: createdAt(),
+		updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+			.notNull()
+			.default(sql`(unixepoch('subsec') * 1000)`)
+			.$onUpdate(() => new Date()),
+		scoredAt: integer("scored_at", { mode: "timestamp_ms" }),
+	},
+	// The ranked list is "this job's candidates by score"; the org index backs company-wide cleanup.
+	(t) => [index("candidates_job_score_idx").on(t.jobId, t.score), index("candidates_org_idx").on(t.orgId)],
 );
 
 // One row per Gemini call, failed ones included, so each company's AI spend is visible. Written after

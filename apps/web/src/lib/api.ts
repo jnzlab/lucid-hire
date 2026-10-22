@@ -20,22 +20,8 @@ type ApiRequestOptions = {
 	signal?: AbortSignal;
 };
 
-// Calls a JSON endpoint on the API Worker, sending the Clerk session token when there is one.
-async function request<T>(
-	method: "GET" | "POST" | "PATCH" | "DELETE",
-	path: string,
-	body: unknown,
-	{ token, signal }: ApiRequestOptions,
-): Promise<T> {
-	const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-	if (body !== undefined) headers["Content-Type"] = "application/json";
-
-	const res = await fetch(`${API_URL}${path}`, {
-		method,
-		headers,
-		body: body === undefined ? undefined : JSON.stringify(body),
-		signal,
-	});
+// Reads the JSON body of a response, or throws the API's error with its message and code.
+async function parse<T>(res: Response): Promise<T> {
 	if (!res.ok) {
 		const error = (await res.json().catch(() => null)) as {
 			error?: { code?: string; message?: string; fields?: Record<string, string> };
@@ -49,6 +35,26 @@ async function request<T>(
 	}
 	// 204 No Content (a delete) has no body to parse.
 	return (res.status === 204 ? undefined : await res.json()) as T;
+}
+
+// Calls a JSON endpoint on the API Worker, sending the Clerk session token when there is one.
+async function request<T>(
+	method: "GET" | "POST" | "PATCH" | "DELETE",
+	path: string,
+	body: unknown,
+	{ token, signal }: ApiRequestOptions,
+): Promise<T> {
+	const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+	if (body !== undefined) headers["Content-Type"] = "application/json";
+
+	return parse<T>(
+		await fetch(`${API_URL}${path}`, {
+			method,
+			headers,
+			body: body === undefined ? undefined : JSON.stringify(body),
+			signal,
+		}),
+	);
 }
 
 export function apiGet<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
@@ -65,4 +71,12 @@ export function apiPatch<T>(path: string, body: unknown, options: ApiRequestOpti
 
 export function apiDelete(path: string, options: ApiRequestOptions = {}): Promise<void> {
 	return request<void>("DELETE", path, undefined, options);
+}
+
+// Uploads a PDF as the raw request body, so the API can stream it straight into storage. The browser
+// sets Content-Length from the file.
+export async function apiUploadPdf<T>(path: string, file: File, { token, signal }: ApiRequestOptions = {}): Promise<T> {
+	const headers: Record<string, string> = { "Content-Type": "application/pdf" };
+	if (token) headers.Authorization = `Bearer ${token}`;
+	return parse<T>(await fetch(`${API_URL}${path}`, { method: "POST", headers, body: file, signal }));
 }

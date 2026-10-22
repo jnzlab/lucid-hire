@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { DescriptionEnhancer } from "./ai.ts";
+import { type DescriptionEnhancer, GEMINI_TEXT_MODEL } from "./ai.ts";
 import { createApp } from "./app.ts";
 import type { SessionVerifier } from "./auth.ts";
 import { type Db, getDb } from "./db/client.ts";
@@ -91,7 +91,7 @@ describe("access", () => {
 describe("POST /jobs", () => {
 	it("saves a draft by default, with the title tidied", async () => {
 		const job = await createAs("user_admin", { title: "  Senior   iOS Engineer ", description: "Swift, SwiftUI" });
-		expect(job).toMatchObject({ title: "Senior iOS Engineer", status: "draft" });
+		expect(job).toMatchObject({ title: "Senior iOS Engineer", status: "draft", cvCount: 0 });
 	});
 
 	it("can open the job straight away, but not create it closed", async () => {
@@ -197,7 +197,7 @@ describe("POST /jobs/enhance", () => {
 		const [row] = await usageRows("user_admin");
 		expect(row).toMatchObject({
 			operation: "job_description_enhance",
-			model: "gemini-3.8-flash",
+			model: GEMINI_TEXT_MODEL,
 			ok: true,
 			inputTokens: 120,
 			outputTokens: 80,

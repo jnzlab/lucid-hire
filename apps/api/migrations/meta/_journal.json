@@ -15,6 +15,13 @@
       "when": 1792675854249,
       "tag": "0001_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792680562843,
+      "tag": "0002_candidates",
+      "breakpoints": true
     }
   ]
 }

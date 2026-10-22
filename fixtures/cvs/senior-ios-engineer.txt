@@ -1,0 +1,21 @@
+Senior iOS Engineer
+
+Our small product team is building a consumer app used by hundreds of thousands of people. We are hiring a senior iOS engineer who ships carefully, cares about speed and makes the app work for everyone.
+
+What you'll do:
+- Build and ship new features in our Swift and SwiftUI codebase
+- Move the last UIKit screens over to SwiftUI
+- Find and fix performance problems, such as slow launch and janky scrolling
+- Make every screen work with VoiceOver and Dynamic Type
+- Review code and mentor mid-level engineers
+- Work with design and backend on our GraphQL API
+
+What you need:
+- Several years of Swift in production apps
+- SwiftUI shipped in a live app
+- Performance work, with profiling in Instruments
+- Accessibility experience, including VoiceOver and Dynamic Type
+
+Nice to have:
+- GraphQL on the client side, with any library
+- Kotlin Multiplatform, with code shared between iOS and Android

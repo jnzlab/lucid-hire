@@ -57,6 +57,19 @@ export function BackToJobs() {
 	);
 }
 
+// The way back from a candidate to the job it was uploaded to.
+export function BackToJob({ jobId, title }: { jobId: string; title?: string }) {
+	return (
+		<Link
+			to="/dashboard/jobs/$jobId"
+			params={{ jobId }}
+			className="mb-6 inline-flex min-h-11 items-center gap-2 rounded-[3px] font-mono text-[13px] text-ink-muted [overflow-wrap:anywhere] hover:text-ink"
+		>
+			<span aria-hidden="true">←</span> {title ?? "Job"}
+		</Link>
+	);
+}
+
 // In-page states, as the status pill (design system §4). The app shell stays around them.
 export function SectionLoading({ label }: { label: string }) {
 	return (
