@@ -18,7 +18,9 @@ TestSprite check against a live deployment.
 
 ## How scoring works
 
-A recruiter uploads PDFs on an open job: up to 10 per job, 5 MB each. The API
+A recruiter uploads PDFs on an open job, three at a time: up to 10 per job on
+Free, 100 on Pro and 1,000 on Max, 5 MB each. Each CV can carry a name and an
+email the recruiter types, which win over what is read from the CV. The API
 streams each file into the private R2 bucket `lucidhire-cvs`.
 
 Each CV starts its own Workflow (`lucidhire-score-cv`). It sends the PDF to
@@ -90,6 +92,8 @@ on failure.
 | New job page shows the monthly job allowance | The new job page says "Unlimited jobs on your plan" |
 | Recruiter copies a job's public link from the jobs list | The row menu of an open job says "Copied" after "Copy public link". Deletes its job afterwards |
 | Sidebar shows the company's plan | The "Max" badge beside "Sprite Labs" opens Settings at "Plan & usage" |
+| Recruiter gives an uploaded CV its applicant's email | With "Add a name or email to each CV" on, grace-turner.pdf is staged with the email grace.sprite@example.com, which the candidate page then shows. Deletes its job afterwards |
+| A malformed email holds a staged upload back | A staged CV with the email "not-an-email" says "Enter a valid email address" and nothing uploads. Deletes its job afterwards |
 
 The recruiter test account's credentials live only in the TestSprite
 environment, never in this repo.
