@@ -4,7 +4,7 @@ import { GEMINI_TEXT_MODEL } from "./ai.ts";
 import { createApp } from "./app.ts";
 import type { SessionVerifier } from "./auth.ts";
 import { type Db, getDb } from "./db/client.ts";
-import { type Requirement, aiUsage, candidates, interviewQuestions, jobs, members } from "./db/schema.ts";
+import { type Requirement, aiUsage, candidates, interviewQuestions, jobs, members, usageCounters } from "./db/schema.ts";
 import {
 	type InterviewQuestion,
 	type QuestionInput,
@@ -65,7 +65,9 @@ beforeAll(async () => {
 
 afterAll(() => dispose());
 
-beforeEach(() => {
+beforeEach(async () => {
+	// Every test starts with a fresh monthly job allowance.
+	await db.delete(usageCounters);
 	allowAi = true;
 	writerFails = false;
 	writerCalls = [];

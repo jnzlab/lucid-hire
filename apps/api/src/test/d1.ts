@@ -22,9 +22,8 @@ export async function createTestD1() {
 	const cvs = await mf.getR2Bucket("CVS");
 
 	for (const path of Object.keys(migrations).sort()) {
-		for (const statement of migrations[path].split("--> statement-breakpoint")) {
-			if (statement.trim()) await d1.prepare(statement).run();
-		}
+		const statements = migrations[path].split("--> statement-breakpoint").filter((statement) => statement.trim());
+		await d1.batch(statements.map((statement) => d1.prepare(statement)));
 	}
 
 	return { d1: d1 as unknown as D1Database, cvs: cvs as unknown as R2Bucket, dispose: () => mf.dispose() };

@@ -4,7 +4,7 @@ import { createApp } from "./app.ts";
 import type { SessionVerifier } from "./auth.ts";
 import { CV_MAX_BYTES, NOTE_MAX, STALE_SCORING_MS, computeScore, deleteCvFiles } from "./candidates.ts";
 import { type Db, getDb } from "./db/client.ts";
-import { type Requirement, candidates, jobs, members } from "./db/schema.ts";
+import { type Requirement, candidates, jobs, members, usageCounters } from "./db/schema.ts";
 import { createOrgForUser } from "./orgs.ts";
 import { createTestD1 } from "./test/d1.ts";
 
@@ -69,7 +69,9 @@ beforeAll(async () => {
 
 afterAll(() => dispose());
 
-beforeEach(() => {
+beforeEach(async () => {
+	// Every test starts with a fresh monthly job allowance.
+	await db.delete(usageCounters);
 	failPut = false;
 	failCreate = false;
 	creates = [];
@@ -326,7 +328,9 @@ describe("POST /jobs/:jobId/candidates", () => {
 
 		const res = await upload("user_admin", jobId, { fileName: "cv-11.pdf" });
 		expect(res.status).toBe(403);
-		expect(await res.json()).toEqual({ error: { code: "cv_limit", message: "This job has used its 10 free CVs" } });
+		expect(await res.json()).toEqual({
+			error: { code: "cv_limit", message: "This job has used its 10 free CVs", upgradeUrl: "/dashboard/settings#plan" },
+		});
 		expect((await jobOf(jobId)).cvCount).toBe(10);
 		expect(creates).toHaveLength(10);
 		expect(await keysUnder(`${orgId}/${jobId}/`)).toHaveLength(10);

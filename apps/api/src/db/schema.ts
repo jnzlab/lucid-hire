@@ -6,12 +6,36 @@ const createdAt = () =>
 		.notNull()
 		.default(sql`(unixepoch('subsec') * 1000)`);
 
-// A recruiter's company. Onboarding creates one; jobs and plan limits hang off it later.
+export const PLAN_COLUMN_VALUES = ["free", "pro", "max"] as const;
+
+// Polar's subscription statuses. Only some of them give the paid plan (see plan-state.ts).
+export const SUBSCRIPTION_STATUSES = [
+	"incomplete",
+	"incomplete_expired",
+	"trialing",
+	"active",
+	"past_due",
+	"canceled",
+	"unpaid",
+] as const;
+export type SubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
+
+// A recruiter's company. Onboarding creates one; jobs and plan limits hang off it. Our database is the source of
+// truth for the plan: the Polar webhook writes the subscription columns, and `subscription_updated_at` (Polar's
+// own timestamp for the change) orders events that arrive out of order.
 export const organizations = sqliteTable("organizations", {
 	id: text("id").primaryKey(),
 	name: text("name").notNull(),
 	createdBy: text("created_by").notNull(),
 	createdAt: createdAt(),
+	plan: text("plan", { enum: PLAN_COLUMN_VALUES }).notNull().default("free"),
+	polarCustomerId: text("polar_customer_id"),
+	polarSubscriptionId: text("polar_subscription_id"),
+	subscriptionStatus: text("subscription_status", { enum: SUBSCRIPTION_STATUSES }),
+	// When the paid period runs out (ms). The paid plan stops counting after it, whatever the status says.
+	currentPeriodEnd: integer("current_period_end"),
+	cancelAtPeriodEnd: integer("cancel_at_period_end", { mode: "boolean" }).notNull().default(false),
+	subscriptionUpdatedAt: integer("subscription_updated_at"),
 });
 
 export const ROLES = ["admin", "member"] as const;
@@ -196,3 +220,49 @@ export const interviewQuestions = sqliteTable("interview_questions", {
 		.default(sql`(unixepoch('subsec') * 1000)`)
 		.$onUpdate(() => new Date()),
 });
+
+export const USAGE_METRICS = ["jobs_month", "ai_hour"] as const;
+export type UsageMetric = (typeof USAGE_METRICS)[number];
+
+// How much of an allowance a company has used in a period: `jobs_month` per UTC month ("2026-10"), `ai_hour` per
+// UTC hour ("2026-10-22T14"). One guarded upsert both checks and spends the allowance, so a limit check is never a
+// COUNT over rows, and deleting a job doesn't give its slot back.
+export const usageCounters = sqliteTable(
+	"usage_counters",
+	{
+		orgId: text("org_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		metric: text("metric", { enum: USAGE_METRICS }).notNull(),
+		period: text("period").notNull(),
+		count: integer("count").notNull().default(0),
+	},
+	(t) => [primaryKey({ columns: [t.orgId, t.metric, t.period] })],
+);
+
+// Polar webhook deliveries already handled, so a repeated delivery is ignored. Written after handling succeeds.
+export const webhookEvents = sqliteTable("webhook_events", {
+	id: text("id").primaryKey(),
+	type: text("type").notNull(),
+	receivedAt: integer("received_at", { mode: "timestamp_ms" })
+		.notNull()
+		.default(sql`(unixepoch('subsec') * 1000)`),
+});
+
+// A link an admin shares so a teammate can join the company. Only the SHA-256 of the token is stored.
+export const invites = sqliteTable(
+	"invites",
+	{
+		tokenHash: text("token_hash").primaryKey(),
+		orgId: text("org_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		createdBy: text("created_by").notNull(),
+		createdAt: createdAt(),
+		expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+		acceptedBy: text("accepted_by"),
+		acceptedAt: integer("accepted_at", { mode: "timestamp_ms" }),
+		revokedAt: integer("revoked_at", { mode: "timestamp_ms" }),
+	},
+	(t) => [index("invites_org_idx").on(t.orgId)],
+);
