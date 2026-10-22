@@ -32,12 +32,16 @@ export const BILLING_POLL_LIMIT_MS = 60_000;
 export const billingKey = (userId: string | null | undefined) => ["billing", userId] as const;
 
 // Plan, status and usage. Limits come from here everywhere (job form, CV upload), so one cached request serves them all.
-export function useBilling({ pollWhile }: { pollWhile?: (billing: Billing | undefined) => boolean } = {}) {
+export function useBilling({
+	pollWhile,
+	alwaysFresh = false,
+}: { pollWhile?: (billing: Billing | undefined) => boolean; alwaysFresh?: boolean } = {}) {
 	const { userId, token } = useSession();
 	return useQuery({
 		queryKey: billingKey(userId),
 		queryFn: async ({ signal }) => apiGet<Billing>("/billing", { token: await token(), signal }),
-		staleTime: 30_000,
+		// The settings page always shows the latest numbers; the prompts elsewhere make do with a recent copy.
+		staleTime: alwaysFresh ? 0 : 30_000,
 		refetchInterval: pollWhile ? (query) => (pollWhile(query.state.data) ? BILLING_POLL_MS : false) : false,
 	});
 }

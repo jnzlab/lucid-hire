@@ -13,7 +13,7 @@ vi.mock("@clerk/react", () => ({
 		getToken: async () => (session.signedIn ? "session-token" : null),
 	}),
 	RedirectToSignIn: () => <p>Redirecting to sign in</p>,
-	UserButton: () => null,
+	UserButton: Object.assign(() => null, { MenuItems: () => null, Link: () => null }),
 	UserProfile: () => null,
 	Show: () => null,
 	SignIn: () => null,
@@ -38,7 +38,7 @@ beforeEach(() => {
 		if (path === "/me") return Response.json({ userId: "user_9", org });
 		if (path === "/invites/tok_abc") return inviteReply();
 		if (path === "/invites/tok_abc/accept" && init?.method === "POST") return acceptReply();
-		if (path === "/jobs") return Response.json({ jobs: [] });
+		if (path === "/jobs") return Response.json({ jobs: [], total: 0, page: 1, pageSize: 20 });
 		return Response.json({ error: { message: "not found" } }, { status: 404 });
 	});
 	vi.stubGlobal("fetch", fetchMock);

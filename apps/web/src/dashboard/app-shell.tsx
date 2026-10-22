@@ -1,9 +1,9 @@
-import { UserButton } from "@clerk/react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { type ReactNode, useEffect, useEffectEvent, useState } from "react";
 import { IconSidebar } from "../components/icons.tsx";
 import { Logo } from "../components/logo.tsx";
 import type { Org } from "../lib/me.ts";
+import { AccountButton } from "./account-button.tsx";
 import { MobileBar } from "./mobile-bar.tsx";
 import { NavLinks } from "./nav-links.tsx";
 import { readCollapsed, writeCollapsed } from "./sidebar-state.ts";
@@ -65,7 +65,7 @@ export function AppShell({ org, children }: { org: Org; children: ReactNode }) {
 				)}
 				<NavLinks pathname={pathname} collapsed={collapsed} />
 				<div className={`mt-auto flex items-center gap-3 border-t border-line pt-4 ${collapsed ? "flex-col" : "px-1"}`}>
-					<UserButton />
+					<AccountButton />
 					{!collapsed && (
 						<p className="font-mono text-[12px] text-ink-muted">
 							Your role: {org.role === "admin" ? "Admin" : "Member"}

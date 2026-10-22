@@ -8,7 +8,6 @@ import { BackToJob, PageHeading, SectionError, SectionLoading } from "../jobs/jo
 import { ApiError } from "../lib/api.ts";
 import {
 	type Candidate,
-	CV_LIMIT_PER_JOB,
 	MAX_SCORING_RUNS,
 	type Requirement,
 	SLOW_CHECK_MS,
@@ -311,7 +310,7 @@ function CandidateDetails({
 					</h2>
 					<p className="mt-2 max-w-[56ch] text-[15px] text-ink-2">
 						Only admins can delete a candidate. They're removed for everyone at {org.name}, and the job still counts
-						their CV toward its {CV_LIMIT_PER_JOB} free CVs.
+						their CV toward its CV limit.
 					</p>
 					<button type="button" className="btn danger mt-4" onClick={() => setConfirmingDelete(true)}>
 						Delete candidate

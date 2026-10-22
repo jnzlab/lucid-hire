@@ -28,7 +28,7 @@ vi.mock("@clerk/react", () => ({
 		getToken: async () => (session.signedIn ? "session-token" : null),
 	}),
 	RedirectToSignIn: ({ redirectUrl }: { redirectUrl?: string }) => <p data-redirect-url={redirectUrl}>Redirecting to sign in</p>,
-	UserButton: () => null,
+	UserButton: Object.assign(() => null, { MenuItems: () => null, Link: () => null }),
 	Show: () => null,
 	SignIn: () => null,
 	SignUp: () => null,
@@ -52,6 +52,10 @@ let candidates: FakeCandidate[];
 let fetchMock: Mock<(url: string, init?: RequestInit) => Promise<Response>>;
 // The percentages the fake upload reports before the server answers.
 let uploadProgress: number[];
+// What GET /billing answers, and the CV limit the candidates list reports (Free: 10 per job).
+let jobsUsed = 0;
+let jobsLimit: number | null = 10;
+let cvLimit = 10;
 
 const notFound = () => Response.json({ error: { message: "That job doesn't exist or isn't yours" } }, { status: 404 });
 const apiError = (status: number, code: string, message: string) =>
@@ -200,7 +204,7 @@ function fakeCandidates(url: URL, init: RequestInit | undefined): Response {
 				...candidate,
 				rank: candidate.status === "scored" && candidate.score !== null ? ++rank : null,
 			}));
-			return Response.json({ candidates: withRanks.map(summary), cvCount: job.cvCount ?? 0, cvLimit: 10 });
+			return Response.json({ candidates: withRanks.map(summary), cvCount: job.cvCount ?? 0, cvLimit });
 		}
 		const fileName = url.searchParams.get("fileName") ?? "cv.pdf";
 		if (new Headers(init?.headers).get("Content-Type") !== "application/pdf" || !fileName.endsWith(".pdf"))
@@ -291,6 +295,9 @@ beforeAll(() => import("./components/markdown.tsx"), 60_000);
 
 beforeEach(() => {
 	session.signedIn = true;
+	jobsUsed = 0;
+	jobsLimit = 10;
+	cvLimit = 10;
 	org = null;
 	jobs = [];
 	candidates = [];
@@ -300,6 +307,17 @@ beforeEach(() => {
 		// Uploads send a file, not JSON.
 		const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, string>) : {};
 		if (path === "/me") return Response.json({ userId: "user_1", org });
+		if (path === "/billing") {
+			return Response.json({
+				plan: "free",
+				effectivePlan: "free",
+				status: null,
+				currentPeriodEnd: null,
+				cancelAtPeriodEnd: false,
+				isAdmin: org?.role === "admin",
+				usage: { jobsThisMonth: jobsUsed, jobsLimit, busiestJob: null, cvLimit, aiThisHour: 0, aiLimit: 30 },
+			});
+		}
 		if (path === "/orgs" && method === "POST") {
 			org = { id: "org_1", name: body.name, role: "admin" };
 			return Response.json({ org }, { status: 201 });
@@ -1345,6 +1363,126 @@ describe("page states and focus", () => {
 		expect(await screen.findByText("Job closed")).toBeTruthy();
 		expect(close.textContent).toBe("Reopen job");
 		expect(close.getAttribute("aria-disabled")).toBe("false");
+	});
+});
+
+describe("plan limits", () => {
+	beforeEach(() => {
+		org = { id: "org_1", name: "Sprite Labs", role: "admin" };
+	});
+
+	it("shows how many of the month's jobs are used on the new job page", async () => {
+		jobsUsed = 3;
+		renderAt("/dashboard/jobs/new");
+		expect(await screen.findByText("3/10 jobs used this month")).toBeTruthy();
+		expect(screen.queryByText(/You've used all/)).toBeNull();
+		expect(screen.getByRole("button", { name: /Open job/ }).hasAttribute("disabled")).toBe(false);
+	});
+
+	it("says Unlimited on a plan with no job limit", async () => {
+		jobsUsed = 25;
+		jobsLimit = null;
+		renderAt("/dashboard/jobs/new");
+		expect(await screen.findByText(/Unlimited jobs on your plan · 25 created this month/)).toBeTruthy();
+	});
+
+	it("blocks a new job once the month's jobs are used up, and offers an upgrade to admins", async () => {
+		jobsUsed = 10;
+		renderAt("/dashboard/jobs/new");
+		const banner = await screen.findByRole("alert");
+		expect(banner.textContent).toContain("You've used all 10 new jobs this month. Deleting a job does not give the slot back.");
+		expect(within(banner).getByRole("link", { name: "Upgrade" }).getAttribute("href")).toBe("/dashboard/settings#plan");
+		expect(screen.getByRole("button", { name: /Open job/ }).hasAttribute("disabled")).toBe(true);
+		expect(screen.getByRole("button", { name: "Save as draft" }).hasAttribute("disabled")).toBe(true);
+	});
+
+	it("tells a member to ask an admin instead", async () => {
+		org = { id: "org_1", name: "Sprite Labs", role: "member" };
+		jobsUsed = 10;
+		renderAt("/dashboard/jobs/new");
+		const banner = await screen.findByRole("alert");
+		expect(within(banner).queryByRole("link", { name: "Upgrade" })).toBeNull();
+		expect(within(banner).getByText("Ask an admin to upgrade.")).toBeTruthy();
+	});
+
+	it("shows the API's refusal as the same banner when the page's count was out of date", async () => {
+		const answer = fetchMock.getMockImplementation()!;
+		fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+			new URL(url).pathname === "/jobs" && init?.method === "POST"
+				? Promise.resolve(
+						apiError(403, "plan_limit", "You've used all 10 new jobs this month. Deleting a job does not give the slot back."),
+					)
+				: answer(url, init),
+		);
+		renderAt("/dashboard/jobs/new");
+		fireEvent.change(await screen.findByLabelText("Job title"), { target: { value: "Sprite limit role" } });
+		fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Swift." } });
+		fireEvent.click(screen.getByRole("button", { name: /Open job/ }));
+
+		const banner = await screen.findByRole("alert");
+		expect(banner.textContent).toContain("You've used all 10 new jobs this month.");
+		expect(within(banner).getByRole("link", { name: "Upgrade" })).toBeTruthy();
+	});
+
+	it("offers an upgrade when Improve with AI runs out", async () => {
+		const answer = fetchMock.getMockImplementation()!;
+		fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+			new URL(url).pathname === "/jobs/enhance"
+				? Promise.resolve(
+						apiError(429, "plan_limit", "You've used all 30 AI requests for this hour. They reset at the top of the hour."),
+					)
+				: answer(url, init),
+		);
+		renderAt("/dashboard/jobs/new");
+		fireEvent.change(await screen.findByLabelText("Description"), { target: { value: "rough notes" } });
+		fireEvent.click(screen.getByRole("button", { name: "Improve with AI" }));
+
+		const message = await screen.findByText(/You've used all 30 AI requests for this hour/);
+		expect(within(message.parentElement!).getByRole("link", { name: "Upgrade" })).toBeTruthy();
+	});
+
+	describe("CV uploads", () => {
+		const fullJob = (cvCount: number): FakeJob => ({
+			id: "job_1",
+			title: "Senior iOS Engineer",
+			description: "Swift.",
+			status: "open",
+			cvCount,
+			createdAt: "2026-10-22T12:00:00Z",
+			updatedAt: "2026-10-22T12:00:00Z",
+		});
+
+		it("gives an admin an Upgrade link when the job is full", async () => {
+			jobs = [fullJob(10)];
+			renderAt("/dashboard/jobs/job_1");
+			expect(await screen.findByText("This job has used its 10 free CVs.")).toBeTruthy();
+			expect(screen.getByRole("link", { name: "Upgrade" }).getAttribute("href")).toBe("/dashboard/settings#plan");
+		});
+
+		it("tells a member to ask an admin", async () => {
+			org = { id: "org_1", name: "Sprite Labs", role: "member" };
+			jobs = [fullJob(10)];
+			renderAt("/dashboard/jobs/job_1");
+			expect(await screen.findByText("This job has used its 10 free CVs.")).toBeTruthy();
+			expect(screen.queryByRole("link", { name: "Upgrade" })).toBeNull();
+			expect(screen.getByText("Ask an admin to upgrade.")).toBeTruthy();
+		});
+
+		it("words the limit for a paid plan without 'free'", async () => {
+			cvLimit = 100;
+			jobs = [fullJob(100)];
+			renderAt("/dashboard/jobs/job_1");
+			expect(await screen.findByText("100 of 100 CVs used")).toBeTruthy();
+			expect(screen.getByText("This job has used its 100 CVs.")).toBeTruthy();
+		});
+
+		it("has nothing to upgrade to on the top plan", async () => {
+			cvLimit = 1000;
+			jobs = [fullJob(1000)];
+			renderAt("/dashboard/jobs/job_1");
+			expect(await screen.findByText("This job has used its 1,000 CVs.")).toBeTruthy();
+			expect(screen.queryByRole("link", { name: "Upgrade" })).toBeNull();
+		});
 	});
 });
 

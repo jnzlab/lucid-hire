@@ -1,9 +1,9 @@
-import { UserButton } from "@clerk/react";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
 import { IconClose, IconMenu } from "../components/icons.tsx";
 import { Logo } from "../components/logo.tsx";
 import type { Org } from "../lib/me.ts";
+import { AccountButton } from "./account-button.tsx";
 import { NavLinks } from "./nav-links.tsx";
 import { pageTitle } from "./nav.tsx";
 
@@ -38,7 +38,7 @@ export function MobileBar({ org, pathname }: { org: Org; pathname: string }) {
 						</li>
 					</ol>
 				</nav>
-				<UserButton />
+				<AccountButton />
 			</div>
 			{open && <Sheet org={org} pathname={pathname} onClose={() => setOpen(false)} />}
 		</div>

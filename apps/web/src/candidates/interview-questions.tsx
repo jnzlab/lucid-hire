@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Check } from "../components/icons.tsx";
+import { ApiError } from "../lib/api.ts";
 import type { Candidate } from "../lib/candidates.ts";
 import { useInterviewQuestions, useWriteQuestions } from "../lib/interview-questions.ts";
+import { UpgradeLink } from "../settings/upgrade.tsx";
 
 // How long "Copied" stays up.
 const COPIED_MS = 2000;
@@ -144,6 +146,12 @@ export function InterviewQuestions({ jobId, candidate }: { jobId: string; candid
 					{write.isError && (
 						<p role="alert" className="mt-3 text-[14px] text-gap-ink">
 							✕ {write.error.message}
+							{write.error instanceof ApiError && write.error.code === "plan_limit" && (
+								<>
+									{" "}
+									<UpgradeLink />
+								</>
+							)}
 						</p>
 					)}
 				</>

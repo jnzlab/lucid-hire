@@ -7,7 +7,7 @@ import { createAppRouter } from "../router.ts";
 vi.mock("@clerk/react", () => ({
 	useAuth: () => ({ isLoaded: true, isSignedIn: true, userId: "user_1", getToken: async () => "session-token" }),
 	RedirectToSignIn: () => null,
-	UserButton: () => <button type="button">Account</button>,
+	UserButton: Object.assign(() => <button type="button">Account</button>, { MenuItems: () => null, Link: () => null }),
 	Show: () => null,
 	SignIn: () => null,
 	SignUp: () => null,

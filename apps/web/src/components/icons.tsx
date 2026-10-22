@@ -119,3 +119,29 @@ export function NoteMark() {
 		</svg>
 	);
 }
+
+// Menu icons: 16px, stroke 2, currentColor (design system §4).
+export function Gear() {
+	return (
+		<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+			<path
+				d="M2 4.5h7M12 4.5h2M2 11.5h2M7 11.5h7"
+				fill="none"
+				stroke="currentColor"
+				strokeWidth="2"
+				strokeLinecap="round"
+			/>
+			<circle cx="10.5" cy="4.5" r="1.8" fill="none" stroke="currentColor" strokeWidth="2" />
+			<circle cx="5.5" cy="11.5" r="1.8" fill="none" stroke="currentColor" strokeWidth="2" />
+		</svg>
+	);
+}
+
+export function Card() {
+	return (
+		<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+			<rect x="1.5" y="3" width="13" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="2" />
+			<path d="M1.5 6.5h13" fill="none" stroke="currentColor" strokeWidth="2" />
+		</svg>
+	);
+}

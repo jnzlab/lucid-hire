@@ -1,11 +1,13 @@
+import { PLANS } from "@lucid-hire/plans";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { ApiError, apiDelete, apiGet, apiGetBlob, apiGetFile, apiPatch, apiPost, apiUploadPdf } from "./api.ts";
 import { jobKey, jobsKey } from "./jobs.ts";
 import { useSession } from "./session.ts";
 
-// The same limits the API enforces (apps/api/src/candidates.ts), checked before anything is sent.
-export const CV_LIMIT_PER_JOB = 10;
+// The same limits the API enforces (apps/api/src/candidates.ts), checked before anything is sent. The CV limit per
+// job depends on the plan; the list sends it, and Free's limit stands in until it arrives.
+export const CV_LIMIT_PER_JOB = PLANS.free.cvsPerJob;
 export const CV_MAX_BYTES = 5 * 1024 * 1024;
 export const MAX_SCORING_RUNS = 3;
 export const CANDIDATE_STATUSES = ["queued", "scoring", "scored", "failed"] as const;
@@ -123,13 +125,16 @@ export const candidateEmail = (candidate: { email?: string | null; profile?: { e
 export const candidateName = ({ name, fileName }: Pick<CandidateSummary, "name" | "fileName">) =>
 	name?.trim() || fileName;
 
-// The same checks the API makes, in the same words. `slotsLeft` is what the job can still take.
-export function checkCv(file: File, slotsLeft: number): string | null {
+// "CVs" on a paid plan, "free CVs" on Free, so a limit reads the way the plan promises it.
+export const cvNoun = (limit: number) => (limit === PLANS.free.cvsPerJob ? "free CVs" : "CVs");
+
+// The same checks the API makes, in the same words. `slotsLeft` is what the job can still take, of `limit`.
+export function checkCv(file: File, slotsLeft: number, limit: number = CV_LIMIT_PER_JOB): string | null {
 	// Some systems give dropped files an empty type, so only a different, known type is refused.
 	if (!/\.pdf$/i.test(file.name) || (file.type && file.type !== "application/pdf")) return "Upload a PDF file";
 	if (file.size === 0) return "That file is empty";
 	if (file.size > CV_MAX_BYTES) return "Each CV must be 5 MB or smaller";
-	if (slotsLeft <= 0) return `This job has used its ${CV_LIMIT_PER_JOB} free CVs`;
+	if (slotsLeft <= 0) return `This job has used its ${limit} ${cvNoun(limit)}`;
 	return null;
 }
 
@@ -373,7 +378,7 @@ export function useUploadCvs(jobId: string) {
 		void queryClient.invalidateQueries({ queryKey: jobKey(userId, jobId), exact: true });
 	};
 
-	const upload = (chosen: File[], slotsLeft: number) => {
+	const upload = (chosen: File[], slotsLeft: number, limit: number = CV_LIMIT_PER_JOB) => {
 		if (running.current || chosen.length === 0) return;
 		files.current.clear();
 		queue.current = [];
@@ -381,7 +386,7 @@ export function useUploadCvs(jobId: string) {
 
 		let free = slotsLeft;
 		const batch = chosen.map((file) => {
-			const error = checkCv(file, free);
+			const error = checkCv(file, free, limit);
 			if (!error) free -= 1;
 			const item: UploadItem = {
 				key: nextKey.current++,

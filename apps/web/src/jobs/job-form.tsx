@@ -5,6 +5,7 @@ import { Check } from "../components/icons.tsx";
 import { Markdown } from "../components/markdown-lazy.tsx";
 import { ApiError } from "../lib/api.ts";
 import { formatNumber } from "../lib/format.ts";
+import { UpgradeLink } from "../settings/upgrade.tsx";
 import {
 	JOB_DESCRIPTION_MAX,
 	JOB_TITLE_HINT,
@@ -68,9 +69,11 @@ type JobFormProps = {
 	onSave: (input: JobInput, intent: string) => void;
 	saving: boolean;
 	saveError: Error | null;
+	// Shown above the buttons, such as the monthly job allowance.
+	notice?: ReactNode;
 };
 
-export function JobForm({ initial, actions, onSave, saving, saveError }: JobFormProps) {
+export function JobForm({ initial, actions, onSave, saving, saveError, notice }: JobFormProps) {
 	const [title, setTitle] = useState(initial?.title ?? "");
 	const [description, setDescription] = useState(initial?.description ?? "");
 	const [errors, setErrors] = useState<FieldErrors>({});
@@ -227,6 +230,12 @@ export function JobForm({ initial, actions, onSave, saving, saveError }: JobForm
 							) : enhance.isError ? (
 								<p role="alert" className="text-[13px] text-gap-ink">
 									✕ {enhance.error.message}
+									{enhance.error instanceof ApiError && enhance.error.code === "plan_limit" && (
+										<>
+											{" "}
+											<UpgradeLink />
+										</>
+									)}
 								</p>
 							) : beforeRewrite !== null ? (
 								<>
@@ -247,6 +256,7 @@ export function JobForm({ initial, actions, onSave, saving, saveError }: JobForm
 						</div>
 					</div>
 		
+					{notice}
 					{formError && (
 						<p role="alert" className="mt-4 text-[14px] text-gap-ink">
 							✕ {formError}

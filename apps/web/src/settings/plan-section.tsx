@@ -139,7 +139,7 @@ function usePlanWatch(initial: Waiting) {
 		return () => clearTimeout(timer);
 	}, [waitingFor]);
 
-	const billing = useBilling({ pollWhile: (data) => waitingFor !== null && !timedOut && !reached(data) });
+	const billing = useBilling({ alwaysFresh: true, pollWhile: (data) => waitingFor !== null && !timedOut && !reached(data) });
 	const done = reached(billing.data);
 	return { billing, waitingFor, setWaitingFor, timedOut: timedOut && !done, done };
 }

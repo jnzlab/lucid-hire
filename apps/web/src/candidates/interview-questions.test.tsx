@@ -1,8 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { type Mock, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CandidateStatus } from "../lib/candidates.ts";
 import type { QuestionSet } from "../lib/interview-questions.ts";
+import type { createAppRouter } from "../router.ts";
 import { InterviewQuestions } from "./interview-questions.tsx";
 
 // Clerk is replaced by a session we control; the API by a fetch mock for the one questions endpoint.
@@ -185,6 +187,32 @@ describe("interview questions", () => {
 		saved = written;
 		fireEvent.click(screen.getByRole("button", { name: "Try again" }));
 		expect(await screen.findByText(first.question)).toBeTruthy();
+	});
+
+	it("offers an upgrade when the hour's AI requests are used up", async () => {
+		saved = written;
+		post = async () =>
+			Response.json(
+				{ error: { code: "plan_limit", message: "You've used all 30 AI requests for this hour. They reset at the top of the hour.", upgradeUrl: "/dashboard/settings#plan" } },
+				{ status: 429 },
+			);
+		// The upgrade link needs a router around it; this one only knows the settings route.
+		const root = createRootRoute({
+			component: () => <InterviewQuestions jobId="job_1" candidate={{ id: "cand_1", status: "scored" }} />,
+		});
+		const settings = createRoute({ getParentRoute: () => root, path: "/dashboard/settings/$", component: () => null });
+		const router = createRouter({ routeTree: root.addChildren([settings]), history: createMemoryHistory({ initialEntries: ["/"] }) });
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		render(
+			<QueryClientProvider client={client}>
+				<RouterProvider router={router as unknown as ReturnType<typeof createAppRouter>} />
+			</QueryClientProvider>,
+		);
+
+		fireEvent.click(await screen.findByRole("button", { name: "Write new questions" }));
+		const alert = await screen.findByRole("alert");
+		expect(alert.textContent).toContain("You've used all 30 AI requests for this hour.");
+		expect(within(alert).getByRole("link", { name: "Upgrade" }).getAttribute("href")).toBe("/dashboard/settings#plan");
 	});
 
 	it.each(["queued", "scoring", "failed"] as const)("is not shown, or asked for, while the CV is %s", (status) => {
