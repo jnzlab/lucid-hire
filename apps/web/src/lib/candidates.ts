@@ -343,10 +343,10 @@ export function checkDetails(items: Pick<UploadItem, "key" | "state" | "email">[
 const isTransient = (error: unknown) => !(error instanceof ApiError) || error.status === 0 || error.status >= 500;
 
 // How many files go up at the same time.
-export const UPLOAD_PARALLEL = 1;
+export const UPLOAD_PARALLEL = 3;
 
 // Chosen PDFs wait as "staged" rows, where an optional name and email can be typed for each; `upload` then sends them
-// one after another and reports each file's state and progress. A file that fails the client checks or the API
+// UPLOAD_PARALLEL at a time and reports each file's state and progress. A file that fails the client checks or the API
 // doesn't stop the others. A staged or waiting file can be taken out before its turn, and one that failed to upload
 // (not one that was refused) can be sent again.
 export function useUploadCvs(jobId: string) {

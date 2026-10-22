@@ -1743,25 +1743,45 @@ describe("candidates", () => {
 		expect(screen.queryByRole("progressbar")).toBeNull();
 	});
 
+	it("uploads three files at a time and keeps the list in the order they were chosen", async () => {
+		renderAt("/dashboard/jobs/job_1");
+		const sending = hold(isUpload);
+		const names = ["a.pdf", "b.pdf", "c.pdf", "d.pdf", "e.pdf"];
+		await sendPdfs(await screen.findByLabelText("Choose PDFs"), names.map((name) => pdf(name)));
+
+		await waitFor(() => expect(sending.pending()).toBe(3));
+		expect(screen.getByText("Uploading 5 files")).toBeTruthy();
+		expect(screen.getAllByRole("progressbar")).toHaveLength(3);
+		expect(screen.getAllByText("Waiting")).toHaveLength(2);
+		await act(async () => sending.release());
+		// The two that were waiting go next.
+		await waitFor(() => expect(sending.pending()).toBe(2));
+		await act(async () => sending.release());
+
+		expect(await screen.findByText("5 CVs uploaded")).toBeTruthy();
+		expect(uploads().map(([url]) => decodeURIComponent(url.split("fileName=")[1]))).toEqual(names);
+		expect(screen.getByText("5 of 10 free CVs used")).toBeTruthy();
+	});
+
 	it("takes a waiting file out of the batch before it uploads", async () => {
 		renderAt("/dashboard/jobs/job_1");
 		const sending = hold(isUpload);
-		await sendPdfs(await screen.findByLabelText("Choose PDFs"), [pdf("first.pdf"), pdf("second.pdf"), pdf("third.pdf")]);
+		await sendPdfs(await screen.findByLabelText("Choose PDFs"), ["a", "b", "c", "d", "e"].map((name) => pdf(`${name}.pdf`)));
 
-		// The first is on its way; the others wait and can be removed.
-		await waitFor(() => expect(sending.pending()).toBe(1));
-		expect(screen.queryByRole("button", { name: "Remove first.pdf" })).toBeNull();
-		fireEvent.click(screen.getByRole("button", { name: "Remove second.pdf" }));
-		expect(screen.queryByText("second.pdf")).toBeNull();
+		// Three are on their way; the other two wait and can be removed.
+		await waitFor(() => expect(sending.pending()).toBe(3));
+		expect(screen.queryByRole("button", { name: "Remove a.pdf" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Remove d.pdf" }));
+		expect(screen.queryByText("d.pdf")).toBeNull();
 		await act(async () => sending.release());
-		// The third goes next, held the same way.
+		// The last one goes next, held the same way.
 		await waitFor(() => expect(sending.pending()).toBe(1));
 		await act(async () => sending.release());
 
-		expect(await screen.findByText("2 CVs uploaded")).toBeTruthy();
-		expect(uploads().map(([url]) => decodeURIComponent(url.split("fileName=")[1]))).toEqual(["first.pdf", "third.pdf"]);
+		expect(await screen.findByText("4 CVs uploaded")).toBeTruthy();
+		expect(uploads().map(([url]) => decodeURIComponent(url.split("fileName=")[1]))).toEqual(["a.pdf", "b.pdf", "c.pdf", "e.pdf"]);
 		expect(screen.queryByRole("button", { name: /^Remove / })).toBeNull();
-		expect(screen.getByText("2 of 10 free CVs used")).toBeTruthy();
+		expect(screen.getByText("4 of 10 free CVs used")).toBeTruthy();
 	});
 
 	it("offers Retry upload for a file that failed to go up, and not for one the API refused", async () => {
@@ -2018,16 +2038,17 @@ describe("candidates", () => {
 	});
 
 	it("shows the API's reason when it refuses a file, and doesn't send the rest of the batch", async () => {
-		jobs = [openJob({ cvCount: 8 })];
+		jobs = [openJob({ cvCount: 6 })];
 		renderAt("/dashboard/jobs/job_1");
 		const input = await screen.findByLabelText("Choose PDFs");
 		// Someone else used the last slots since this page loaded, so only the server knows.
 		jobs[0].cvCount = 10;
-		await sendPdfs(input, [pdf("first.pdf"), pdf("second.pdf")]);
+		await sendPdfs(input, [pdf("first.pdf"), pdf("second.pdf"), pdf("third.pdf"), pdf("fourth.pdf")]);
 
-		expect(await screen.findByText("2 not uploaded")).toBeTruthy();
-		expect(screen.getAllByText("✕ This job has used its 10 free CVs")).toHaveLength(2);
-		expect(uploads()).toHaveLength(1);
+		expect(await screen.findByText("4 not uploaded")).toBeTruthy();
+		expect(screen.getAllByText("✕ This job has used its 10 free CVs")).toHaveLength(4);
+		// The first three were already on their way; the fourth is not sent.
+		expect(uploads()).toHaveLength(3);
 		// The page catches up with the server: the count is right and the chooser is gone.
 		expect(await screen.findByText("10 of 10 free CVs used")).toBeTruthy();
 		expect(screen.queryByLabelText("Choose PDFs")).toBeNull();
@@ -2038,11 +2059,11 @@ describe("candidates", () => {
 		renderAt("/dashboard/jobs/job_1");
 		const input = await screen.findByLabelText("Choose PDFs");
 		jobs[0].status = "closed";
-		await sendPdfs(input, [pdf("late.pdf"), pdf("later.pdf")]);
+		await sendPdfs(input, [pdf("late.pdf"), pdf("later.pdf"), pdf("latest.pdf"), pdf("last.pdf")]);
 
-		expect(await screen.findByText("2 not uploaded")).toBeTruthy();
-		expect(screen.getAllByText("✕ This job isn't open, so it can't take CVs. Open it first.")).toHaveLength(2);
-		expect(uploads()).toHaveLength(1);
+		expect(await screen.findByText("4 not uploaded")).toBeTruthy();
+		expect(screen.getAllByText("✕ This job isn't open, so it can't take CVs. Open it first.")).toHaveLength(4);
+		expect(uploads()).toHaveLength(3);
 		// The job is read again, so the page now shows it closed instead of offering the zone.
 		expect(await screen.findByText(/This job is closed, so it can't take new CVs/)).toBeTruthy();
 		expect(screen.queryByLabelText("Choose PDFs")).toBeNull();
@@ -2078,16 +2099,15 @@ describe("candidates", () => {
 		await act(() => vi.advanceTimersByTimeAsync(CANDIDATE_POLL_MS));
 		expect(lists.pending()).toBe(1);
 		const uploading = hold(isUpload);
-		await sendPdfs(screen.getByLabelText("Choose PDFs"), [pdf("fresh.pdf"), pdf("next.pdf")]);
+		await sendPdfs(screen.getByLabelText("Choose PDFs"), [pdf("fresh.pdf")]);
 		await waitFor(() => expect(uploading.pending()).toBe(1));
 		await act(async () => uploading.release());
-		await waitFor(() => expect(uploading.pending()).toBe(1));
+		expect(await screen.findByText("1 CV uploaded")).toBeTruthy();
 
 		// First file is in. The old answer now lands, and must not wipe it from the list.
 		await act(async () => lists.release());
 		await act(() => vi.advanceTimersByTimeAsync(100));
 		expect(within(screen.getByRole("list", { name: "Candidates" })).getByText("fresh.pdf")).toBeTruthy();
-		await act(async () => uploading.release());
 	});
 
 	it("shows a note instead of the upload zone on a job that is not open", async () => {
