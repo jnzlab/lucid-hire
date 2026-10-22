@@ -36,7 +36,7 @@ function EditJob({ job }: { job: Job }) {
 					initial={{ title: job.title, description: job.description }}
 					saving={update.isPending}
 					saveError={update.error}
-					onSave={(input) => update.mutate(input, { onSuccess: () => void navigate(toJob) })}
+					onSave={(input) => update.mutate(input, { onSuccess: () => void navigate({ ...toJob, ignoreBlocker: true }) })}
 					actions={({ saving }) => (
 						<>
 							<Link {...toJob} className="btn ghost">

@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
-import { DeleteDialog } from "../components/delete-dialog.tsx";
+import { ConfirmDialog } from "../components/confirm-dialog.tsx";
 import { Check } from "../components/icons.tsx";
 import { ScoreRing } from "../components/score-ring.tsx";
 import { useOrg } from "../dashboard/org.ts";
@@ -260,7 +260,7 @@ function CandidateDetails({
 			)}
 
 			{confirmingDelete && (
-				<DeleteDialog
+				<ConfirmDialog
 					heading={`Delete “${name}”?`}
 					confirmLabel="Delete candidate"
 					busyLabel="Deleting"
@@ -273,7 +273,7 @@ function CandidateDetails({
 					onConfirm={confirmDelete}
 				>
 					It's removed for everyone at {org.name}, with the CV file. You can't undo this.
-				</DeleteDialog>
+				</ConfirmDialog>
 			)}
 		</>
 	);

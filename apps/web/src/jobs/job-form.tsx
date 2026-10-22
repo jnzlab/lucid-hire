@@ -1,4 +1,6 @@
+import { useBlocker } from "@tanstack/react-router";
 import { type FormEvent, type ReactNode, useRef, useState } from "react";
+import { ConfirmDialog } from "../components/confirm-dialog.tsx";
 import { Check } from "../components/icons.tsx";
 import { ApiError } from "../lib/api.ts";
 import { formatNumber } from "../lib/format.ts";
@@ -43,6 +45,11 @@ export function JobForm({ initial, actions, onSave, saving, saveError }: JobForm
 	const enhance = useEnhanceDescription();
 	const titleRef = useRef<HTMLInputElement>(null);
 	const descriptionRef = useRef<HTMLTextAreaElement>(null);
+
+	// Unsaved typing is lost by leaving, whether by a link, Cancel, Back or closing the tab. The pages navigate with
+	// `ignoreBlocker` after a save, so a save is never held up.
+	const dirty = tidyTitle(title) !== (initial?.title ?? "") || description.trim() !== (initial?.description ?? "").trim();
+	const leaving = useBlocker({ shouldBlockFn: () => dirty, enableBeforeUnload: dirty, withResolver: true });
 
 	const serverFields = saveError instanceof ApiError ? saveError.fields : {};
 	const titleError = errors.title ?? serverFields.title;
@@ -192,6 +199,17 @@ export function JobForm({ initial, actions, onSave, saving, saveError }: JobForm
 				</p>
 			)}
 			<div className="mt-6 flex flex-wrap items-center justify-end gap-3">{actions({ saving })}</div>
+			{leaving.status === "blocked" && (
+				<ConfirmDialog
+					heading="Leave without saving?"
+					cancelLabel="Keep editing"
+					confirmLabel="Leave"
+					onCancel={leaving.reset}
+					onConfirm={leaving.proceed}
+				>
+					Your changes to this job aren't saved.
+				</ConfirmDialog>
+			)}
 		</form>
 	);
 }

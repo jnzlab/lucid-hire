@@ -1,31 +1,35 @@
 import { type ReactNode, useEffect, useEffectEvent, useId, useRef } from "react";
 
-type DeleteDialogProps = {
+type ConfirmDialogProps = {
 	heading: string;
-	// What is removed and for whom, ending with "You can't undo this."
+	// What happens and to whom. For a delete, it ends with "You can't undo this."
 	children: ReactNode;
 	confirmLabel: string;
-	// The confirm button's label while the delete is running.
-	busyLabel: string;
-	busy: boolean;
-	error: string | null;
+	// The way out that changes nothing. Focus starts on it.
+	cancelLabel?: string;
+	// The confirm button's label while the action is running.
+	busyLabel?: string;
+	busy?: boolean;
+	error?: string | null;
 	onCancel: () => void;
 	onConfirm: () => void;
 };
 
-// Confirms a delete (design system §4: destructive actions always confirm in a dialog). Focus starts on
-// Cancel, the safe choice, and stays inside the dialog. Escape closes it. While the delete runs the buttons only
-// look disabled (aria-disabled), so focus stays on the one that was pressed.
-export function DeleteDialog({
+// Confirms a choice that can't be taken back (design system §4: destructive actions always confirm in a dialog):
+// a delete, or leaving a form with unsaved changes. Focus starts on the cancel button, the safe choice, and stays
+// inside the dialog. Escape cancels. While the action runs the buttons only look disabled (aria-disabled), so
+// focus stays on the one that was pressed.
+export function ConfirmDialog({
 	heading,
 	children,
 	confirmLabel,
-	busyLabel,
-	busy,
-	error,
+	cancelLabel = "Cancel",
+	busyLabel = confirmLabel,
+	busy = false,
+	error = null,
 	onCancel,
 	onConfirm,
-}: DeleteDialogProps) {
+}: ConfirmDialogProps) {
 	const headingId = useId();
 	const bodyId = useId();
 	const dialogRef = useRef<HTMLDivElement>(null);
@@ -95,7 +99,7 @@ export function DeleteDialog({
 							if (!busy) onCancel();
 						}}
 					>
-						Cancel
+						{cancelLabel}
 					</button>
 					<button
 						type="button"

@@ -1,7 +1,7 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { CandidatesSection } from "../candidates/candidates-section.tsx";
-import { DeleteDialog } from "../components/delete-dialog.tsx";
+import { ConfirmDialog } from "../components/confirm-dialog.tsx";
 import { ArrowRight } from "../components/icons.tsx";
 import { useOrg } from "../dashboard/org.ts";
 import { ApiError } from "../lib/api.ts";
@@ -147,7 +147,7 @@ function JobDetails({ job }: { job: Job }) {
 			)}
 
 			{confirmingDelete && (
-				<DeleteDialog
+				<ConfirmDialog
 					heading={`Delete “${job.title}”?`}
 					confirmLabel="Delete job"
 					busyLabel="Deleting"
@@ -160,7 +160,7 @@ function JobDetails({ job }: { job: Job }) {
 					onConfirm={confirmDelete}
 				>
 					{removed} for everyone at {org.name}. You can't undo this.
-				</DeleteDialog>
+				</ConfirmDialog>
 			)}
 		</>
 	);

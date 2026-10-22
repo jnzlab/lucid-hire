@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
+import { RouterProvider, createBrowserHistory, createMemoryHistory } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { type Mock, type MockInstance, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -459,6 +459,158 @@ describe("jobs", () => {
 
 		renderAt("/dashboard/jobs/missing");
 		expect(await screen.findByText(/This job doesn't exist/)).toBeTruthy();
+	});
+});
+
+describe("unsaved changes on the job form", () => {
+	const dataScientist = (): FakeJob => ({
+		id: "job_7",
+		title: "Data Scientst",
+		description: "Python",
+		status: "draft",
+		createdAt: "2026-10-22T12:00:00Z",
+		updatedAt: "2026-10-22T12:00:00Z",
+	});
+	// What the browser does when the tab is closed or reloaded: true if something asked to hold it back.
+	const unloadIsHeldBack = () => {
+		const event = new Event("beforeunload", { cancelable: true });
+		window.dispatchEvent(event);
+		return event.defaultPrevented;
+	};
+	// The dialog goes once the blocker has been told which way to go, which takes a tick.
+	const dialogGone = () => waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+	let confirm: MockInstance<typeof window.confirm>;
+
+	beforeEach(() => {
+		org = { id: "org_1", name: "Sprite Labs", role: "admin" };
+		jobs = [dataScientist()];
+		confirm = vi.spyOn(window, "confirm");
+	});
+
+	afterEach(() => confirm.mockRestore());
+
+	it("asks before Cancel throws away typing on a new job, and stays on Keep editing", async () => {
+		const router = renderAt("/dashboard/jobs/new");
+		const title = (await screen.findByLabelText("Job title")) as HTMLInputElement;
+		fireEvent.change(title, { target: { value: "iOS Engineer" } });
+		const cancel = screen.getByRole("link", { name: "Cancel" });
+		cancel.focus();
+
+		fireEvent.click(cancel);
+		const dialog = await screen.findByRole("alertdialog", { name: "Leave without saving?" });
+		expect(document.getElementById(dialog.getAttribute("aria-describedby")!)?.textContent).toBe(
+			"Your changes to this job aren't saved.",
+		);
+		expect(within(dialog).getAllByRole("button").map((button) => button.textContent)).toEqual(["Keep editing", "Leave"]);
+		expect(document.activeElement).toHaveProperty("textContent", "Keep editing");
+		expect(router.state.location.pathname).toBe("/dashboard/jobs/new");
+
+		// Tab stays inside the dialog.
+		within(dialog).getByRole("button", { name: "Leave" }).focus();
+		expect(fireEvent.keyDown(document, { key: "Tab" })).toBe(false);
+		expect(document.activeElement).toHaveProperty("textContent", "Keep editing");
+
+		// Escape is Keep editing: the form is as it was, and focus is back on the link that was clicked.
+		fireEvent.keyDown(document, { key: "Escape" });
+		await dialogGone();
+		expect(router.state.location.pathname).toBe("/dashboard/jobs/new");
+		expect(title.value).toBe("iOS Engineer");
+		expect(document.activeElement).toBe(cancel);
+
+		// Leave goes where the link goes.
+		fireEvent.click(cancel);
+		fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Leave" }));
+		expect(await screen.findByRole("heading", { level: 1, name: "Jobs" })).toBeTruthy();
+		expect(router.state.location.pathname).toBe("/dashboard");
+		expect(screen.queryByRole("alertdialog")).toBeNull();
+		expect(confirm).not.toHaveBeenCalled();
+	});
+
+	it("lets a form nobody has typed in go at once, by Cancel or any other link", async () => {
+		const router = renderAt("/dashboard/jobs/new");
+		fireEvent.click(await screen.findByRole("link", { name: "Cancel" }));
+		expect(await screen.findByRole("heading", { level: 1, name: "Jobs" })).toBeTruthy();
+		expect(screen.queryByRole("alertdialog")).toBeNull();
+		expect(router.state.location.pathname).toBe("/dashboard");
+	});
+
+	it("asks before any link leaves an edited job, and lets go once the edit is undone", async () => {
+		const router = renderAt("/dashboard/jobs/job_7/edit");
+		const title = (await screen.findByLabelText("Job title")) as HTMLInputElement;
+		fireEvent.change(title, { target: { value: "Data Scientist" } });
+
+		fireEvent.click(screen.getByRole("link", { name: "LucidHire dashboard" }));
+		expect(await screen.findByRole("alertdialog", { name: "Leave without saving?" })).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+		await dialogGone();
+		fireEvent.click(screen.getByRole("link", { name: /Jobs/ }));
+		expect(await screen.findByRole("alertdialog", { name: "Leave without saving?" })).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+		await dialogGone();
+		expect(router.state.location.pathname).toBe("/dashboard/jobs/job_7/edit");
+
+		// The same words as before: nothing to lose.
+		fireEvent.change(title, { target: { value: "Data Scientst" } });
+		fireEvent.click(screen.getByRole("link", { name: "Cancel" }));
+		expect(await screen.findByRole("heading", { level: 1, name: "Data Scientst" })).toBeTruthy();
+		expect(router.state.location.pathname).toBe("/dashboard/jobs/job_7");
+		expect(screen.queryByRole("alertdialog")).toBeNull();
+	});
+
+	it("holds back closing the tab only while there is something unsaved", async () => {
+		// Only a browser history listens for the tab closing.
+		window.history.replaceState({}, "", "/dashboard/jobs/new");
+		const router = createAppRouter(createBrowserHistory());
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<RouterProvider router={router} />
+			</QueryClientProvider>,
+		);
+		try {
+			const title = await screen.findByLabelText("Job title");
+			expect(unloadIsHeldBack()).toBe(false);
+
+			fireEvent.change(title, { target: { value: "iOS Engineer" } });
+			await waitFor(() => expect(unloadIsHeldBack()).toBe(true));
+			fireEvent.change(title, { target: { value: "" } });
+			await waitFor(() => expect(unloadIsHeldBack()).toBe(false));
+		} finally {
+			router.history.destroy();
+			window.history.replaceState({}, "", "/");
+		}
+	});
+
+	it("never holds back a save: Open job, Save as draft and Save changes go straight through", async () => {
+		const router = renderAt("/dashboard/jobs/new");
+		fireEvent.change(await screen.findByLabelText("Job title"), { target: { value: "iOS Engineer" } });
+		fireEvent.change(screen.getByLabelText("Description"), { target: { value: "swift 5y" } });
+		fireEvent.click(screen.getByRole("button", { name: /Open job/ }));
+
+		expect(await screen.findByRole("heading", { level: 1, name: "iOS Engineer" })).toBeTruthy();
+		expect(router.state.location.pathname).toBe("/dashboard/jobs/job_2");
+		expect(screen.queryByRole("alertdialog")).toBeNull();
+		expect(unloadIsHeldBack()).toBe(false);
+		cleanup();
+
+		const second = renderAt("/dashboard/jobs/new");
+		fireEvent.change(await screen.findByLabelText("Job title"), { target: { value: "Product Designer" } });
+		fireEvent.change(screen.getByLabelText("Description"), { target: { value: "figma" } });
+		fireEvent.click(screen.getByRole("button", { name: "Save as draft" }));
+
+		expect(await screen.findByRole("heading", { level: 1, name: "Product Designer" })).toBeTruthy();
+		expect(second.state.location.pathname).toBe("/dashboard/jobs/job_3");
+		expect(screen.queryByRole("alertdialog")).toBeNull();
+		cleanup();
+
+		const third = renderAt("/dashboard/jobs/job_7/edit");
+		fireEvent.change(await screen.findByLabelText("Job title"), { target: { value: "Data Scientist" } });
+		fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+		expect(await screen.findByRole("heading", { level: 1, name: "Data Scientist" })).toBeTruthy();
+		expect(third.state.location.pathname).toBe("/dashboard/jobs/job_7");
+		expect(screen.queryByRole("alertdialog")).toBeNull();
+		expect(unloadIsHeldBack()).toBe(false);
+		expect(confirm).not.toHaveBeenCalled();
 	});
 });
 

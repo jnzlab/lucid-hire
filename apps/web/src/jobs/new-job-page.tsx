@@ -25,7 +25,10 @@ export function NewJobPage() {
 					onSave={(input, intent) =>
 						create.mutate(
 							{ ...input, status: intent === "open" ? "open" : "draft" },
-							{ onSuccess: (job) => void navigate({ to: "/dashboard/jobs/$jobId", params: { jobId: job.id } }) },
+							{
+								onSuccess: (job) =>
+									void navigate({ to: "/dashboard/jobs/$jobId", params: { jobId: job.id }, ignoreBlocker: true }),
+							},
 						)
 					}
 					actions={({ saving }) => (
