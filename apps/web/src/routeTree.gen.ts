@@ -16,6 +16,7 @@ import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as SignOutRouteImport } from './routes/sign-out'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as DashboardIndexRouteImport } from './routes/dashboard/index'
+import { Route as DashboardOverviewRouteImport } from './routes/dashboard/overview'
 import { Route as JobsSlugRouteImport } from './routes/jobs.$slug'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
@@ -57,6 +58,11 @@ const TermsRoute = TermsRouteImport.update({
 const DashboardIndexRoute = DashboardIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => DashboardRouteRoute,
+} as any)
+const DashboardOverviewRoute = DashboardOverviewRouteImport.update({
+  id: '/overview',
+  path: '/overview',
   getParentRoute: () => DashboardRouteRoute,
 } as any)
 const JobsSlugRoute = JobsSlugRouteImport.update({
@@ -103,6 +109,7 @@ export interface FileRoutesByFullPath {
   '/privacy': typeof PrivacyRoute
   '/sign-out': typeof SignOutRoute
   '/terms': typeof TermsRoute
+  '/dashboard/overview': typeof DashboardOverviewRoute
   '/jobs/$slug': typeof JobsSlugRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -118,6 +125,7 @@ export interface FileRoutesByTo {
   '/privacy': typeof PrivacyRoute
   '/sign-out': typeof SignOutRoute
   '/terms': typeof TermsRoute
+  '/dashboard/overview': typeof DashboardOverviewRoute
   '/jobs/$slug': typeof JobsSlugRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -135,6 +143,7 @@ export interface FileRoutesById {
   '/privacy': typeof PrivacyRoute
   '/sign-out': typeof SignOutRoute
   '/terms': typeof TermsRoute
+  '/dashboard/overview': typeof DashboardOverviewRoute
   '/jobs/$slug': typeof JobsSlugRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -153,6 +162,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-out'
     | '/terms'
+    | '/dashboard/overview'
     | '/jobs/$slug'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -168,6 +178,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-out'
     | '/terms'
+    | '/dashboard/overview'
     | '/jobs/$slug'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -184,6 +195,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-out'
     | '/terms'
+    | '/dashboard/overview'
     | '/jobs/$slug'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -257,6 +269,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardIndexRouteImport
       parentRoute: typeof DashboardRouteRoute
     }
+    '/dashboard/overview': {
+      id: '/dashboard/overview'
+      path: '/overview'
+      fullPath: '/dashboard/overview'
+      preLoaderRoute: typeof DashboardOverviewRouteImport
+      parentRoute: typeof DashboardRouteRoute
+    }
     '/jobs/$slug': {
       id: '/jobs/$slug'
       path: '/jobs/$slug'
@@ -310,6 +329,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface DashboardRouteRouteChildren {
+  DashboardOverviewRoute: typeof DashboardOverviewRoute
   DashboardIndexRoute: typeof DashboardIndexRoute
   DashboardJobsNewRoute: typeof DashboardJobsNewRoute
   DashboardJobsJobIdEditRoute: typeof DashboardJobsJobIdEditRoute
@@ -318,6 +338,7 @@ interface DashboardRouteRouteChildren {
 }
 
 const DashboardRouteRouteChildren: DashboardRouteRouteChildren = {
+  DashboardOverviewRoute: DashboardOverviewRoute,
   DashboardIndexRoute: DashboardIndexRoute,
   DashboardJobsNewRoute: DashboardJobsNewRoute,
   DashboardJobsJobIdEditRoute: DashboardJobsJobIdEditRoute,

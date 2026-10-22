@@ -57,19 +57,39 @@ const apiError = (status: number, code: string, message: string) =>
 const withCount = (job: FakeJob) => ({ ...job, slug: `${job.id}-slug`, hasCover: job.hasCover ?? false, cvCount: job.cvCount ?? 0 });
 
 // The jobs API, enough of it for the pages: list, create, read, edit, delete and the AI rewrite.
-function fakeJobs(path: string, method: string, body: Record<string, string>): Response {
+function fakeJobs(path: string, method: string, body: Record<string, string>, query = new URLSearchParams()): Response {
 	const id = path.split("/")[2];
 	const job = jobs.find((candidate) => candidate.id === id);
 	if (path === "/jobs" && method === "GET") {
+		const q = (query.get("q") ?? "").toLowerCase();
+		const status = query.get("status");
+		const sort = query.get("sort") ?? "newest";
+		const page = Number(query.get("page") ?? 1);
+		const scored = (jobId: string) => candidates.filter((c) => c.jobId === jobId && c.status === "scored").length;
+		const matching = jobs
+			.filter((j) => (!q || `${j.title} ${j.description}`.toLowerCase().includes(q)) && (!status || j.status === status))
+			.toSorted((a, b) =>
+				sort === "oldest"
+					? a.createdAt.localeCompare(b.createdAt)
+					: sort === "title"
+						? a.title.localeCompare(b.title)
+						: sort === "candidates"
+							? (b.cvCount ?? 0) - (a.cvCount ?? 0)
+							: b.createdAt.localeCompare(a.createdAt),
+			);
 		return Response.json({
-			jobs: jobs.map(({ id, title, status, cvCount, createdAt, updatedAt }) => ({
+			jobs: matching.slice((page - 1) * 20, page * 20).map(({ id, title, status, cvCount, createdAt, updatedAt }) => ({
 				id,
 				title,
 				status,
 				cvCount: cvCount ?? 0,
+				scoredCount: scored(id),
 				createdAt,
 				updatedAt,
 			})),
+			total: matching.length,
+			page,
+			pageSize: 20,
 		});
 	}
 	if (path === "/jobs" && method === "POST") {
@@ -83,6 +103,20 @@ function fakeJobs(path: string, method: string, body: Record<string, string>): R
 		} as FakeJob;
 		jobs.unshift(created);
 		return Response.json({ job: withCount(created) }, { status: 201 });
+	}
+	if (path.endsWith("/duplicate") && method === "POST" && job) {
+		const now = new Date("2026-10-22T14:00:00Z").toISOString();
+		const copy = {
+			...job,
+			id: `job_${jobs.length + 1}`,
+			title: `${job.title} (copy)`,
+			status: "draft",
+			cvCount: 0,
+			createdAt: now,
+			updatedAt: now,
+		};
+		jobs.unshift(copy);
+		return Response.json({ job: withCount(copy) }, { status: 201 });
 	}
 	if (path === "/jobs/enhance") {
 		return Response.json({ description: `What you need:\n- ${body.description}` });
@@ -234,7 +268,7 @@ beforeEach(() => {
 			return Response.json({ org }, { status: 201 });
 		}
 		if (/^\/jobs\/[^/]+\/candidates/.test(path)) return fakeCandidates(new URL(url), init);
-		if (path.startsWith("/jobs")) return fakeJobs(path, method, body);
+		if (path.startsWith("/jobs")) return fakeJobs(path, method, body, new URL(url).searchParams);
 		return Response.json({ error: { message: "not found" } }, { status: 404 });
 	});
 	vi.stubGlobal("fetch", fetchMock);
@@ -462,7 +496,7 @@ describe("jobs", () => {
 			}),
 		);
 
-		fireEvent.click(screen.getByRole("link", { name: /Jobs/ }));
+		fireEvent.click(within(screen.getByRole("main")).getByRole("link", { name: /Jobs/ }));
 		expect(await screen.findByRole("link", { name: /Sprite test role/ })).toBeTruthy();
 	});
 
@@ -470,7 +504,8 @@ describe("jobs", () => {
 		jobs = [];
 		renderAt("/dashboard");
 		expect(await screen.findByRole("link", { name: /Post your first job/ })).toBeTruthy();
-		expect(screen.queryByRole("link", { name: /Post a job/ })).toBeNull();
+		// The sidebar's shortcut is always there; the page's own button is what comes later.
+		expect(within(screen.getByRole("main")).queryByRole("link", { name: /Post a job/ })).toBeNull();
 		cleanup();
 
 		jobs = [
@@ -484,7 +519,8 @@ describe("jobs", () => {
 			},
 		];
 		const router = renderAt("/dashboard");
-		const post = await screen.findByRole("link", { name: /Post a job/ });
+		await screen.findByRole("link", { name: /Product Designer/ });
+		const post = within(screen.getByRole("main")).getByRole("link", { name: /Post a job/ });
 		expect(screen.queryByRole("link", { name: /New job/ })).toBeNull();
 		expect(screen.queryByRole("link", { name: /Post your first job/ })).toBeNull();
 
@@ -601,6 +637,273 @@ describe("jobs", () => {
 		renderAt("/dashboard/jobs/missing");
 		expect(await screen.findByText(/This job doesn't exist/)).toBeTruthy();
 	});
+
+	describe("search, filter, sort and pages", () => {
+		const job = (n: number, fields: Partial<FakeJob> = {}): FakeJob => ({
+			id: `job_${n}`,
+			title: `Role ${String(n).padStart(2, "0")}`,
+			description: "General duties",
+			status: "open",
+			createdAt: new Date(Date.UTC(2026, 9, 1, 10, n)).toISOString(),
+			updatedAt: new Date(Date.UTC(2026, 9, 1, 10, n)).toISOString(),
+			...fields,
+		});
+		const jobRequests = () =>
+			fetchMock.mock.calls.map(([url]) => new URL(url)).filter((url) => url.pathname === "/jobs");
+		const lastJobQuery = () => jobRequests().at(-1)!.search;
+
+		beforeEach(() => {
+			jobs = [
+				job(1, { title: "Backend Engineer", description: "Go and Rust", status: "open", cvCount: 4 }),
+				job(2, { title: "Product Designer", description: "Figma craft", status: "draft" }),
+				job(3, { title: "Data Analyst", description: "SQL reporting", status: "closed", cvCount: 9 }),
+			];
+		});
+
+		it("shows the count, the toolbar and Post a job", async () => {
+			renderAt("/dashboard");
+			expect(await screen.findByText("Showing 1–3 of 3")).toBeTruthy();
+			expect(screen.getByLabelText("Search jobs")).toBeTruthy();
+			expect(screen.getByRole("radiogroup", { name: "Status" })).toBeTruthy();
+			expect(screen.getByLabelText("Sort by")).toBeTruthy();
+			expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull();
+			expect(within(screen.getByRole("main")).getByRole("link", { name: /Post a job/ })).toBeTruthy();
+		});
+
+		it("searches after a pause, keeps the words in the address and says what it found", async () => {
+			const router = renderAt("/dashboard");
+			const box = (await screen.findByLabelText("Search jobs")) as HTMLInputElement;
+
+			fireEvent.change(box, { target: { value: "  figma " } });
+			expect(jobRequests().some((url) => url.searchParams.has("q"))).toBe(false);
+			await waitFor(() => expect(lastJobQuery()).toBe("?q=figma"));
+			expect(await screen.findByText("Showing 1–1 of 1")).toBeTruthy();
+			expect(screen.getByRole("link", { name: /Product Designer/ })).toBeTruthy();
+			expect(screen.queryByRole("link", { name: /Backend Engineer/ })).toBeNull();
+			expect(router.state.location.search).toMatchObject({ q: "figma" });
+			expect(box.value).toBe("  figma ");
+		});
+
+		it("filters by status and sorts, and Clear filters puts everything back", async () => {
+			const router = renderAt("/dashboard");
+			await screen.findByText("Showing 1–3 of 3");
+
+			fireEvent.click(screen.getByRole("radio", { name: "Draft" }));
+			expect(await screen.findByText("Showing 1–1 of 1")).toBeTruthy();
+			expect(lastJobQuery()).toBe("?status=draft");
+
+			fireEvent.click(screen.getByRole("radio", { name: "All" }));
+			fireEvent.change(screen.getByLabelText("Sort by"), { target: { value: "candidates" } });
+			await waitFor(() => expect(lastJobQuery()).toBe("?sort=candidates"));
+			await waitFor(() =>
+				expect(screen.getAllByRole("link", { name: /Created/ }).map((link) => link.textContent?.split("Created")[0])).toEqual([
+					"Data Analyst",
+					"Backend Engineer",
+					"Product Designer",
+				]),
+			);
+
+			fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+			await waitFor(() => expect(router.state.location.search).toEqual({}));
+			expect((screen.getByLabelText("Sort by") as HTMLSelectElement).value).toBe("newest");
+			expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull();
+		});
+
+		it("reads its filters from the address", async () => {
+			renderAt("/dashboard?status=closed&sort=title&q=sql");
+			expect(await screen.findByText("Showing 1–1 of 1")).toBeTruthy();
+			expect((screen.getByLabelText("Search jobs") as HTMLInputElement).value).toBe("sql");
+			expect((screen.getByRole("radio", { name: "Closed" }) as HTMLInputElement).checked).toBe(true);
+			expect((screen.getByLabelText("Sort by") as HTMLSelectElement).value).toBe("title");
+			expect(screen.getByRole("link", { name: /Data Analyst/ })).toBeTruthy();
+		});
+
+		it("says No jobs match, which is not No jobs yet, and offers Clear filters", async () => {
+			renderAt("/dashboard?q=zzz");
+			expect(await screen.findByRole("heading", { name: "No jobs match" })).toBeTruthy();
+			expect(screen.queryByRole("heading", { name: "No jobs yet" })).toBeNull();
+			expect(screen.queryByRole("link", { name: /Post your first job/ })).toBeNull();
+			// The toolbar stays, so the search can be changed.
+			expect(screen.getByLabelText("Search jobs")).toBeTruthy();
+
+			fireEvent.click(within(screen.getByRole("region", { name: "No jobs match" })).getByRole("button", { name: "Clear filters" }));
+			expect(await screen.findByText("Showing 1–3 of 3")).toBeTruthy();
+		});
+
+		it("shows CV counts with the scored ones", async () => {
+			candidates = [
+				fakeCandidate({ id: "c1", jobId: "job_1", score: 80 }),
+				fakeCandidate({ id: "c2", jobId: "job_1", score: 60 }),
+				fakeCandidate({ id: "c3", jobId: "job_1", status: "queued" }),
+			];
+			renderAt("/dashboard");
+			expect(await screen.findByText(/4 CVs \(2 scored\)/)).toBeTruthy();
+		});
+
+		it("pages through more than 20 jobs", async () => {
+			jobs = Array.from({ length: 25 }, (_, i) => job(i + 1));
+			const router = renderAt("/dashboard");
+			expect(await screen.findByText("Showing 1–20 of 25")).toBeTruthy();
+			expect(screen.getByText("Page 1 of 2")).toBeTruthy();
+			expect(screen.getByText("Previous").getAttribute("aria-disabled")).toBe("true");
+
+			fireEvent.click(screen.getByRole("link", { name: "Next" }));
+			expect(await screen.findByText("Showing 21–25 of 25")).toBeTruthy();
+			expect(router.state.location.search).toMatchObject({ page: 2 });
+			expect(screen.getByText("Next").getAttribute("aria-disabled")).toBe("true");
+
+			fireEvent.click(screen.getByRole("link", { name: "Previous" }));
+			expect(await screen.findByText("Showing 1–20 of 25")).toBeTruthy();
+		});
+
+		it("goes back to page 1 when the page asked for is past the end", async () => {
+			const router = renderAt("/dashboard?page=9");
+			expect(await screen.findByText("Showing 1–3 of 3")).toBeTruthy();
+			expect(router.state.location.search).toEqual({});
+		});
+
+		it("says so when the list can't load, and loads it on Try again", async () => {
+			const answer = fetchMock.getMockImplementation()!;
+			let fail = true;
+			fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+				fail && new URL(url).pathname === "/jobs"
+					? Promise.resolve(apiError(500, "internal_error", "Something went wrong on our side. Try again."))
+					: answer(url, init),
+			);
+			renderAt("/dashboard");
+			const alert = await screen.findByRole("alert");
+			expect(alert.textContent).toContain("We couldn't load your jobs");
+			fail = false;
+			fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
+			expect(await screen.findByText("Showing 1–3 of 3")).toBeTruthy();
+		});
+	});
+
+	describe("row actions and duplicating", () => {
+		const open = (title: string) => fireEvent.click(screen.getByRole("button", { name: `Actions for ${title}` }));
+
+		beforeEach(() => {
+			jobs = [
+				{
+					id: "job_1",
+					title: "Backend Engineer",
+					description: "Go and Rust",
+					status: "open",
+					cvCount: 2,
+					createdAt: "2026-10-22T12:00:00Z",
+					updatedAt: "2026-10-22T12:00:00Z",
+				},
+			];
+		});
+
+		it("opens a menu for each job, closes it with Escape and gives focus back", async () => {
+			renderAt("/dashboard");
+			const button = await screen.findByRole("button", { name: "Actions for Backend Engineer" });
+			expect(button.getAttribute("aria-expanded")).toBe("false");
+
+			fireEvent.click(button);
+			const menu = screen.getByRole("menu", { name: "Actions for Backend Engineer" });
+			expect(button.getAttribute("aria-expanded")).toBe("true");
+			expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+				"Candidates",
+				"Edit",
+				"Duplicate",
+				"Delete",
+			]);
+			expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Candidates" }));
+
+			fireEvent.keyDown(menu, { key: "ArrowDown" });
+			expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Edit" }));
+			fireEvent.keyDown(menu, { key: "End" });
+			expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Delete" }));
+			fireEvent.keyDown(menu, { key: "Escape" });
+			expect(screen.queryByRole("menu")).toBeNull();
+			expect(document.activeElement).toBe(button);
+		});
+
+		it("opens the job's page and its edit page from the menu", async () => {
+			const router = renderAt("/dashboard");
+			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
+			open("Backend Engineer");
+			fireEvent.click(screen.getByRole("menuitem", { name: "Edit" }));
+			expect(await screen.findByLabelText("Job title")).toBeTruthy();
+			expect(router.state.location.pathname).toBe("/dashboard/jobs/job_1/edit");
+		});
+
+		it("duplicates from the menu and opens the copy's edit page as a draft", async () => {
+			const router = renderAt("/dashboard");
+			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
+			open("Backend Engineer");
+			fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+
+			expect(await screen.findByText("Duplicated as a draft")).toBeTruthy();
+			expect((screen.getByLabelText("Job title") as HTMLInputElement).value).toBe("Backend Engineer (copy)");
+			expect((screen.getByLabelText("Description") as HTMLTextAreaElement).value).toBe("Go and Rust");
+			expect(router.state.location.pathname).toBe("/dashboard/jobs/job_2/edit");
+			expect(fetchMock).toHaveBeenCalledWith(
+				"http://localhost:8787/jobs/job_1/duplicate",
+				expect.objectContaining({ method: "POST" }),
+			);
+			expect(jobs[0]).toMatchObject({ title: "Backend Engineer (copy)", status: "draft", cvCount: 0 });
+		});
+
+		it("duplicates from the job page next to Edit job", async () => {
+			renderAt("/dashboard/jobs/job_1");
+			const edit = await screen.findByRole("link", { name: "Edit job" });
+			const duplicate = screen.getByRole("button", { name: "Duplicate" });
+			expect(edit.compareDocumentPosition(duplicate) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+			fireEvent.click(duplicate);
+			expect(await screen.findByText("Duplicated as a draft")).toBeTruthy();
+			expect((screen.getByLabelText("Job title") as HTMLInputElement).value).toBe("Backend Engineer (copy)");
+		});
+
+		it("shows the real reason when the copy can't be made", async () => {
+			const answer = fetchMock.getMockImplementation()!;
+			fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+				url.endsWith("/duplicate")
+					? Promise.resolve(apiError(403, "job_limit", "You've used this month's jobs. Wait for next month."))
+					: answer(url, init),
+			);
+			renderAt("/dashboard");
+			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
+			open("Backend Engineer");
+			fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+
+			const alert = await screen.findByRole("alert");
+			expect(alert.textContent).toBe("✕ You've used this month's jobs. Wait for next month.");
+			expect(alert.textContent).not.toMatch(/upgrade/i);
+		});
+
+		it("deletes only after confirming, and says so", async () => {
+			renderAt("/dashboard");
+			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
+			open("Backend Engineer");
+			fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+
+			const dialog = await screen.findByRole("alertdialog", { name: "Delete “Backend Engineer”?" });
+			expect(dialog.textContent).toContain("It and its 2 CVs are removed");
+			fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+			expect(screen.queryByRole("alertdialog")).toBeNull();
+			expect(document.activeElement).toBe(screen.getByRole("button", { name: "Actions for Backend Engineer" }));
+			expect(jobs).toHaveLength(1);
+
+			open("Backend Engineer");
+			fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+			fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete job" }));
+			expect(await screen.findByText("Deleted “Backend Engineer”")).toBeTruthy();
+			expect(await screen.findByRole("heading", { name: "No jobs yet" })).toBeTruthy();
+			expect(jobs).toHaveLength(0);
+		});
+
+		it("leaves Delete out for members", async () => {
+			org = { id: "org_1", name: "Sprite Labs", role: "member" };
+			renderAt("/dashboard");
+			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
+			open("Backend Engineer");
+			expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Candidates", "Edit", "Duplicate"]);
+		});
+	});
 });
 
 describe("unsaved changes on the job form", () => {
@@ -684,7 +987,7 @@ describe("unsaved changes on the job form", () => {
 		expect(await screen.findByRole("alertdialog", { name: "Leave without saving?" })).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
 		await dialogGone();
-		fireEvent.click(screen.getByRole("link", { name: /Jobs/ }));
+		fireEvent.click(within(screen.getByRole("main")).getByRole("link", { name: /Jobs/ }));
 		expect(await screen.findByRole("alertdialog", { name: "Leave without saving?" })).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
 		await dialogGone();
@@ -1736,8 +2039,8 @@ describe("candidates", () => {
 		];
 		renderAt("/dashboard");
 
-		expect(await screen.findByText("Created 22 Oct 2026 · 3 CVs")).toBeTruthy();
-		expect(screen.getByText("Created 22 Oct 2026 · 1 CV")).toBeTruthy();
+		expect(await screen.findByText("Created 22 Oct 2026 · 3 CVs (0 scored)")).toBeTruthy();
+		expect(screen.getByText("Created 22 Oct 2026 · 1 CV (0 scored)")).toBeTruthy();
 		expect(screen.getAllByText("Created 22 Oct 2026")).toHaveLength(1);
 	});
 

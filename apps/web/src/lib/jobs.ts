@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiDelete, apiDeleteJson, apiGet, apiGetBlob, apiPatch, apiPost, apiPutFile } from "./api.ts";
 import { useSession } from "./session.ts";
 
@@ -15,7 +15,22 @@ export type JobSummary = {
 	createdAt: string;
 	updatedAt: string;
 };
+// A row of the jobs list: how many of its CVs are scored too.
+export type JobListItem = JobSummary & { scoredCount: number };
+export type JobList = { jobs: JobListItem[]; total: number; page: number; pageSize: number };
 export type Job = JobSummary & { description: string };
+
+export const JOB_SEARCH_MAX = 100;
+export const JOB_SORTS = ["newest", "oldest", "title", "candidates"] as const;
+export type JobSort = (typeof JOB_SORTS)[number];
+export const SORT_LABEL: Record<JobSort, string> = {
+	newest: "Newest",
+	oldest: "Oldest",
+	title: "Title A–Z",
+	candidates: "Most candidates",
+};
+// What the jobs list is showing. This is the page's URL search too, so a default is simply left out of it.
+export type JobFilters = { q?: string; status?: JobStatus; sort?: Exclude<JobSort, "newest">; page?: number };
 export type JobInput = { title: string; description: string };
 
 // The same bounds and clean-up the API applies (apps/api/src/jobs.ts).
@@ -26,16 +41,31 @@ export const JOB_TITLE_HINT = `Enter a job title between ${JOB_TITLE_MIN} and ${
 
 export const STATUS_LABEL: Record<JobStatus, string> = { draft: "Draft", open: "Open", closed: "Closed" };
 
-// Keyed by user, so a different account in the same tab never sees another company's cached jobs.
-export const jobsKey = (userId: Nullable) => ["jobs", userId] as const;
+// Keyed by user, so a different account in the same tab never sees another company's cached jobs. `jobsKey` is
+// every cached list (one per filter); a single job is under `jobKey`.
+export const jobsKey = (userId: Nullable) => ["jobs", userId, "list"] as const;
 export const jobKey = (userId: Nullable, id: string) => ["jobs", userId, id] as const;
 type Nullable = string | null | undefined;
 
-export function useJobs() {
+export function jobsPath({ q, status, sort, page }: JobFilters) {
+	const params = new URLSearchParams();
+	if (q) params.set("q", q);
+	if (status) params.set("status", status);
+	if (sort) params.set("sort", sort);
+	if (page && page > 1) params.set("page", String(page));
+	const query = params.toString();
+	return query ? `/jobs?${query}` : "/jobs";
+}
+
+export function useJobs(filters: JobFilters = {}, { enabled = true }: { enabled?: boolean } = {}) {
 	const { userId, token } = useSession();
+	const path = jobsPath(filters);
 	return useQuery({
-		queryKey: jobsKey(userId),
-		queryFn: async ({ signal }) => (await apiGet<{ jobs: JobSummary[] }>("/jobs", { token: await token(), signal })).jobs,
+		queryKey: [...jobsKey(userId), path] as const,
+		queryFn: async ({ signal }) => apiGet<JobList>(path, { token: await token(), signal }),
+		enabled,
+		// While the next filter loads, the list on screen stays, so typing in the search box doesn't flash.
+		placeholderData: keepPreviousData,
 	});
 }
 
@@ -56,7 +86,7 @@ function useSaveJob<V>(save: (variables: V, token: string | null) => Promise<{ j
 		mutationFn: async (variables: V) => (await save(variables, await token())).job,
 		onSuccess: (job) => {
 			queryClient.setQueryData(jobKey(userId, job.id), job);
-			void queryClient.invalidateQueries({ queryKey: jobsKey(userId), exact: true });
+			void queryClient.invalidateQueries({ queryKey: jobsKey(userId) });
 		},
 	});
 }
@@ -73,6 +103,11 @@ export function useUpdateJob(id: string) {
 	);
 }
 
+// Saves a copy of the job as a new draft.
+export function useDuplicateJob(id: string) {
+	return useSaveJob((_: void, token) => apiPost<{ job: Job }>(`/jobs/${id}/duplicate`, undefined, { token }));
+}
+
 export function useDeleteJob(id: string) {
 	const { userId, token } = useSession();
 	const queryClient = useQueryClient();
@@ -80,9 +115,11 @@ export function useDeleteJob(id: string) {
 		mutationFn: async () => apiDelete(`/jobs/${id}`, { token: await token() }),
 		onSuccess: () => {
 			// Drop it from the cached list too, or the list shows it until the refetch lands.
-			queryClient.setQueryData<JobSummary[]>(jobsKey(userId), (list) => list?.filter((job) => job.id !== id));
+			queryClient.setQueriesData<JobList>({ queryKey: jobsKey(userId) }, (list) =>
+				list && { ...list, jobs: list.jobs.filter((job) => job.id !== id), total: Math.max(0, list.total - 1) },
+			);
 			queryClient.removeQueries({ queryKey: jobKey(userId, id), exact: true });
-			void queryClient.invalidateQueries({ queryKey: jobsKey(userId), exact: true });
+			void queryClient.invalidateQueries({ queryKey: jobsKey(userId) });
 		},
 	});
 }
@@ -125,4 +162,13 @@ export function useSetCover(id: string) {
 
 export function useRemoveCover(id: string) {
 	return useSaveJob((_: void, token) => apiDeleteJson<{ job: Job }>(`/jobs/${id}/cover`, { token }));
+}
+
+// Where "Upload CVs" goes: the newest open job, else the newest job, else the new-job page.
+export function useUploadTarget(): { jobId: string | null } {
+	const open = useJobs({ status: "open" });
+	const noneOpen = open.isSuccess && open.data.jobs.length === 0;
+	const newest = useJobs({}, { enabled: noneOpen });
+	const target = open.data?.jobs[0] ?? (noneOpen ? newest.data?.jobs[0] : undefined);
+	return { jobId: target?.id ?? null };
 }

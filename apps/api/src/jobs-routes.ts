@@ -11,17 +11,20 @@ import {
 	createJob,
 	createJobInput,
 	deleteJob,
+	duplicateJob,
 	enhanceInput,
 	getJob,
 	listJobs,
 	setJobCover,
 	sniffCover,
+	listJobsQuery,
+	JOBS_PAGE_SIZE,
 	updateJob,
 	updateJobInput,
 } from "./jobs.ts";
 import { questionRoutes } from "./questions-routes.ts";
 import type { AppEnv } from "./types.ts";
-import { validJson } from "./validation.ts";
+import { validJson, validQuery } from "./validation.ts";
 
 const notFound = { error: { code: "not_found", message: "That job doesn't exist or isn't yours" } };
 
@@ -36,9 +39,11 @@ export function jobRoutes({ auth, enhance, writeQuestions }: JobRouteOptions) {
 	const routes = new Hono<AppEnv>();
 	routes.use(auth, requireOrg);
 
-	routes.get("/", async (c) => {
-		const jobs = await listJobs(getDb(c.env.DB), c.get("org").id);
-		return c.json({ jobs }, 200, { "Cache-Control": "no-store" });
+	// The list takes ?q= (title or description), ?status=, ?sort= and ?page=, 20 jobs to a page.
+	routes.get("/", validQuery(listJobsQuery), async (c) => {
+		const query = c.req.valid("query");
+		const { jobs, total } = await listJobs(getDb(c.env.DB), c.get("org").id, query);
+		return c.json({ jobs, total, page: query.page, pageSize: JOBS_PAGE_SIZE }, 200, { "Cache-Control": "no-store" });
 	});
 
 	routes.post("/", validJson(createJobInput), async (c) => {
@@ -84,6 +89,12 @@ export function jobRoutes({ auth, enhance, writeQuestions }: JobRouteOptions) {
 	routes.get("/:id", async (c) => {
 		const job = await getJob(getDb(c.env.DB), c.get("org").id, c.req.param("id"));
 		return job ? c.json({ job }, 200, { "Cache-Control": "no-store" }) : c.json(notFound, 404);
+	});
+
+	// A copy of a job as a new draft. Candidates stay with the original.
+	routes.post("/:id/duplicate", async (c) => {
+		const job = await duplicateJob(getDb(c.env.DB), c.get("org").id, c.get("userId"), c.req.param("id"));
+		return job ? c.json({ job }, 201) : c.json(notFound, 404);
 	});
 
 	routes.patch("/:id", validJson(updateJobInput), async (c) => {

@@ -1,4 +1,5 @@
-import { type DragEvent, useId, useRef, useState } from "react";
+import { useRouterState } from "@tanstack/react-router";
+import { type DragEvent, useEffect, useId, useRef, useState } from "react";
 import { Check } from "../components/icons.tsx";
 import { CV_MAX_BYTES, type UploadItem, type useUploadCvs } from "../lib/candidates.ts";
 import { useCoarsePointer } from "../lib/use-coarse-pointer.ts";
@@ -46,6 +47,14 @@ export function UploadZone({
 	const helpId = useId();
 	const inputRef = useRef<HTMLInputElement>(null);
 	const noteRef = useRef<HTMLParagraphElement>(null);
+	// "Upload CVs" in the sidebar arrives with #upload: scroll here and focus the chooser (or the note saying why not).
+	const wantsUpload = useRouterState({ select: (state) => state.location.hash === "upload" });
+	useEffect(() => {
+		if (!wantsUpload) return;
+		const target = inputRef.current ?? noteRef.current;
+		target?.focus();
+		target?.scrollIntoView?.({ block: "center" });
+	}, [wantsUpload]);
 	const busy = items.some(({ state }) => state === "waiting" || state === "uploading");
 	const summary = summarise(items);
 	const takeFiles = (files: FileList | null) => {

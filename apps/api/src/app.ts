@@ -7,6 +7,7 @@ import { ALLOWED_ORIGINS } from "./config.ts";
 import { getDb } from "./db/client.ts";
 import { type QuestionWriter, writeQuestionsWithGemini } from "./interview-questions.ts";
 import { jobRoutes } from "./jobs-routes.ts";
+import { overviewRoutes } from "./overview-routes.ts";
 import { type CaptchaVerifier, verifyTurnstile } from "./public.ts";
 import { publicRoutes } from "./public-routes.ts";
 import { ORG_NAME_MAX, ORG_NAME_MIN, createOrgForUser, findOrgForUser, normalizeOrgName } from "./orgs.ts";
@@ -89,6 +90,8 @@ export function createApp({
 	});
 
 	app.route("/jobs", jobRoutes({ auth, enhance: enhanceDescription, writeQuestions }));
+
+	app.route("/overview", overviewRoutes({ auth }));
 
 	// Unauthenticated: the public job page, its cover image, the apply form and the sitemap.
 	app.route("/public", publicRoutes({ verifyCaptcha }));
