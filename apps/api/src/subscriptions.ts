@@ -115,7 +115,18 @@ export async function applySubscriptionEvent(
 			),
 		)
 		.returning({ id: organizations.id });
-	return updated.length > 0 ? { kind: "applied", orgId: org.id } : { kind: "ignored", reason: "older than the stored state" };
+	if (updated.length > 0) return { kind: "applied", orgId: org.id };
+	// Nothing matched: either this event is older than the stored one, or another event changed the company's
+	// subscription since it was read. That one must not be dropped; Polar sends it again and it is judged afresh.
+	const [current] = await db
+		.select({ polarSubscriptionId: organizations.polarSubscriptionId })
+		.from(organizations)
+		.where(eq(organizations.id, org.id))
+		.limit(1);
+	if (current && current.polarSubscriptionId !== org.polarSubscriptionId) {
+		throw new RetryLater(`subscription of company ${org.id} changed while event for ${data.id} was applied`);
+	}
+	return { kind: "ignored", reason: "older than the stored state" };
 }
 
 // A refunded order only matters when it belongs to the company's current subscription and Polar no longer shows that

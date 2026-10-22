@@ -319,6 +319,22 @@ describe("POST /webhooks/polar: ordering, repeats and matching", () => {
 		expect(await stateOf(orgId)).toMatchObject({ subscriptionStatus: "canceled" });
 	});
 
+	it("loses neither of two events for a new subscription that arrive at once", async () => {
+		// Both read the company before either writes; the one that loses the write must be sent again, not dropped.
+		const orgId = await newOrg();
+		const events = [
+			{ type: "subscription.created", data: subscription({ orgId, status: "incomplete", modifiedAt: T0 }) },
+			{ type: "subscription.active", data: subscription({ orgId, status: "active", modifiedAt: T0 + 1000 }) },
+		];
+		const first = await Promise.all(events.map((event) => deliver(event)));
+		for (const [i, { res, id }] of first.entries()) {
+			if (res.status === 503) expect((await deliver({ ...events[i], id })).res.status).toBe(200);
+			else expect(res.status).toBe(200);
+		}
+		expect(await stateOf(orgId)).toMatchObject({ subscriptionStatus: "active" });
+		expect(await planOf(orgId)).toBe("pro");
+	});
+
 	it("applies out-of-order events in the order Polar made them", async () => {
 		const orgId = await newOrg();
 		await deliver({ type: "subscription.updated", data: subscription({ orgId, product: "max", modifiedAt: T0 + 2000 }) });

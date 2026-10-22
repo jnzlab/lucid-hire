@@ -54,7 +54,7 @@ export function webhookRoutes({ polar }: { polar: (env: Env) => PolarFetch }) {
 				console.error(`[${c.get("requestId")}] bad polar payload ${id}`, cause);
 				return c.json(error("invalid_body", "The webhook payload is not usable"), 400);
 			}
-			// Not recorded, so Polar's retry is handled again: no company yet, or Polar was unreachable.
+			// Not recorded, so Polar's retry is handled again: no company yet, Polar was unreachable, or another event won a race.
 			console.error(`[${c.get("requestId")}] polar event ${id} will be retried`, cause);
 			if (cause instanceof RetryLater) return c.json(error("retry_later", "Try this event again later"), 503);
 			throw cause;
