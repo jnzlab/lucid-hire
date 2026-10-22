@@ -17,19 +17,22 @@ export function PageLoading({ label }: { label: string }) {
 	);
 }
 
-// A full-page error. `action` is the way out (a link, say); without it, `onRetry` gives a Try again button.
+// A full-page error. `action` is the way out (a link, say); without it, `onRetry` gives a Try again button. With both,
 // `compact` is for a page that may sit inside the app shell, whose header already takes some of the height.
 export function PageError({
 	title = "We couldn't load your account",
 	message,
 	onRetry,
 	action,
+	reference,
 	compact = false,
 }: {
 	title?: string;
 	message: string;
 	onRetry?: () => void;
 	action?: ReactNode;
+	// A short id the recruiter can quote to support; it is also in the console beside the error.
+	reference?: string;
 	compact?: boolean;
 }) {
 	return (
@@ -39,6 +42,7 @@ export function PageError({
 					<span className="mk mk-gap">✕ {title}</span>
 				</h1>
 				<p className="text-[15px] text-ink-2">{message}</p>
+				{reference && <p className="font-mono text-[13px] text-ink-muted">Error reference: {reference}</p>}
 				{action ??
 					(onRetry && (
 						<button type="button" className="btn" onClick={onRetry}>
