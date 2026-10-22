@@ -96,3 +96,19 @@ export const IconMore = () => (
 		<circle cx="15.5" cy="10" r="1.2" fill="currentColor" />
 	</Icon>
 );
+
+// A page with a folded corner and two lines: a recruiter's note is on this CV.
+export function NoteMark() {
+	return (
+		<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+			<path
+				d="M3.5 2.5h6l3 3v8h-9zM9.5 2.5v3h3M5.5 8.5h5M5.5 11h5"
+				fill="none"
+				stroke="currentColor"
+				strokeWidth="1.5"
+				strokeLinecap="round"
+				strokeLinejoin="round"
+			/>
+		</svg>
+	);
+}

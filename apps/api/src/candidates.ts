@@ -46,6 +46,14 @@ export type CandidateSummary = {
 	// Labels of met requirements (must-haves first, at most 4) and of unmet must-haves (at most 2).
 	matches: string[];
 	gaps: string[];
+	// Every requirement of the job with whether the CV met it, for the row's "show all requirements".
+	checks: { label: string; met: boolean; importance: "must" | "nice" }[];
+	// The AI's two sentences on the fit, so the list can be searched by them.
+	summary: string | null;
+	// Whether a recruiter has written a note. The note itself stays on the candidate.
+	hasNote: boolean;
+	// Just the email from the CV, which the list shows and searches; the rest of the profile is on the candidate.
+	profile: { email?: string } | null;
 	error: string | null;
 	canRetry: boolean;
 	createdAt: Date;
@@ -53,10 +61,9 @@ export type CandidateSummary = {
 	updatedAt: Date;
 	scoredAt: Date | null;
 };
-export type Candidate = CandidateSummary & {
+export type Candidate = Omit<CandidateSummary, "profile"> & {
 	// How many CVs of the job are ranked, for "#2 of 7".
 	rankedCount: number;
-	summary: string | null;
 	requirements: Requirement[] | null;
 	// What the CV states about the candidate. Null for a CV that hasn't been read.
 	profile: CandidateProfile | null;
@@ -75,6 +82,9 @@ const summaryColumns = {
 	headline: candidates.headline,
 	score: candidates.score,
 	requirements: candidates.requirements,
+	summary: candidates.summary,
+	hasNote: sql<number>`${candidates.note} is not null`,
+	email: sql<string | null>`json_extract(${candidates.profile}, '$.email')`,
 	runs: candidates.runs,
 	error: candidates.error,
 	createdAt: candidates.createdAt,
@@ -83,15 +93,18 @@ const summaryColumns = {
 };
 const candidateColumns = {
 	...summaryColumns,
-	summary: candidates.summary,
 	profile: candidates.profile,
 	fileSize: candidates.fileSize,
 	note: candidates.note,
 	decidedAt: candidates.decidedAt,
 };
 
-type SummaryRow = Pick<typeof candidates.$inferSelect, keyof typeof summaryColumns>;
-type CandidateRow = Pick<typeof candidates.$inferSelect, keyof typeof candidateColumns>;
+// What the select returns: the table's columns, plus the two computed ones.
+type SummaryRow = Pick<typeof candidates.$inferSelect, Exclude<keyof typeof summaryColumns, "hasNote" | "email">> & {
+	hasNote: number;
+	email: string | null;
+};
+type CandidateRow = SummaryRow & Pick<typeof candidates.$inferSelect, "profile" | "fileSize" | "note" | "decidedAt">;
 
 const isMust = (r: Requirement) => Number(r.importance === "must");
 const mustFirst = (a: Requirement, b: Requirement) => isMust(b) - isMust(a);
@@ -122,6 +135,10 @@ function toSummary(row: SummaryRow, rank: number | null = null): CandidateSummar
 			.filter((r) => r.importance === "must" && !r.met)
 			.slice(0, 2)
 			.map((r) => r.label),
+		checks: requirements.map(({ label, met, importance }) => ({ label, met, importance })),
+		summary: row.summary,
+		hasNote: Boolean(row.hasNote),
+		profile: row.email ? { email: row.email } : null,
 		error: row.error,
 		canRetry: isRetryable(row.status, row.updatedAt) && row.runs < MAX_SCORING_RUNS,
 		createdAt: row.createdAt,
@@ -133,7 +150,6 @@ function toSummary(row: SummaryRow, rank: number | null = null): CandidateSummar
 const toCandidate = (row: CandidateRow, rank: number | null = null, rankedCount = 0): Candidate => ({
 	...toSummary(row, rank),
 	rankedCount,
-	summary: row.summary,
 	requirements: row.requirements,
 	profile: row.profile,
 	fileSize: row.fileSize,

@@ -143,14 +143,18 @@ function fakeJobs(path: string, method: string, body: Record<string, string>, qu
 const summary = ({
 	jobId: _jobId,
 	rankedCount: _rankedCount,
-	summary: _summary,
-	requirements: _requirements,
+	requirements,
 	fileSize: _size,
-	note: _note,
+	note,
 	decidedAt: _decidedAt,
-	profile: _profile,
+	profile,
 	...rest
-}: FakeCandidate) => rest;
+}: FakeCandidate) => ({
+	...rest,
+	hasNote: note !== null,
+	profile: profile?.email ? { email: profile.email } : null,
+	checks: (requirements ?? []).map(({ label, met, importance }) => ({ label, met, importance })),
+});
 // The page also gets the place among the job's scored CVs, ordered by score as the list is.
 const forPage = ({ jobId, ...rest }: FakeCandidate): Candidate => {
 	const scored = candidates
@@ -252,6 +256,8 @@ function fakeCandidate(fields: Partial<FakeCandidate> & { id: string }): FakeCan
 		rankedCount: 0,
 		matches: [],
 		gaps: [],
+		checks: [],
+		hasNote: false,
 		error: null,
 		canRetry: false,
 		createdAt: "2026-10-22T12:00:00Z",
@@ -2522,6 +2528,198 @@ describe("candidates", () => {
 		});
 
 		const patches = () => fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH");
+	});
+
+	describe("list tools", () => {
+		const ana = () => fakeCandidate({ id: "cand_ana", name: "Ana Silva", score: 65, headline: "Android dev" });
+		const kenji = () =>
+			fakeCandidate({
+				id: "cand_kenji",
+				name: "Kenji Tanaka",
+				score: 71,
+				summary: "Knows Kotlin Multiplatform well.",
+				profile: { email: "kenji@example.com", links: [], skills: [], experience: [], education: [], certifications: [] },
+			});
+		const queued = () => fakeCandidate({ id: "cand_new", fileName: "new_upload.pdf", status: "queued" });
+		const failed = () => fakeCandidate({ id: "cand_bad", fileName: "scan.pdf", status: "failed", error: "No." });
+		const search = () => screen.getByRole("searchbox", { name: "Search candidates" }) as HTMLInputElement;
+		const select = (name: string) => screen.getByRole("combobox", { name }) as HTMLSelectElement;
+
+		it("searches name, email and summary, and clears the search", async () => {
+			candidates = [grace(), kenji(), ana(), queued()];
+			renderAt("/dashboard/jobs/job_1");
+			await screen.findByText("Grace Turner");
+
+			fireEvent.change(search(), { target: { value: "kenji@EXAMPLE" } });
+			expect(rowTexts()).toEqual([expect.stringMatching(/Rank 2: Kenji Tanaka/)]);
+			expect(screen.getByText("Showing 1 of 4 candidates")).toBeTruthy();
+			fireEvent.change(search(), { target: { value: "multiplatform" } });
+			expect(rowTexts()).toEqual([expect.stringMatching(/Kenji Tanaka/)]);
+			fireEvent.change(search(), { target: { value: "android" } });
+			// The rank belongs to the CV, not to the row's place on screen.
+			expect(rowTexts()).toEqual([expect.stringMatching(/Rank 3: Ana Silva/)]);
+
+			fireEvent.change(search(), { target: { value: "nobody" } });
+			expect(screen.getByText("No candidates match your search and filters.")).toBeTruthy();
+			fireEvent.click(screen.getByRole("button", { name: "Clear search and filters" }));
+			expect(search().value).toBe("");
+			expect(rowTexts()).toHaveLength(4);
+		});
+
+		it("filters by status on top of the decision filter", async () => {
+			candidates = [grace({ decision: "shortlisted" }), kenji(), queued(), failed()];
+			renderAt("/dashboard/jobs/job_1");
+			await screen.findByText("Grace Turner");
+
+			expect(within(select("Status")).getAllByRole("option").map((option) => option.textContent)).toEqual([
+				"All",
+				"Scored",
+				"Queued",
+				"Scoring",
+				"Failed",
+			]);
+			fireEvent.change(select("Status"), { target: { value: "failed" } });
+			expect(rowTexts()).toEqual([expect.stringMatching(/scan\.pdf/)]);
+			fireEvent.change(select("Status"), { target: { value: "queued" } });
+			expect(rowTexts()).toEqual([expect.stringMatching(/new_upload\.pdf/)]);
+			fireEvent.change(select("Status"), { target: { value: "scored" } });
+			expect(rowTexts()).toHaveLength(2);
+			fireEvent.click(screen.getByRole("radio", { name: "Shortlisted 1" }));
+			expect(rowTexts()).toEqual([expect.stringMatching(/Rank 1: Grace Turner/)]);
+			// Nothing is both shortlisted and failed.
+			fireEvent.change(select("Status"), { target: { value: "failed" } });
+			expect(screen.getByText("No candidates match your search and filters.")).toBeTruthy();
+			// The "Show" counts and the header still count the whole list.
+			expect(screen.getByRole("radio", { name: "All 4" })).toBeTruthy();
+			expect(screen.getByText("2 of 4 read · 1 failed")).toBeTruthy();
+		});
+
+		it("sorts, and keeps CVs without a score after the scored ones every time", async () => {
+			candidates = [
+				grace({ createdAt: "2026-10-22T12:01:00Z" }),
+				kenji(),
+				ana(),
+				queued(),
+				failed(),
+			];
+			candidates[1].createdAt = "2026-10-22T12:03:00Z";
+			candidates[2].createdAt = "2026-10-22T12:02:00Z";
+			renderAt("/dashboard/jobs/job_1");
+			await screen.findByText("Grace Turner");
+
+			expect(within(select("Sort by")).getAllByRole("option").map((option) => option.textContent)).toEqual([
+				"Best match",
+				"Lowest score",
+				"Newest",
+				"Oldest",
+				"Name A–Z",
+			]);
+			const names = () => rowTexts().map((text) => text?.match(/(Grace Turner|Kenji Tanaka|Ana Silva|new_upload\.pdf|scan\.pdf)/)?.[0]);
+			const sorted = (value: string) => {
+				fireEvent.change(select("Sort by"), { target: { value } });
+				return names();
+			};
+			expect(names()).toEqual(["Grace Turner", "Kenji Tanaka", "Ana Silva", "new_upload.pdf", "scan.pdf"]);
+			expect(sorted("lowest")).toEqual(["Ana Silva", "Kenji Tanaka", "Grace Turner", "new_upload.pdf", "scan.pdf"]);
+			expect(sorted("newest")).toEqual(["Kenji Tanaka", "Ana Silva", "Grace Turner", "new_upload.pdf", "scan.pdf"]);
+			expect(sorted("oldest")).toEqual(["Grace Turner", "Ana Silva", "Kenji Tanaka", "new_upload.pdf", "scan.pdf"]);
+			expect(sorted("name")).toEqual(["Ana Silva", "Grace Turner", "Kenji Tanaka", "new_upload.pdf", "scan.pdf"]);
+			expect(sorted("best")).toEqual(["Grace Turner", "Kenji Tanaka", "Ana Silva", "new_upload.pdf", "scan.pdf"]);
+		});
+
+		it("shows 50 rows and adds 50 more at a time, at 120 candidates", async () => {
+			candidates = Array.from({ length: 120 }, (_, index) =>
+				fakeCandidate({ id: `cand_${index}`, name: `Candidate ${String(index).padStart(3, "0")}`, score: 100 - (index % 100) }),
+			);
+			// The list ranks the fake's order, so give each a distinct score.
+			candidates.forEach((candidate, index) => (candidate.score = 200 - index));
+			renderAt("/dashboard/jobs/job_1");
+			await screen.findByText("Candidate 000");
+
+			expect(rowTexts()).toHaveLength(50);
+			expect(screen.getByText("50 of 120 shown")).toBeTruthy();
+			fireEvent.click(screen.getByRole("button", { name: "Show 50 more" }));
+			expect(rowTexts()).toHaveLength(100);
+			// Only 20 are left, so that is what the button offers.
+			fireEvent.click(screen.getByRole("button", { name: "Show 20 more" }));
+			expect(rowTexts()).toHaveLength(120);
+			expect(screen.queryByRole("button", { name: /^Show \d+ more$/ })).toBeNull();
+
+			// A search starts again from the top of the matches, with their own ranks.
+			fireEvent.change(search(), { target: { value: "Candidate 11" } });
+			expect(rowTexts()).toHaveLength(10);
+			expect(rowTexts()[0]).toMatch(/Rank 111: Candidate 110/);
+		}, 30_000);
+
+		it("marks a row that has a note, and offers Open CV on each row", async () => {
+			candidates = [grace({ note: "Call Monday" }), kenji()];
+			const tab = { location: { href: "" }, close: vi.fn() };
+			const open = vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
+			Object.assign(URL, { createObjectURL: () => "blob:cv-1", revokeObjectURL: () => {} });
+			renderAt("/dashboard/jobs/job_1");
+			await screen.findByText("Grace Turner");
+
+			const rows = within(screen.getByRole("list", { name: "Candidates" })).getAllByRole("listitem");
+			expect(within(rows[0]).getByText("Has a note")).toBeTruthy();
+			expect(within(rows[1]).queryByText("Has a note")).toBeNull();
+
+			fireEvent.click(within(rows[1]).getByRole("button", { name: "Open CV for Kenji Tanaka" }));
+			expect(open).toHaveBeenCalledWith("", "_blank");
+			await waitFor(() => expect(tab.location.href).toBe("blob:cv-1"));
+			expect(fetchMock.mock.calls.some(([url]) => url.endsWith("/candidates/cand_kenji/cv"))).toBe(true);
+			open.mockRestore();
+			Reflect.deleteProperty(URL, "createObjectURL");
+			Reflect.deleteProperty(URL, "revokeObjectURL");
+		});
+
+		it("opens a row to show every requirement, then closes it", async () => {
+			candidates = [grace()];
+			renderAt("/dashboard/jobs/job_1");
+			const row = (await screen.findByText("Grace Turner")).closest("li")!;
+
+			// Closed: the matches and the missing must-have, but not the unmet nice-to-have.
+			expect(within(row).queryByText("✕ Accessibility")).toBeNull();
+			const toggle = within(row).getByRole("button", { name: "Show all requirements for Grace Turner" });
+			expect(toggle.getAttribute("aria-expanded")).toBe("false");
+			fireEvent.click(toggle);
+			expect(within(row).getByText("✕ Accessibility")).toBeTruthy();
+			const fewer = within(row).getByRole("button", { name: "Show fewer requirements for Grace Turner" });
+			expect(fewer.getAttribute("aria-expanded")).toBe("true");
+			fireEvent.click(fewer);
+			expect(within(row).queryByText("✕ Accessibility")).toBeNull();
+		});
+
+		it("deletes a candidate from the row after a confirmation, for admins", async () => {
+			candidates = [grace(), kenji()];
+			renderAt("/dashboard/jobs/job_1");
+			await screen.findByText("Grace Turner");
+
+			fireEvent.click(screen.getByRole("button", { name: "Delete candidate Kenji Tanaka" }));
+			const dialog = screen.getByRole("alertdialog", { name: "Delete “Kenji Tanaka”?" });
+			// Cancel changes nothing.
+			fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+			expect(candidates).toHaveLength(2);
+
+			// A click focuses the button in a browser; jsdom's doesn't.
+			screen.getByRole("button", { name: "Delete candidate Kenji Tanaka" }).focus();
+			fireEvent.click(screen.getByRole("button", { name: "Delete candidate Kenji Tanaka" }));
+			fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete candidate" }));
+
+			expect(await screen.findByText("Deleted “Kenji Tanaka”")).toBeTruthy();
+			expect(candidates.map(({ id }) => id)).toEqual(["cand_grace"]);
+			expect(rowTexts()).toEqual([expect.stringMatching(/Grace Turner/)]);
+			expect(document.activeElement).toBe(screen.getByRole("heading", { level: 2, name: "Candidates" }));
+		});
+
+		it("leaves the delete button to admins", async () => {
+			org = { id: "org_1", name: "Sprite Labs", role: "member" };
+			candidates = [grace()];
+			renderAt("/dashboard/jobs/job_1");
+			await screen.findByText("Grace Turner");
+
+			expect(screen.getByRole("button", { name: "Open CV for Grace Turner" })).toBeTruthy();
+			expect(screen.queryByRole("button", { name: /^Delete candidate/ })).toBeNull();
+		});
 	});
 
 	describe("Open CV", () => {

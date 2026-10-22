@@ -65,6 +65,14 @@ export type CandidateSummary = {
 	// Labels of met requirements (must-haves first, at most 4) and of unmet must-haves (at most 2).
 	matches: string[];
 	gaps: string[];
+	// Every requirement of the job and whether the CV met it, for the row's "Show all requirements".
+	checks: { label: string; met: boolean; importance: "must" | "nice" }[];
+	// The AI's two sentences on the fit; the list searches them.
+	summary: string | null;
+	// Whether a recruiter has written a note on this CV.
+	hasNote: boolean;
+	// Only the email: the rest of the profile is on the candidate page.
+	profile: { email?: string } | null;
 	error: string | null;
 	canRetry: boolean;
 	createdAt: string;
@@ -72,10 +80,9 @@ export type CandidateSummary = {
 	updatedAt?: string;
 	scoredAt: string | null;
 };
-export type Candidate = CandidateSummary & {
+export type Candidate = Omit<CandidateSummary, "profile"> & {
 	// How many of the job's CVs are ranked, for "#2 of 7".
 	rankedCount: number;
-	summary: string | null;
 	requirements: Requirement[] | null;
 	fileSize: number;
 	note: string | null;

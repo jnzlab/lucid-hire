@@ -410,8 +410,8 @@ describe("GET /jobs/:jobId/candidates", () => {
 		expect(body.cvLimit).toBe(10);
 		expect(body.candidates.find((c) => c.id === retryable)).toMatchObject({ canRetry: true, error: "Scoring failed." });
 		expect(body.candidates.find((c) => c.id === spent)).toMatchObject({ canRetry: false });
-		expect(body.candidates[0]).not.toHaveProperty("summary");
 		expect(body.candidates[0]).not.toHaveProperty("requirements");
+		expect(body.candidates[0]).not.toHaveProperty("note");
 	});
 
 	it("breaks ties by score, then scored_at, then created_at, then id, and ranks only scored CVs", async () => {
@@ -449,6 +449,47 @@ describe("GET /jobs/:jobId/candidates", () => {
 		}
 		const unranked = await send("user_admin", "GET", `/jobs/${jobId}/candidates/${failed}`);
 		expect(((await unranked.json()) as { candidate: CandidateJson }).candidate).toMatchObject({ rank: null, rankedCount: 0 });
+	});
+
+	it("gives the list what it searches and shows: summary, email, every requirement and whether there is a note", async () => {
+		const jobId = await createJob();
+		const full = await seed(jobId, {
+			status: "scored",
+			score: 60,
+			scoredAt: new Date(),
+			summary: "Strong Swift.",
+			note: "Call on Monday",
+			profile: { email: "ada@example.com", phone: "+44 7946 095 800", links: [], skills: ["Swift"], experience: [], education: [], certifications: [] },
+			requirements: [req("Swift", "must", true), req("Combine", "must", false), req("Figma", "nice", false)],
+		});
+		const bare = await seed(jobId, { status: "queued" });
+
+		const { candidates: list } = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates`)).json()) as {
+			candidates: (CandidateJson & { hasNote: boolean; profile: unknown; checks: unknown; summary: string | null })[];
+		};
+		expect(list.find((c) => c.id === full)).toMatchObject({
+			summary: "Strong Swift.",
+			hasNote: true,
+			// Only the email: the phone and the rest of the profile are for the candidate page.
+			profile: { email: "ada@example.com" },
+			checks: [
+				{ label: "Swift", met: true, importance: "must" },
+				{ label: "Combine", met: false, importance: "must" },
+				{ label: "Figma", met: false, importance: "nice" },
+			],
+		});
+		expect(list.find((c) => c.id === full)).not.toHaveProperty("note");
+		expect(list.find((c) => c.id === bare)).toMatchObject({ summary: null, hasNote: false, profile: null, checks: [] });
+
+		// A note that was cleared is no note.
+		await send("user_admin", "PATCH", `/jobs/${jobId}/candidates/${full}`, {
+			headers: { "content-type": "application/json" },
+			body: new TextEncoder().encode(JSON.stringify({ note: "" })),
+		});
+		const again = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates`)).json()) as {
+			candidates: { id: string; hasNote: boolean }[];
+		};
+		expect(again.candidates.find((c) => c.id === full)?.hasNote).toBe(false);
 	});
 
 	it("shows met requirements as matches (must-haves first) and unmet must-haves as gaps, capped at 4 and 2", async () => {

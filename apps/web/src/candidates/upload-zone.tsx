@@ -3,6 +3,7 @@ import { type DragEvent, useEffect, useId, useRef, useState } from "react";
 import { Check } from "../components/icons.tsx";
 import { CV_MAX_BYTES, type UploadItem, type useUploadCvs } from "../lib/candidates.ts";
 import { useCoarsePointer } from "../lib/use-coarse-pointer.ts";
+import { ROW_ACTION } from "./row-action.ts";
 
 const hasFiles = (event: DragEvent) => event.dataTransfer.types.includes("Files");
 
@@ -146,7 +147,7 @@ export function UploadZone({
 					{!busy && (
 						<button
 							type="button"
-							className="mt-1 min-h-11 rounded-[3px] px-1 text-[14px] font-semibold underline underline-offset-[.18em]"
+							className={`mt-1 ${ROW_ACTION}`}
 							onClick={clearList}
 						>
 							Clear list
