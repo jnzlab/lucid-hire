@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Candidate } from "./candidates.ts";
+import type { CandidateStatus, Decision } from "./db/schema.ts";
 
 // Which decisions an export holds.
 export const EXPORT_DECISIONS = ["all", "shortlisted", "undecided", "rejected"] as const;
@@ -39,14 +39,34 @@ export function csvCell(value: string | number | null | undefined): string {
 	return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
+// One record of the file. SQLite picks the phone out of the profile and joins the requirement labels, so the
+// Worker never parses a CV's whole profile or requirements: a Max job holds 1,000 CVs.
+export type ExportRow = {
+	rank: number | null;
+	name: string | null;
+	fileName: string;
+	email: string | null;
+	phone: string | null;
+	score: number | null;
+	status: CandidateStatus;
+	decision: Decision;
+	note: string | null;
+	decidedAt: Date | null;
+	createdAt: Date;
+	summary: string | null;
+	// Labels of the met and the unmet requirements, joined with "; ".
+	matching: string | null;
+	missing: string | null;
+	error: string | null;
+};
+
 const label = (decision: string) => decision.charAt(0).toUpperCase() + decision.slice(1);
 const iso = (date: Date | null) => (date ? date.toISOString() : "");
 
 // The rows of the file: CRLF between records, a BOM first so Excel reads the UTF-8 and a trailing line break.
-export function buildCsv(rows: (Candidate & { phone: string | null })[]): string {
-	const lines = rows.map((c) => {
-		const requirements = c.requirements ?? [];
-		return [
+export function buildCsv(rows: ExportRow[]): string {
+	const lines = rows.map((c) =>
+		[
 			c.rank,
 			c.name || c.fileName,
 			c.email,
@@ -58,13 +78,13 @@ export function buildCsv(rows: (Candidate & { phone: string | null })[]): string
 			iso(c.decidedAt),
 			iso(c.createdAt),
 			c.summary,
-			requirements.filter((r) => r.met).map((r) => r.label).join("; "),
-			requirements.filter((r) => !r.met).map((r) => r.label).join("; "),
+			c.matching,
+			c.missing,
 			c.status === "failed" ? c.error : null,
 		]
 			.map(csvCell)
-			.join(",");
-	});
+			.join(","),
+	);
 	return `﻿${[HEADER.map(csvCell).join(","), ...lines].join("\r\n")}\r\n`;
 }
 

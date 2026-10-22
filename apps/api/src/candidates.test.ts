@@ -468,12 +468,64 @@ describe("POST /jobs/:jobId/candidates", () => {
 	});
 });
 
+// Every field of a CandidateSummary, which the list sends for each CV.
+const SUMMARY_KEYS = [
+	"canRetry", "checks", "createdAt", "decision", "email", "error", "fileName", "gaps", "hasNote", "headline", "id",
+	"matches", "name", "profile", "rank", "scoredAt", "score", "source", "status", "summary", "updatedAt",
+].sort();
+
 describe("GET /jobs/:jobId/candidates", () => {
 	it("404s for another company's job", async () => {
 		const acmeJob = await createJob("open", "user_acme");
 		const res = await send("user_admin", "GET", `/jobs/${acmeJob}/candidates`);
 		expect(res.status).toBe(404);
 		expect(await res.json()).toMatchObject({ error: { code: "job_not_found" } });
+	});
+
+	it("sends each CV exactly as the candidate page sums it up, though SQLite writes the list", async () => {
+		const jobId = await createJob();
+		const at = (minute: number) => new Date(Date.UTC(2026, 9, 22, 10, minute, 7, 89));
+		const requirements = [
+			req("Swift", "nice", true),
+			req("SwiftUI", "must", false),
+			req("Combine", "must", true),
+			req("Kotlin", "nice", false),
+			req("UIKit", "must", true),
+			req("Core Data", "must", false),
+			req("Testing", "must", false),
+			req("Metal", "nice", true),
+			req("Accessibility", "must", true),
+		];
+		const profile = { email: "cv@example.com", phone: "+44 1", links: [], skills: [], experience: [], education: [], certifications: [] };
+		await seed(jobId, { status: "scored", score: 71, scoredAt: at(3), requirements, profile, note: 'A "quoted"\nnote', name: "Zoë Ünal" });
+		await seed(jobId, { status: "scored", score: 71, scoredAt: at(3), requirements: [], email: "typed@example.com", source: "apply" });
+		await seed(jobId, { status: "scored", score: 40, scoredAt: at(9), requirements: null, profile: { ...profile, email: "" } });
+		await seed(jobId, { status: "queued", createdAt: at(1), updatedAt: new Date(Date.now() - STALE_SCORING_MS - 1000) });
+		await seed(jobId, { status: "scoring", createdAt: at(2) });
+		await seed(jobId, { status: "failed", runs: 3, error: "Scoring failed.", createdAt: at(4) });
+		await seed(jobId, { status: "failed", runs: 1, error: "Bad PDF", headline: "iOS lead", summary: "Short." });
+
+		const { candidates: list } = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates`)).json()) as {
+			candidates: Record<string, unknown>[];
+		};
+		expect(list).toHaveLength(7);
+		for (const row of list) {
+			const { candidate } = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates/${row.id}`)).json()) as {
+				candidate: Record<string, unknown>;
+			};
+			expect(Object.keys(row).sort()).toEqual(SUMMARY_KEYS);
+			// The candidate page sends the whole profile; the list only its email.
+			const cvEmail = (candidate.profile as { email?: string } | null)?.email;
+			const expected = { ...Object.fromEntries(SUMMARY_KEYS.map((key) => [key, candidate[key]])), profile: cvEmail ? { email: cvEmail } : null };
+			expect(row).toEqual(expected);
+		}
+		expect(list[0]).toMatchObject({
+			rank: 1,
+			matches: ["Combine", "UIKit", "Accessibility", "Swift"],
+			gaps: ["SwiftUI", "Core Data"],
+			hasNote: true,
+			profile: { email: "cv@example.com" },
+		});
 	});
 
 	it("lists scored CVs by score, then CVs being read, then failed ones, without caching", async () => {

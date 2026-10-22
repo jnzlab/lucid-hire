@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNotNull, lt, or, sql } from "drizzle-orm";
+import { type SQL, and, asc, desc, eq, inArray, isNotNull, lt, or, sql } from "drizzle-orm";
 import type { SQLiteColumn } from "drizzle-orm/sqlite-core";
 import { z } from "zod";
 import type { Db } from "./db/client.ts";
@@ -11,6 +11,7 @@ import {
 	candidates,
 	jobs,
 } from "./db/schema.ts";
+import type { ExportRow } from "./candidates-export.ts";
 import { inOrg } from "./jobs.ts";
 import { limitSql } from "./plan-state.ts";
 
@@ -208,16 +209,51 @@ async function rankedIds(db: Db, orgId: string, jobId: string): Promise<string[]
 	return rows.map(({ id }) => id);
 }
 
-// Scored by rank, then CVs still being read, then failed ones. Ranks are counted over the whole job, so they
-// don't depend on what the list shows.
-export async function listCandidates(db: Db, orgId: string, jobId: string): Promise<CandidateSummary[]> {
+// A timestamp_ms column as Date.toJSON() writes it, e.g. "2026-10-22T21:49:06.612Z", or null.
+const isoSql = (column: SQLiteColumn) => sql`(strftime('%Y-%m-%dT%H:%M:%S', CAST(${column} AS INTEGER) / 1000, 'unixepoch')
+	|| '.' || printf('%03d', CAST(${column} AS INTEGER) % 1000) || 'Z')`;
+const jsonBool = (condition: SQL) => sql`json(CASE WHEN ${condition} THEN 'true' ELSE 'false' END)`;
+const met = sql`coalesce(json_extract(r.value, '$.met'), 0)`;
+const isMustSql = sql`(json_extract(r.value, '$.importance') = 'must')`;
+
+// One CandidateSummary (what toSummary() makes) as JSON, built by SQLite. A Max job holds 1,000 CVs, and parsing
+// every CV's requirements on the Worker and writing the list back out costs far more than its 10 ms of CPU.
+const summaryJsonSql = (now: number) => sql`json_object(
+	'id', ${candidates.id}, 'fileName', ${candidates.fileName}, 'status', ${candidates.status},
+	'decision', ${candidates.decision}, 'name', ${candidates.name}, 'headline', ${candidates.headline},
+	'score', ${candidates.score},
+	'rank', CASE WHEN ${candidates.status} = 'scored' AND ${candidates.score} IS NOT NULL THEN row_number() OVER (
+		PARTITION BY ${candidates.status} = 'scored' AND ${candidates.score} IS NOT NULL
+		ORDER BY ${candidates.score} DESC, ${candidates.scoredAt}, ${candidates.createdAt}, ${candidates.id}) END,
+	'matches', json((SELECT json_group_array(label ORDER BY must DESC, k) FROM (
+		SELECT json_extract(r.value, '$.label') AS label, ${isMustSql} AS must, r.key AS k
+		FROM json_each(${candidates.requirements}) r WHERE ${met} ORDER BY must DESC, k LIMIT 4))),
+	'gaps', json((SELECT json_group_array(label ORDER BY k) FROM (
+		SELECT json_extract(r.value, '$.label') AS label, r.key AS k
+		FROM json_each(${candidates.requirements}) r WHERE ${isMustSql} AND NOT ${met} ORDER BY k LIMIT 2))),
+	'checks', json((SELECT json_group_array(json_object(
+			'label', json_extract(r.value, '$.label'), 'met', ${jsonBool(met)},
+			'importance', json_extract(r.value, '$.importance')) ORDER BY r.key)
+		FROM json_each(${candidates.requirements}) r)),
+	'summary', ${candidates.summary}, 'hasNote', ${jsonBool(sql`${candidates.note} IS NOT NULL`)},
+	'source', ${candidates.source}, 'email', ${summaryColumns.email},
+	'profile', CASE WHEN nullif(${summaryColumns.cvEmail}, '') IS NOT NULL THEN json_object('email', ${summaryColumns.cvEmail}) END,
+	'error', ${candidates.error},
+	'canRetry', ${jsonBool(sql`(${candidates.status} = 'failed' OR (${candidates.status} IN ('queued', 'scoring')
+		AND ${now} - ${candidates.updatedAt} > ${STALE_SCORING_MS})) AND ${candidates.runs} < ${MAX_SCORING_RUNS}`)},
+	'createdAt', ${isoSql(candidates.createdAt)}, 'updatedAt', ${isoSql(candidates.updatedAt)},
+	'scoredAt', ${isoSql(candidates.scoredAt)})`;
+
+// The job's CandidateSummary list as a JSON array, ready to send: scored by rank, then CVs still being read, then
+// failed ones. Ranks are counted over the whole job, so they don't depend on what the list shows. The Worker only
+// joins the rows SQLite wrote.
+export async function listCandidatesJson(db: Db, orgId: string, jobId: string, now: number = Date.now()): Promise<string> {
 	const rows = await db
-		.select(summaryColumns)
+		.select({ json: sql<string>`${summaryJsonSql(now)}` })
 		.from(candidates)
 		.where(inJob(orgId, jobId))
 		.orderBy(sql`case ${candidates.status} when 'scored' then 0 when 'failed' then 2 else 1 end`, ...rankOrder);
-	let rank = 0;
-	return rows.map((row) => toSummary(row, row.status === "scored" && row.score !== null ? ++rank : null));
+	return `[${rows.map(({ json }) => json).join(",")}]`;
 }
 
 // The candidate with its place among the job's scored CVs.
@@ -235,20 +271,33 @@ export async function listForExport(
 	orgId: string,
 	jobId: string,
 	decision: Decision | "all",
-): Promise<(Candidate & { phone: string | null })[]> {
+): Promise<ExportRow[]> {
+	const labels = (which: SQL) => sql<string | null>`(SELECT group_concat(json_extract(r.value, '$.label'), '; ' ORDER BY r.key)
+		FROM json_each(${candidates.requirements}) r WHERE ${which})`;
 	const rows = await db
-		.select(candidateColumns)
+		.select({
+			name: candidates.name,
+			fileName: candidates.fileName,
+			email: summaryColumns.email,
+			phone: sql<string | null>`json_extract(${candidates.profile}, '$.phone')`,
+			score: candidates.score,
+			status: candidates.status,
+			decision: candidates.decision,
+			note: candidates.note,
+			decidedAt: candidates.decidedAt,
+			createdAt: candidates.createdAt,
+			summary: candidates.summary,
+			matching: labels(met),
+			missing: labels(sql`NOT ${met}`),
+			error: candidates.error,
+		})
 		.from(candidates)
 		.where(inJob(orgId, jobId))
 		.orderBy(sql`case ${candidates.status} when 'scored' then 0 when 'failed' then 2 else 1 end`, ...rankOrder);
 	let rank = 0;
 	return rows
-		.map((row) => ({ row, place: row.status === "scored" && row.score !== null ? ++rank : null }))
-		.filter(({ row }) => decision === "all" || row.decision === decision)
-		.map(({ row, place }) => ({
-			...toCandidate(row, place, rank),
-			phone: row.profile?.phone ?? null,
-		}));
+		.map((row) => ({ ...row, rank: row.status === "scored" && row.score !== null ? ++rank : null }))
+		.filter((row) => decision === "all" || row.decision === decision);
 }
 
 export async function getCandidate(db: Db, orgId: string, jobId: string, id: string): Promise<Candidate | null> {
