@@ -92,9 +92,10 @@ export type Candidate = Omit<CandidateSummary, "profile"> & {
 	requirements: Requirement[] | null;
 	fileSize: number;
 	note: string | null;
-	// When the decision last changed. Null while it is undecided.
+	// When the decision last changed, and the Clerk user id of whoever changed it. Null while it is undecided.
 	decidedAt: string | null;
 	profile: CandidateProfile | null;
+	decidedBy: string | null;
 };
 export type CandidateList = { candidates: CandidateSummary[]; cvCount: number; cvLimit: number };
 
@@ -173,11 +174,14 @@ export type DecideInput = { decision?: Decision; note?: string | null };
 
 // What the API will answer for this change, so the page can show it before the answer arrives: the note is
 // trimmed (an empty one is none), and the decision's time changes only when the decision does.
-function decided(candidate: Candidate, { decision, note }: DecideInput): Candidate {
+function decided(candidate: Candidate, { decision, note }: DecideInput, userId: string | null | undefined): Candidate {
 	const next = { ...candidate };
 	if (note !== undefined) next.note = note?.trim() || null;
 	if (decision !== undefined) {
-		if (decision !== candidate.decision) next.decidedAt = decision === "undecided" ? null : new Date().toISOString();
+		if (decision !== candidate.decision) {
+			next.decidedAt = decision === "undecided" ? null : new Date().toISOString();
+			next.decidedBy = decision === "undecided" ? null : (userId ?? null);
+		}
 		next.decision = decision;
 	}
 	return next;
@@ -213,7 +217,7 @@ export function useDecideCandidate(jobId: string, id: string) {
 			]);
 			const before = queryClient.getQueryData<Candidate>(detailKey);
 			const row = queryClient.getQueryData<CandidateList>(listQueryKey)?.candidates.find((c) => c.id === id);
-			queryClient.setQueryData<Candidate>(detailKey, (candidate) => candidate && decided(candidate, input));
+			queryClient.setQueryData<Candidate>(detailKey, (candidate) => candidate && decided(candidate, input, userId));
 			if (input.decision !== undefined) setDecision(input.decision);
 			return { decision: before?.decision ?? row?.decision, note: before?.note };
 		},

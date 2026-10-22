@@ -140,6 +140,7 @@ type CandidateJson = {
 	decision: string;
 	note: string | null;
 	decidedAt: string | null;
+	decidedBy: string | null;
 	updatedAt: string;
 };
 
@@ -777,7 +778,7 @@ describe("PATCH /jobs/:jobId/candidates/:id", () => {
 		const detail = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates/${id}`)).json()) as {
 			candidate: CandidateJson;
 		};
-		expect(detail.candidate).toMatchObject({ decision: "undecided", note: null, decidedAt: null });
+		expect(detail.candidate).toMatchObject({ decision: "undecided", note: null, decidedAt: null, decidedBy: null });
 
 		await decideOk("user_admin", jobId, id, { decision: "shortlisted", note: "Call on Monday" });
 		const list = await send("user_admin", "GET", `/jobs/${jobId}/candidates`);
@@ -785,6 +786,7 @@ describe("PATCH /jobs/:jobId/candidates/:id", () => {
 		expect(listed[0]).toMatchObject({ id, decision: "shortlisted" });
 		expect(listed[0]).not.toHaveProperty("note");
 		expect(listed[0]).not.toHaveProperty("decidedAt");
+		expect(listed[0]).not.toHaveProperty("decidedBy");
 	});
 
 	it("sets decidedAt and decidedBy when the decision changes, and clears them on undecided", async () => {
@@ -792,7 +794,7 @@ describe("PATCH /jobs/:jobId/candidates/:id", () => {
 		const id = await seed(jobId, { status: "scored", score: 80, scoredAt: new Date() });
 
 		const shortlisted = await decideOk("user_admin", jobId, id, { decision: "shortlisted" });
-		expect(shortlisted).toMatchObject({ id, decision: "shortlisted", note: null });
+		expect(shortlisted).toMatchObject({ id, decision: "shortlisted", note: null, decidedBy: "user_admin" });
 		const first = Date.parse(shortlisted.decidedAt ?? "");
 		expect(Date.now() - first).toBeLessThan(60_000);
 		expect(await rowOf(id)).toMatchObject({
@@ -811,6 +813,7 @@ describe("PATCH /jobs/:jobId/candidates/:id", () => {
 		const rejected = await decideOk("user_member", jobId, id, { decision: "rejected" });
 		expect(rejected.decision).toBe("rejected");
 		expect(Date.parse(rejected.decidedAt ?? "")).toBeGreaterThan(first);
+		expect(rejected.decidedBy).toBe("user_member");
 		const second = Date.parse(rejected.decidedAt ?? "");
 		expect(await rowOf(id)).toMatchObject({
 			decision: "rejected",
@@ -911,7 +914,7 @@ describe("PATCH /jobs/:jobId/candidates/:id", () => {
 		expect(await (await decide("user_admin", jobId, id, {})).json()).toMatchObject({
 			error: { message: "Nothing to update" },
 		});
-		expect(await rowOf(id)).toMatchObject({ decision: "undecided", note: null, decidedAt: null });
+		expect(await rowOf(id)).toMatchObject({ decision: "undecided", note: null, decidedAt: null, decidedBy: null });
 	});
 
 	it("leaves updated_at alone, so a stuck scoring run is still timed from its last real change", async () => {

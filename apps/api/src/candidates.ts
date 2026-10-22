@@ -72,8 +72,9 @@ export type Candidate = Omit<CandidateSummary, "profile"> & {
 	profile: CandidateProfile | null;
 	fileSize: number;
 	note: string | null;
-	// When the decision last changed. Null while it is undecided.
+	// When the decision last changed, and the Clerk user who changed it. Null while it is undecided.
 	decidedAt: Date | null;
+	decidedBy: string | null;
 };
 
 const summaryColumns = {
@@ -102,6 +103,7 @@ const candidateColumns = {
 	fileSize: candidates.fileSize,
 	note: candidates.note,
 	decidedAt: candidates.decidedAt,
+	decidedBy: candidates.decidedBy,
 };
 
 // What the select returns: the table's columns, plus the two computed ones.
@@ -110,7 +112,7 @@ type SummaryRow = Pick<typeof candidates.$inferSelect, Exclude<keyof typeof summ
 	email: string | null;
 	cvEmail: string | null;
 };
-type CandidateRow = SummaryRow & Pick<typeof candidates.$inferSelect, "profile" | "fileSize" | "note" | "decidedAt">;
+type CandidateRow = SummaryRow & Pick<typeof candidates.$inferSelect, "profile" | "fileSize" | "note" | "decidedAt" | "decidedBy">;
 
 const isMust = (r: Requirement) => Number(r.importance === "must");
 const mustFirst = (a: Requirement, b: Requirement) => isMust(b) - isMust(a);
@@ -163,6 +165,7 @@ const toCandidate = (row: CandidateRow, rank: number | null = null, rankedCount 
 	fileSize: row.fileSize,
 	note: row.note,
 	decidedAt: row.decidedAt,
+	decidedBy: row.decidedBy,
 });
 
 // The score is ours, not the model's: must-haves count double, so it is deterministic and explainable.

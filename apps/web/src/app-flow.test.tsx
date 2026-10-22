@@ -57,6 +57,8 @@ let uploadProgress: number[];
 let jobsUsed = 0;
 let jobsLimit: number | null = 10;
 let cvLimit = 10;
+// The company's people, as GET /team lists them.
+let teamMembers: { userId: string; role: string; name: string | null; email: string | null; imageUrl: string | null; joinedAt: string; isYou: boolean }[] = [];
 
 const notFound = () => Response.json({ error: { message: "That job doesn't exist or isn't yours" } }, { status: 404 });
 const apiError = (status: number, code: string, message: string) =>
@@ -156,6 +158,7 @@ const summary = ({
 	note,
 	decidedAt: _decidedAt,
 	profile,
+	decidedBy: _decidedBy,
 	...rest
 }: FakeCandidate) => ({
 	...rest,
@@ -246,6 +249,7 @@ function fakeCandidates(url: URL, init: RequestInit | undefined): Response {
 		const patch = JSON.parse(init!.body as string) as { decision?: Decision; note?: string | null };
 		if (patch.decision !== undefined && patch.decision !== found.decision) {
 			found.decidedAt = patch.decision === "undecided" ? null : new Date().toISOString();
+			found.decidedBy = patch.decision === "undecided" ? null : "user_1";
 		}
 		if (patch.decision !== undefined) found.decision = patch.decision;
 		if (patch.note !== undefined) found.note = patch.note?.trim() || null;
@@ -287,6 +291,7 @@ function fakeCandidate(fields: Partial<FakeCandidate> & { id: string }): FakeCan
 		note: null,
 		decidedAt: null,
 		profile: null,
+		decidedBy: null,
 		...fields,
 	};
 }
@@ -299,6 +304,7 @@ beforeEach(() => {
 	jobsUsed = 0;
 	jobsLimit = 10;
 	cvLimit = 10;
+	teamMembers = [];
 	org = null;
 	jobs = [];
 	candidates = [];
@@ -308,6 +314,7 @@ beforeEach(() => {
 		// Uploads send a file, not JSON.
 		const body = typeof init?.body === "string" ? (JSON.parse(init.body) as Record<string, string>) : {};
 		if (path === "/me") return Response.json({ userId: "user_1", org });
+		if (path === "/team") return Response.json({ members: teamMembers });
 		if (path === "/billing") {
 			return Response.json({
 				plan: "free",
@@ -2520,6 +2527,48 @@ describe("candidates", () => {
 					: answer(url, init),
 			);
 		};
+
+		describe("who decided", () => {
+			const decidedBy = (userId: string | null) =>
+				grace({ decision: "shortlisted", decidedAt: "2026-10-22T14:00:00Z", decidedBy: userId });
+			const teammate = {
+				userId: "user_2",
+				role: "member",
+				name: "Ben Carter",
+				email: "ben@example.com",
+				imageUrl: null,
+				joinedAt: "2026-10-05T09:00:00Z",
+				isYou: false,
+			};
+
+			it("names the teammate who made the decision, with the date", async () => {
+				teamMembers = [teammate];
+				candidates = [decidedBy("user_2")];
+				renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+				expect(await screen.findByText("Ben Carter · Decided 22 Oct 2026")).toBeTruthy();
+			});
+
+			it("says You for the signed-in recruiter, and Former member for someone no longer on the team", async () => {
+				candidates = [decidedBy("user_1")];
+				renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+				expect(await screen.findByText("You · Decided 22 Oct 2026")).toBeTruthy();
+				cleanup();
+
+				candidates = [decidedBy("user_gone")];
+				renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+				expect(await screen.findByText("Former member · Decided 22 Oct 2026")).toBeTruthy();
+			});
+
+			it("shows nothing while undecided, and You as soon as a decision is made", async () => {
+				candidates = [grace()];
+				renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+				await decisionGroup();
+				expect(screen.queryByText(/Decided/)).toBeNull();
+
+				fireEvent.click(radio("Shortlisted"));
+				expect(await screen.findByText(/^You · Decided /)).toBeTruthy();
+			});
+		});
 
 		it("shows the decision as a radio group of three, undecided to begin with", async () => {
 			candidates = [grace()];
