@@ -63,7 +63,7 @@ on failure.
 | Try-it demo re-ranks candidates when priorities change | The Android-leaning preset puts Rayan Al-Farsi first at 95 and Grace second |
 | Story chapters and FAQ answers open on demand | The "Rank" chapter shows the ranked list, and an FAQ question expands to its answer |
 | Signed-out visitors are sent to sign in from the dashboard | /dashboard without a session lands on the sign-in page |
-| Recruiter signs in and reaches the jobs dashboard | The recruiter test account signs in with email and password, names its company "Sprite Labs" if it hasn't yet, and lands on its "Jobs" page |
+| Recruiter signs in and reaches the dashboard | The recruiter test account signs in with email and password, names its company "Sprite Labs" if it hasn't yet, and lands on its "Overview" page |
 | Recruiter posts a job and sees it in the list | "Post a job" → "Sprite post role" → "Open job"; the list shows it marked Open, then the test deletes it |
 | Recruiter deletes a job after confirming | An admin saves a "Sprite delete role" draft, deletes it through the confirm dialog, and the list says "Deleted “Sprite delete role”" without showing it |
 | Recruiter closes an open job | "Sprite archive role" (reused every run) is closed and offers "Reopen job" |
@@ -85,7 +85,7 @@ on failure.
 | Recruiter shares an open job's public link | "Sprite share role" shows its https://lucidhire.io/jobs/… link and a Share menu with Email, X, LinkedIn, WhatsApp, Facebook and "Copy caption". Deletes its job afterwards |
 | Recruiter searches and filters the jobs list | Saves "Sprite search role" as a draft, searches for it and filters to "Draft", and sees only that job. Deletes its job afterwards |
 | Recruiter duplicates a job as a draft | "Duplicate" on "Sprite duplicate role" opens "Sprite duplicate role (copy)" for editing with "Duplicated as a draft". Deletes both jobs afterwards |
-| Overview shows the company dashboard | The sidebar's "Overview" shows active roles, CVs screened, time to shortlist, top match, pipeline velocity, the 90-day funnel, the AI output mix and recent activity |
+| Overview shows the company dashboard | "Overview", the first page after sign-in, shows active roles, CVs screened, time to shortlist, top match, pipeline velocity, the 90-day funnel, the AI output mix and recent activity |
 | Collapsed sidebar stays collapsed after a reload | "Collapse sidebar", then a reload, still shows "Expand sidebar" |
 | Recruiter searches the candidate list | Uploads grace-turner.pdf and kenji-tanaka.pdf to "Sprite search candidates role", searches "Kenji", and sees only Kenji Tanaka. Deletes its job afterwards |
 | Candidate page shows the rank and the profile read from the CV | Grace Turner's page in "Sprite profile role" says "Ranked #1 of 1 scored CV for this role" and has a "Profile" section with her skills. Deletes its job afterwards |
