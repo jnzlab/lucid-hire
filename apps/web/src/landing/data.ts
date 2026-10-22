@@ -1,3 +1,5 @@
+import { PLANS as PLAN_CONFIG, type PlanKey as PlanKeyOf, planForCvs } from "@lucid-hire/plans";
+
 // Sample data and the toy scoring behind the landing page demos. The real scoring reads the whole
 // CV; here a must-have counts three times a nice-to-have, as the "Your turn" note says.
 
@@ -60,16 +62,17 @@ export const ORDINALS = ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th"] as con
 // Pricing: the pile slider's stops and the plan that fits each one.
 export const PILE_STOPS = [5, 10, 25, 50, 100, 250, 500, 1000] as const;
 
-export const PLANS = {
-	free: { name: "Free", price: "at no cost" },
-	pro: { name: "Pro", price: "at $10 a month" },
-	max: { name: "Max", price: "at $30 a month" },
-} as const;
+export type PlanKey = PlanKeyOf;
 
-export type PlanKey = keyof typeof PLANS;
+// The sentence under the slider: "Pro fits, at $10 a month."
+export const PLANS: Record<PlanKey, { name: string; price: string }> = {
+	free: { name: PLAN_CONFIG.free.name, price: "at no cost" },
+	pro: { name: PLAN_CONFIG.pro.name, price: `at $${PLAN_CONFIG.pro.priceUsd} a month` },
+	max: { name: PLAN_CONFIG.max.name, price: `at $${PLAN_CONFIG.max.priceUsd} a month` },
+};
 
 export function planForPile(cvsPerJob: number): PlanKey {
-	return cvsPerJob <= 10 ? "free" : cvsPerJob <= 100 ? "pro" : "max";
+	return planForCvs(cvsPerJob);
 }
 
 export function formatCount(n: number): string {

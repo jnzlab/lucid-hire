@@ -1,5 +1,6 @@
 packages:
   - apps/*
+  - packages/*
 
 # approve the build scripts of the Workers toolchain
 allowBuilds:
