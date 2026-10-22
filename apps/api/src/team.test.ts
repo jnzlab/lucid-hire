@@ -169,13 +169,13 @@ describe("PATCH /team/:userId", () => {
 describe("invites", () => {
 	async function inviteToken(admin: string) {
 		const res = await call(admin, "POST", "/team/invites");
-		const { url, expiresAt } = (await res.json()) as { url: string; expiresAt: string };
-		return { token: url.split("/invite/")[1], url, expiresAt, status: res.status };
+		const { id, url, expiresAt } = (await res.json()) as { id: string; url: string; expiresAt: string };
+		return { id, token: url.split("/invite/")[1], url, expiresAt, status: res.status };
 	}
 
 	it("lets an admin create a link that expires in 7 days and is stored only as a hash", async () => {
 		const { admin, orgId } = await newOrg();
-		const { token, url, expiresAt, status } = await inviteToken(admin);
+		const { id, token, url, expiresAt, status } = await inviteToken(admin);
 		expect(status).toBe(201);
 		expect(url).toBe(`https://lucidhire.io/invite/${token}`);
 		expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -187,6 +187,8 @@ describe("invites", () => {
 		expect(rows).toHaveLength(1);
 		expect(rows[0].tokenHash).toBe(await hashToken(token));
 		expect(JSON.stringify(rows)).not.toContain(token);
+		// The answer names the invite by the id the pending list and revoke use, never by the token.
+		expect(id).toBe(rows[0].tokenHash);
 	});
 
 	it("uses the browser's origin for local development", async () => {

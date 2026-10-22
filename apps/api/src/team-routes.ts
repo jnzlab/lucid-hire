@@ -29,9 +29,10 @@ export function teamRoutes({ auth, directory }: { auth: MiddlewareHandler<AppEnv
 	routes.post("/invites", async (c) => {
 		const org = c.get("org");
 		if (org.role !== "admin") return c.json(adminOnly, 403);
-		const { token, expiresAt } = await createInvite(getDb(c.env.DB), org.id, c.get("userId"));
+		const { id, token, expiresAt } = await createInvite(getDb(c.env.DB), org.id, c.get("userId"));
 		const origin = ALLOWED_ORIGINS.includes(c.req.header("origin") ?? "") ? (c.req.header("origin") as string) : APP_ORIGIN;
-		return c.json({ url: `${origin}/invite/${token}`, expiresAt }, 201);
+		// The id is the one the pending list and DELETE use, so the page can tell when this link is revoked.
+		return c.json({ id, url: `${origin}/invite/${token}`, expiresAt }, 201);
 	});
 
 	routes.get("/invites", async (c) => {

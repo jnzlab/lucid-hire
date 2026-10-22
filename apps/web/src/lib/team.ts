@@ -67,7 +67,7 @@ export function useCreateInvite() {
 	const { userId, token } = useSession();
 	const queryClient = useQueryClient();
 	return useMutation({
-		mutationFn: async () => apiPost<{ url: string; expiresAt: string }>("/team/invites", undefined, { token: await token() }),
+		mutationFn: async () => apiPost<{ id: string; url: string; expiresAt: string }>("/team/invites", undefined, { token: await token() }),
 		onSuccess: () => void queryClient.invalidateQueries({ queryKey: invitesKey(userId) }),
 	});
 }
