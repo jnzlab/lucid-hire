@@ -87,7 +87,7 @@ export function candidateRoutes() {
 	});
 
 	// The job's candidates as a spreadsheet, for any member of the company. Registered before "/:id" so the path is
-	// not taken for a candidate. The file is built from one query: a CPU-light loop over the job's few hundred rows at most.
+	// not taken for a candidate. The file is built from one query whose rows SQLite has already flattened.
 	routes.get("/export.csv", validQuery(exportQuery), async (c) => {
 		const db = getDb(c.env.DB);
 		const org = c.get("org");

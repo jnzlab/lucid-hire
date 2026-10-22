@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCsv, csvCell, exportFileName } from "./candidates-export.ts";
-import type { Candidate } from "./candidates.ts";
+import { type ExportRow, buildCsv, csvCell, exportFileName } from "./candidates-export.ts";
 
 describe("csvCell", () => {
 	it("leaves plain text and numbers alone, and empties null", () => {
@@ -43,36 +42,24 @@ describe("exportFileName", () => {
 	});
 });
 
-const row = (fields: Partial<Candidate> & { email?: string | null; phone?: string | null }) =>
-	({
-		id: "c1",
-		fileName: "ada.pdf",
-		status: "scored",
-		decision: "undecided",
-		name: "Ada Lovelace",
-		headline: null,
-		score: 80,
-		rank: 1,
-		checks: [],
-		hasNote: false,
-		profile: null,
-		matches: [],
-		gaps: [],
-		error: null,
-		canRetry: false,
-		createdAt: new Date("2026-10-22T12:00:00Z"),
-		updatedAt: new Date(),
-		scoredAt: null,
-		rankedCount: 1,
-		summary: null,
-		requirements: null,
-		fileSize: 1,
-		note: null,
-		decidedAt: null,
-		email: null,
-		phone: null,
-		...fields,
-	}) as Parameters<typeof buildCsv>[0][number];
+const row = (fields: Partial<ExportRow>): ExportRow => ({
+	rank: 1,
+	name: "Ada Lovelace",
+	fileName: "ada.pdf",
+	email: null,
+	phone: null,
+	score: 80,
+	status: "scored",
+	decision: "undecided",
+	note: null,
+	decidedAt: null,
+	createdAt: new Date("2026-10-22T12:00:00Z"),
+	summary: null,
+	matching: null,
+	missing: null,
+	error: null,
+	...fields,
+});
 
 describe("buildCsv", () => {
 	it("starts with a BOM, ends each record with CRLF and has the 14 columns", () => {
@@ -96,11 +83,8 @@ describe("buildCsv", () => {
 				decidedAt: new Date("2026-10-23T09:00:00Z"),
 				note: 'Call "soon",\nnot later',
 				summary: "Strong Swift, no Kotlin.",
-				requirements: [
-					{ label: "Swift", requirement: "", importance: "must", met: true, evidence: "x" },
-					{ label: "SwiftUI", requirement: "", importance: "must", met: true, evidence: "x" },
-					{ label: "Kotlin", requirement: "", importance: "nice", met: false, evidence: "" },
-				],
+				matching: "Swift; SwiftUI",
+				missing: "Kotlin",
 			}),
 		]);
 		const record = csv.slice(1).split("\r\n").slice(1).join("\r\n");

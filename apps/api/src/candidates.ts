@@ -11,6 +11,7 @@ import {
 	candidates,
 	jobs,
 } from "./db/schema.ts";
+import type { ExportRow } from "./candidates-export.ts";
 import { inOrg } from "./jobs.ts";
 import { limitSql } from "./plan-state.ts";
 
@@ -270,20 +271,33 @@ export async function listForExport(
 	orgId: string,
 	jobId: string,
 	decision: Decision | "all",
-): Promise<(Candidate & { phone: string | null })[]> {
+): Promise<ExportRow[]> {
+	const labels = (which: SQL) => sql<string | null>`(SELECT group_concat(json_extract(r.value, '$.label'), '; ' ORDER BY r.key)
+		FROM json_each(${candidates.requirements}) r WHERE ${which})`;
 	const rows = await db
-		.select(candidateColumns)
+		.select({
+			name: candidates.name,
+			fileName: candidates.fileName,
+			email: summaryColumns.email,
+			phone: sql<string | null>`json_extract(${candidates.profile}, '$.phone')`,
+			score: candidates.score,
+			status: candidates.status,
+			decision: candidates.decision,
+			note: candidates.note,
+			decidedAt: candidates.decidedAt,
+			createdAt: candidates.createdAt,
+			summary: candidates.summary,
+			matching: labels(met),
+			missing: labels(sql`NOT ${met}`),
+			error: candidates.error,
+		})
 		.from(candidates)
 		.where(inJob(orgId, jobId))
 		.orderBy(sql`case ${candidates.status} when 'scored' then 0 when 'failed' then 2 else 1 end`, ...rankOrder);
 	let rank = 0;
 	return rows
-		.map((row) => ({ row, place: row.status === "scored" && row.score !== null ? ++rank : null }))
-		.filter(({ row }) => decision === "all" || row.decision === decision)
-		.map(({ row, place }) => ({
-			...toCandidate(row, place, rank),
-			phone: row.profile?.phone ?? null,
-		}));
+		.map((row) => ({ ...row, rank: row.status === "scored" && row.score !== null ? ++rank : null }))
+		.filter((row) => decision === "all" || row.decision === decision);
 }
 
 export async function getCandidate(db: Db, orgId: string, jobId: string, id: string): Promise<Candidate | null> {
