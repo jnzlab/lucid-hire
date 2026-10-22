@@ -1,7 +1,6 @@
 import { Show } from "@clerk/react";
 import { ApiStatus } from "../components/api-status.tsx";
 import { Logo } from "../components/logo.tsx";
-import { SessionCheck } from "../components/session-check.tsx";
 import { SignInLink } from "./ui.tsx";
 
 export function LandingFooter() {
@@ -22,9 +21,6 @@ export function LandingFooter() {
 				</nav>
 				<div className="foot-status">
 					<ApiStatus />
-					<Show when="signed-in">
-						<SessionCheck />
-					</Show>
 				</div>
 				<small>© 2026 LucidHire. The candidates on this page are fictional samples.</small>
 			</div>

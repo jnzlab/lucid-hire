@@ -1,5 +1,7 @@
 import { Show, UserButton } from "@clerk/react";
+import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
+import { ArrowRight } from "../components/icons.tsx";
 import { Logo } from "../components/logo.tsx";
 import { SignInLink, SignUpCta } from "./ui.tsx";
 
@@ -55,6 +57,9 @@ export function LandingHeader() {
 					<SignUpCta className="btn sm">Post a job free</SignUpCta>
 				</Show>
 				<Show when="signed-in">
+					<Link to="/dashboard" className="btn sm">
+						Dashboard <ArrowRight />
+					</Link>
 					<span className="hdr-user">
 						<UserButton />
 					</span>
