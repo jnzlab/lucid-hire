@@ -126,3 +126,10 @@ export function useSetCover(id: string) {
 export function useRemoveCover(id: string) {
 	return useSaveJob((_: void, token) => apiDeleteJson<{ job: Job }>(`/jobs/${id}/cover`, { token }));
 }
+
+// Where "Upload CVs" goes: the newest open job, else the newest job, else the new-job page.
+export function useUploadTarget(): { jobId: string | null } {
+	const jobs = useJobs().data;
+	const target = jobs?.find((job) => job.status === "open") ?? jobs?.[0];
+	return { jobId: target?.id ?? null };
+}

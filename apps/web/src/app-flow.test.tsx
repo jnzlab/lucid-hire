@@ -462,7 +462,7 @@ describe("jobs", () => {
 			}),
 		);
 
-		fireEvent.click(screen.getByRole("link", { name: /Jobs/ }));
+		fireEvent.click(within(screen.getByRole("main")).getByRole("link", { name: /Jobs/ }));
 		expect(await screen.findByRole("link", { name: /Sprite test role/ })).toBeTruthy();
 	});
 
@@ -470,7 +470,8 @@ describe("jobs", () => {
 		jobs = [];
 		renderAt("/dashboard");
 		expect(await screen.findByRole("link", { name: /Post your first job/ })).toBeTruthy();
-		expect(screen.queryByRole("link", { name: /Post a job/ })).toBeNull();
+		// The sidebar's shortcut is always there; the page's own button is what comes later.
+		expect(within(screen.getByRole("main")).queryByRole("link", { name: /Post a job/ })).toBeNull();
 		cleanup();
 
 		jobs = [
@@ -484,7 +485,8 @@ describe("jobs", () => {
 			},
 		];
 		const router = renderAt("/dashboard");
-		const post = await screen.findByRole("link", { name: /Post a job/ });
+		await screen.findByRole("link", { name: /Product Designer/ });
+		const post = within(screen.getByRole("main")).getByRole("link", { name: /Post a job/ });
 		expect(screen.queryByRole("link", { name: /New job/ })).toBeNull();
 		expect(screen.queryByRole("link", { name: /Post your first job/ })).toBeNull();
 
@@ -684,7 +686,7 @@ describe("unsaved changes on the job form", () => {
 		expect(await screen.findByRole("alertdialog", { name: "Leave without saving?" })).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
 		await dialogGone();
-		fireEvent.click(screen.getByRole("link", { name: /Jobs/ }));
+		fireEvent.click(within(screen.getByRole("main")).getByRole("link", { name: /Jobs/ }));
 		expect(await screen.findByRole("alertdialog", { name: "Leave without saving?" })).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
 		await dialogGone();
