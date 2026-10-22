@@ -548,6 +548,11 @@ TestSprite tests that deployment, and `main` redeploys them after a merge.
 | `lucidhire-app` | `lucidhire.io`, `www.lucidhire.io` (301 to the apex) | `apps/web/cloudflare.config.ts`: static assets in SPA mode, plus a tiny Worker that only does the `www` redirect |
 | `lucidhire-api` | `api.lucidhire.io` | `apps/api/cloudflare.config.ts`: Hono, CORS for `https://lucidhire.io` and local dev |
 
+D1: `lucidhire-db` (`c6c2834b-6af0-4a1b-9799-9dd0a58b13d5`), primary in US
+East (`enam`, owner, 2026-10-22), bound to the API as `DB`. `scripts/deploy.sh`
+applies `apps/api/migrations` before it deploys the API, with the Workers
+Builds token (it has D1 Write).
+
 Consequences to respect:
 - **A PR deploy changes the live site.** Never push a PR commit that is
   known to break the app (§3a, §6a). If a PR leaves the site broken, fix it
@@ -614,10 +619,14 @@ TestSprite's cloud browser has to get in. Constraints, from the docs:
   work on `localhost`, so local development uses the **development
   instance**. The owner approved turning on **email and password sign-in**
   and turning **bot protection off** on the production instance so that
-  TestSprite can sign in.
-- Create a dedicated recruiter test account with onboarding completed and a
-  seeded organisation. It goes into the TestSprite environment's
-  credentials, never into the repo.
+  TestSprite can sign in. Done 2026-10-22 with `clerk config patch`:
+  CAPTCHA off, and **device trust off** (it asks for an emailed code on a
+  new device, which TestSprite can't enter), also approved by the owner.
+- The recruiter test account: the owner creates it on
+  https://lucidhire.io/sign-up (we never type passwords) and puts its email
+  and password in the `default` environment's Test Account, never in the
+  repo. Its company is "Sprite Labs"; the sign-in test names it on its
+  first run if the owner stopped at onboarding.
 - **Turnstile (open):** Cloudflare's always-pass test keys (site key
   `1x00000000000000000000AA`, secret `1x0000000000000000000000000000000AA`)
   can't be used on the live site. Decide in the apply-portal PR how
@@ -629,8 +638,10 @@ TestSprite's cloud browser has to get in. Constraints, from the docs:
   test CVs in `lucid-hire-legacy/test/` can be reused.
 - Use stable, accessible selectors and labels (real `<button>`, `<label>`
   and `aria-*`). TestSprite's agent reads the DOM.
-- Use one TestSprite environment per role: `recruiter`, and `public` with
-  no sign-in for the candidate portal.
+- One environment, `default`, holds the recruiter test account. The agent
+  signs in only when a step asks it to, so signed-out tests run there too
+  (verified 2026-10-22: the signed-out redirect test passed with the
+  account set). Revisit for the candidate portal if that changes.
 
 ---
 
@@ -646,8 +657,12 @@ TestSprite's cloud browser has to get in. Constraints, from the docs:
 - Before every commit, check the staged diff for secrets. The repo is
   public and judges read it.
 - Never put test account passwords in tests, plan files or the README. They
-  belong in the TestSprite environment's Authentication settings, which mask
-  and redact them.
+  belong in the TestSprite environment's Test Account. The settings page
+  masks them, but **the run's step log does not** (verified 2026-10-22: the
+  password fill step names the password in plain text). So the TestSprite
+  project stays private to the owner's workspace, the test account's
+  password is used nowhere else, and run reports are never pasted
+  anywhere public.
 
 ---
 

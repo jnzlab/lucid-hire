@@ -7,8 +7,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 message="${WORKERS_CI_BRANCH:-local} ${WORKERS_CI_COMMIT_SHA:-$(git rev-parse HEAD)}"
 
-# The API goes first so the app never ships ahead of the endpoints it calls.
+# D1 migrations go first, so the API never ships ahead of its schema, and the API goes before the
+# app so the app never ships ahead of the endpoints it calls. Migrations must stay compatible with
+# the API version that is still live while they run.
 # The Workers Builds trigger lives on lucidhire-app; its name and tag checks don't apply to the API.
+(cd apps/api && pnpm db:migrate:remote)
 (cd apps/api && env -u WRANGLER_CI_MATCH_TAG -u WRANGLER_CI_OVERRIDE_NAME \
 	pnpm exec cf deploy --message "$message")
 (cd apps/web && pnpm exec cf deploy --message "$message")

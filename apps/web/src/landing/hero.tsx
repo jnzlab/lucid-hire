@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
+import { ArrowRight } from "../components/icons.tsx";
+import { Swipe } from "../components/swipe.tsx";
 import { REDUCED_MOTION, vars } from "./dom.ts";
-import { ArrowDown, ArrowRight, RING_PATH, SignUpCta, Tick } from "./ui.tsx";
+import { ArrowDown, RING_PATH, SignUpCta, Tick } from "./ui.tsx";
 
 const ARTBOARD_WIDTH = 520;
 
@@ -63,42 +65,6 @@ function Pen() {
 				<path d="M58 17h38" stroke="#141414" strokeWidth="3" strokeLinecap="round" opacity=".28" />
 			</svg>
 		</span>
-	);
-}
-
-function Swipe() {
-	return (
-		<svg className="swipe" viewBox="0 0 640 210" aria-hidden="true">
-			<defs>
-				<linearGradient id="swipe-ink" x1="0" y1="0" x2="0" y2="1">
-					<stop offset="0" stopColor="#FFE878" />
-					<stop offset=".16" stopColor="#FFF2AE" />
-					<stop offset=".5" stopColor="#FFF6C4" />
-					<stop offset=".84" stopColor="#FFF2AE" />
-					<stop offset="1" stopColor="#FFE878" />
-				</linearGradient>
-				<linearGradient id="swipe-pool" x1="0" y1="0" x2="1" y2="0">
-					<stop offset="0" stopColor="#FFDF55" />
-					<stop offset=".07" stopColor="#FFDF55" stopOpacity="0" />
-					<stop offset=".93" stopColor="#FFDF55" stopOpacity="0" />
-					<stop offset="1" stopColor="#FFDF55" />
-				</linearGradient>
-				<path
-					id="swipe-body"
-					d="M42 18C210 8 412 19 626 5L632 12C628 72 620 132 606 196C420 206 228 197 14 207L8 200C16 140 28 80 42 18Z"
-				/>
-			</defs>
-			<use href="#swipe-body" fill="url(#swipe-ink)" />
-			<use href="#swipe-body" fill="url(#swipe-pool)" />
-			<path
-				fill="none"
-				stroke="#FFE878"
-				strokeWidth="6"
-				strokeLinecap="round"
-				opacity=".55"
-				d="M40 68C222 61 420 70 620 58M28 152C220 145 420 154 610 143"
-			/>
-		</svg>
 	);
 }
 
@@ -178,7 +144,7 @@ export function Hero() {
 				</div>
 
 				<div className="hero-stage" ref={stage}>
-					<Swipe />
+					<Swipe className="swipe" />
 					<div
 						className="fit art"
 						ref={fit}

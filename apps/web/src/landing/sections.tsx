@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, ClaimCheck, STEP_RING_PATH, SignUpCta } from "./ui.tsx";
+import { ArrowRight } from "../components/icons.tsx";
+import { ClaimCheck, STEP_RING_PATH, SignUpCta } from "./ui.tsx";
 
 const JOB_LINK = "lucidhire.io/jobs/senior-ios-engineer";
 

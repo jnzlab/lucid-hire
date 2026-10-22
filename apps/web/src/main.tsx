@@ -4,6 +4,7 @@ import { createRouter, RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
+import { clerkAppearance, clerkLocalization } from "./lib/clerk-appearance.ts";
 import { CLERK_PUBLISHABLE_KEY } from "./lib/config.ts";
 import { routeTree } from "./routeTree.gen.ts";
 
@@ -18,7 +19,18 @@ declare module "@tanstack/react-router" {
 
 createRoot(document.getElementById("root")!).render(
 	<StrictMode>
-		<ClerkProvider publishableKey={CLERK_PUBLISHABLE_KEY} afterSignOutUrl="/">
+		<ClerkProvider
+			publishableKey={CLERK_PUBLISHABLE_KEY}
+			appearance={clerkAppearance}
+			localization={clerkLocalization}
+			signInUrl="/sign-in"
+			signUpUrl="/sign-up"
+			signInFallbackRedirectUrl="/dashboard"
+			signUpFallbackRedirectUrl="/onboarding"
+			afterSignOutUrl="/"
+			routerPush={(to) => router.navigate({ href: to })}
+			routerReplace={(to) => router.navigate({ href: to, replace: true })}
+		>
 			<QueryClientProvider client={queryClient}>
 				<RouterProvider router={router} />
 			</QueryClientProvider>

@@ -1,43 +1,24 @@
-import { SignInButton, SignUpButton } from "@clerk/react";
+import { useAuth } from "@clerk/react";
+import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
-// Until the Auth PR adds sign-up and sign-in pages, every "start" CTA opens Clerk's sign-up modal.
+// Every "start" CTA leads to sign-up, or straight to the dashboard for someone already signed in.
 export function SignUpCta({ className, children }: { className: string; children: ReactNode }) {
+	const { isSignedIn } = useAuth();
 	return (
-		<SignUpButton mode="modal">
-			<button type="button" className={className}>
-				{children}
-			</button>
-		</SignUpButton>
+		<Link to={isSignedIn ? "/dashboard" : "/sign-up/$"} className={className}>
+			{children}
+		</Link>
 	);
 }
 
 export function SignInLink() {
-	return (
-		<SignInButton mode="modal">
-			<button type="button">Sign in</button>
-		</SignInButton>
-	);
+	return <Link to="/sign-in/$">Sign in</Link>;
 }
 
 // The hand-drawn ink ring (design system §3) around a score, and the smaller one around step numbers.
 export const RING_PATH = "M118 14C92 2 40 4 18 30 2 50 6 92 40 112c34 18 92 10 110-22 14-28 0-64-38-78-12-4-24-4-34-2";
 export const STEP_RING_PATH = "M47 6C30-1 8 8 5 30c-3 20 14 33 31 31 18-2 28-17 25-33C58 14 47 7 33 7";
-
-export function ArrowRight() {
-	return (
-		<svg className="arr" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-			<path
-				d="M3 9h11M10 4.5 14.5 9 10 13.5"
-				fill="none"
-				stroke="currentColor"
-				strokeWidth="2"
-				strokeLinecap="round"
-				strokeLinejoin="round"
-			/>
-		</svg>
-	);
-}
 
 export function ArrowDown() {
 	return (

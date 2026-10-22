@@ -1,8 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "./app.ts";
 import type { SessionVerifier } from "./auth.ts";
+import { createTestD1 } from "./test/d1.ts";
 
-const env = { CLERK_SECRET_KEY: "sk_test_unit" } as Env;
+let env: Env;
+let dispose: () => Promise<void>;
+
+beforeAll(async () => {
+	const testD1 = await createTestD1();
+	env = { CLERK_SECRET_KEY: "sk_test_unit", DB: testD1.d1 } as Env;
+	dispose = testD1.dispose;
+});
+
+afterAll(() => dispose());
 
 const acceptOnlyGoodToken: SessionVerifier = async (token) => {
 	if (token !== "good-token") throw new Error("invalid token");
@@ -72,11 +82,53 @@ describe("GET /me", () => {
 		expect(await res.json()).toMatchObject({ error: { code: "invalid_session" } });
 	});
 
-	it("returns the signed-in user for a valid session token", async () => {
+	it("returns the signed-in user, with no company before onboarding", async () => {
 		const res = await app.request("/me", { headers: { authorization: "Bearer good-token" } }, env);
 
 		expect(res.status).toBe(200);
-		expect(await res.json()).toEqual({ userId: "user_123" });
+		expect(res.headers.get("cache-control")).toBe("no-store");
+		expect(await res.json()).toEqual({ userId: "user_123", org: null });
+	});
+});
+
+describe("POST /orgs", () => {
+	const post = (body: unknown, authorization = "Bearer good-token") =>
+		app.request(
+			"/orgs",
+			{
+				method: "POST",
+				headers: { authorization, "content-type": "application/json" },
+				body: typeof body === "string" ? body : JSON.stringify(body),
+			},
+			env,
+		);
+
+	it("requires a session", async () => {
+		const res = await post({ name: "Acme" }, "");
+
+		expect(res.status).toBe(401);
+	});
+
+	it("rejects a missing, too short or unparseable name", async () => {
+		for (const body of [{}, { name: " A " }, { name: 7 }, "not json"]) {
+			const res = await post(body);
+			expect(res.status).toBe(400);
+			expect(await res.json()).toMatchObject({ error: { code: "invalid_name" } });
+		}
+	});
+
+	it("creates the company once, then returns it, and /me reports it", async () => {
+		const created = await post({ name: "  Acme   Hiring " });
+		expect(created.status).toBe(201);
+		const { org } = (await created.json()) as { org: { id: string } };
+		expect(org).toMatchObject({ name: "Acme Hiring", role: "admin" });
+
+		const repeated = await post({ name: "Another Name" });
+		expect(repeated.status).toBe(200);
+		expect(await repeated.json()).toEqual({ org });
+
+		const me = await app.request("/me", { headers: { authorization: "Bearer good-token" } }, env);
+		expect(await me.json()).toEqual({ userId: "user_123", org });
 	});
 });
 

@@ -495,16 +495,9 @@
 @keyframes lp-scan{0%{opacity:0;transform:translateY(-64px)}10%{opacity:1}88%{opacity:1}100%{opacity:0;transform:translateY(380px)}}
 
 /* Additions */
-/* Sign in opens Clerk, so it is a button that has to look like the nav and footer links. */
-.lp .nav button,.lp .foot nav button{border:0;background:none;cursor:pointer}
-.lp .nav button{font:500 15px/1 var(--body);color:var(--ink-2);padding:12px 12px;border-radius:6px;transition:background-color .2s}
-.lp .nav button:hover{background:var(--paper-2);color:var(--ink)}
-.lp .foot nav button{display:inline-flex;align-items:center;min-height:44px;padding:0;font:inherit;color:var(--ink-2)}
-.lp .foot nav button:hover{text-decoration:underline}
-@media (max-width:760px){.lp .nav button{display:none}}
 /* Preflight removes link underlines; the prototype relies on the browser default. */
 .lp a{text-decoration-line:underline}
-/* Signed-in visitors see their Clerk account button where the header CTA was. */
+/* Signed-in visitors get a dashboard button and their Clerk account button instead of the CTA. */
 .lp .hdr-user{display:inline-flex;margin-left:8px}
 /* The live API status from the scaffold, now in the footer. */
 .lp .foot-status{display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px}
