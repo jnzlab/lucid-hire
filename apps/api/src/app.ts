@@ -5,6 +5,7 @@ import { type DescriptionEnhancer, enhanceWithGemini } from "./ai.ts";
 import { requireAuth, verifyClerkSession, type SessionVerifier } from "./auth.ts";
 import { ALLOWED_ORIGINS } from "./config.ts";
 import { getDb } from "./db/client.ts";
+import { type QuestionWriter, writeQuestionsWithGemini } from "./interview-questions.ts";
 import { jobRoutes } from "./jobs-routes.ts";
 import { ORG_NAME_MAX, ORG_NAME_MIN, createOrgForUser, findOrgForUser, normalizeOrgName } from "./orgs.ts";
 import type { AppEnv } from "./types.ts";
@@ -15,11 +16,13 @@ const REQUEST_ID_PATTERN = /^[A-Za-z0-9-]{1,128}$/;
 type AppOptions = {
 	verifySession?: SessionVerifier;
 	enhanceDescription?: DescriptionEnhancer;
+	writeQuestions?: QuestionWriter;
 };
 
 export function createApp({
 	verifySession = verifyClerkSession,
 	enhanceDescription = enhanceWithGemini,
+	writeQuestions = writeQuestionsWithGemini,
 }: AppOptions = {}) {
 	const app = new Hono<AppEnv>();
 
@@ -81,7 +84,7 @@ export function createApp({
 		return c.json({ org }, created ? 201 : 200);
 	});
 
-	app.route("/jobs", jobRoutes({ auth, enhance: enhanceDescription }));
+	app.route("/jobs", jobRoutes({ auth, enhance: enhanceDescription, writeQuestions }));
 
 	app.notFound((c) =>
 		c.json(

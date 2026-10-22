@@ -6,6 +6,7 @@ import { requireOrg } from "./auth.ts";
 import { candidateRoutes } from "./candidates-routes.ts";
 import { deleteCvFiles, listFileKeys } from "./candidates.ts";
 import { getDb } from "./db/client.ts";
+import type { QuestionWriter } from "./interview-questions.ts";
 import {
 	createJob,
 	createJobInput,
@@ -16,6 +17,7 @@ import {
 	updateJob,
 	updateJobInput,
 } from "./jobs.ts";
+import { questionRoutes } from "./questions-routes.ts";
 import type { AppEnv } from "./types.ts";
 
 // Zod failures in the API's error shape: the first message, plus the first message for each field.
@@ -33,10 +35,14 @@ function validJson<T extends z.ZodType>(schema: T) {
 
 const notFound = { error: { code: "not_found", message: "That job doesn't exist or isn't yours" } };
 
-type JobRouteOptions = { auth: MiddlewareHandler<AppEnv>; enhance: DescriptionEnhancer };
+type JobRouteOptions = {
+	auth: MiddlewareHandler<AppEnv>;
+	enhance: DescriptionEnhancer;
+	writeQuestions: QuestionWriter;
+};
 
 // The signed-in company's jobs. Every route needs a session and a company.
-export function jobRoutes({ auth, enhance }: JobRouteOptions) {
+export function jobRoutes({ auth, enhance, writeQuestions }: JobRouteOptions) {
 	const routes = new Hono<AppEnv>();
 	routes.use(auth, requireOrg);
 
@@ -112,6 +118,7 @@ export function jobRoutes({ auth, enhance }: JobRouteOptions) {
 	});
 
 	routes.route("/", candidateRoutes());
+	routes.route("/", questionRoutes({ write: writeQuestions }));
 
 	return routes;
 }
