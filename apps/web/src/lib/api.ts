@@ -15,10 +15,26 @@ export class ApiError extends Error {
 	}
 }
 
+// What the recruiter reads when a call fails without the API saying why.
+export const NETWORK_ERROR_MESSAGE = "We couldn't reach LucidHire. Check your connection and try again.";
+export const SERVER_ERROR_MESSAGE = "Something went wrong on our side. Try again.";
+const UNKNOWN_ERROR_MESSAGE = "Something went wrong. Try again.";
+
 type ApiRequestOptions = {
 	token?: string | null;
 	signal?: AbortSignal;
 };
+
+// fetch, with a failed connection turned into an ApiError in plain words. A call the page cancelled keeps
+// its own error, which the caller expects.
+async function send(url: string, init: RequestInit): Promise<Response> {
+	try {
+		return await fetch(url, init);
+	} catch (error) {
+		if (init.signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) throw error;
+		throw new ApiError(0, NETWORK_ERROR_MESSAGE, "network_error");
+	}
+}
 
 // Reads the JSON body of a response, or throws the API's error with its message and code.
 async function parse<T>(res: Response): Promise<T> {
@@ -28,7 +44,7 @@ async function parse<T>(res: Response): Promise<T> {
 		} | null;
 		throw new ApiError(
 			res.status,
-			error?.error?.message ?? `Request failed with ${res.status}`,
+			error?.error?.message || (res.status >= 500 ? SERVER_ERROR_MESSAGE : UNKNOWN_ERROR_MESSAGE),
 			error?.error?.code,
 			error?.error?.fields,
 		);
@@ -48,7 +64,7 @@ async function request<T>(
 	if (body !== undefined) headers["Content-Type"] = "application/json";
 
 	return parse<T>(
-		await fetch(`${API_URL}${path}`, {
+		await send(`${API_URL}${path}`, {
 			method,
 			headers,
 			body: body === undefined ? undefined : JSON.stringify(body),
@@ -64,7 +80,7 @@ export function apiGet<T>(path: string, options: ApiRequestOptions = {}): Promis
 // Downloads a file, like a CV's PDF. A refusal is parsed like any other call, so it throws the API's error.
 export async function apiGetBlob(path: string, { token, signal }: ApiRequestOptions = {}): Promise<Blob> {
 	const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-	const res = await fetch(`${API_URL}${path}`, { method: "GET", headers, signal });
+	const res = await send(`${API_URL}${path}`, { method: "GET", headers, signal });
 	return res.ok ? res.blob() : parse<never>(res);
 }
 
@@ -85,5 +101,5 @@ export function apiDelete(path: string, options: ApiRequestOptions = {}): Promis
 export async function apiUploadPdf<T>(path: string, file: File, { token, signal }: ApiRequestOptions = {}): Promise<T> {
 	const headers: Record<string, string> = { "Content-Type": "application/pdf" };
 	if (token) headers.Authorization = `Bearer ${token}`;
-	return parse<T>(await fetch(`${API_URL}${path}`, { method: "POST", headers, body: file, signal }));
+	return parse<T>(await send(`${API_URL}${path}`, { method: "POST", headers, body: file, signal }));
 }

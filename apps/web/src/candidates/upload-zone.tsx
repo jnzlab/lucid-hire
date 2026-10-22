@@ -1,6 +1,7 @@
-import { type DragEvent, useId, useState } from "react";
+import { type DragEvent, useId, useRef, useState } from "react";
 import { Check } from "../components/icons.tsx";
 import { CV_MAX_BYTES, type UploadItem, type useUploadCvs } from "../lib/candidates.ts";
+import { useCoarsePointer } from "../lib/use-coarse-pointer.ts";
 
 const hasFiles = (event: DragEvent) => event.dataTransfer.types.includes("Files");
 
@@ -40,12 +41,20 @@ export function UploadZone({
 	slotsLeft: number;
 }) {
 	const [dragging, setDragging] = useState(false);
+	const coarse = useCoarsePointer();
 	const inputId = useId();
 	const helpId = useId();
+	const inputRef = useRef<HTMLInputElement>(null);
+	const noteRef = useRef<HTMLParagraphElement>(null);
 	const busy = items.some(({ state }) => state === "waiting" || state === "uploading");
 	const summary = summarise(items);
 	const takeFiles = (files: FileList | null) => {
 		if (files) void upload([...files], slotsLeft);
+	};
+	// "Clear list" goes away with the list, so focus moves on to the chooser (or, when the job can't take CVs, its note).
+	const clearList = () => {
+		clear();
+		(inputRef.current ?? noteRef.current)?.focus();
 	};
 
 	return (
@@ -72,13 +81,14 @@ export function UploadZone({
 				<div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
 					<div className="min-w-0">
 						<p className="text-[17px] leading-[1.2] font-[800] [font-stretch:108%]">
-							{dragging ? "Drop to upload" : "Drop CVs here"}
+							{dragging ? "Drop to upload" : coarse ? "Add CVs" : "Drop CVs here"}
 						</p>
 						<p id={helpId} className="mt-1 font-mono text-[12px] text-ink-muted">
 							PDF only · up to {CV_MAX_BYTES / (1024 * 1024)} MB each
 						</p>
 					</div>
 					<input
+						ref={inputRef}
 						id={inputId}
 						type="file"
 						accept="application/pdf"
@@ -99,7 +109,9 @@ export function UploadZone({
 					</label>
 				</div>
 			) : (
-				<p className="text-[15px] text-ink-2">{note}</p>
+				<p ref={noteRef} tabIndex={-1} className="text-[15px] text-ink-2">
+					{note}
+				</p>
 			)}
 
 			<p
@@ -126,7 +138,7 @@ export function UploadZone({
 						<button
 							type="button"
 							className="mt-1 min-h-11 rounded-[3px] px-1 text-[14px] font-semibold underline underline-offset-[.18em]"
-							onClick={clear}
+							onClick={clearList}
 						>
 							Clear list
 						</button>

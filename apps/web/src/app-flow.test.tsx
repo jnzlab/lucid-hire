@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/react-router";
+import { RouterProvider, createBrowserHistory, createMemoryHistory } from "@tanstack/react-router";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { type Mock, type MockInstance, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -10,7 +10,7 @@ import {
 	type Decision,
 	useDecideCandidate,
 } from "./lib/candidates.ts";
-import { routeTree } from "./routeTree.gen.ts";
+import { createAppRouter } from "./router.ts";
 
 // Clerk is replaced by a session we control; the API by an in-memory fake of /me, /orgs, /jobs and the
 // candidates under each job.
@@ -237,7 +237,7 @@ afterEach(() => {
 });
 
 function renderAt(path: string) {
-	const router = createRouter({ routeTree, history: createMemoryHistory({ initialEntries: [path] }) });
+	const router = createAppRouter(createMemoryHistory({ initialEntries: [path] }));
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	render(
 		<QueryClientProvider client={client}>
@@ -245,6 +245,18 @@ function renderAt(path: string) {
 		</QueryClientProvider>,
 	);
 	return router;
+}
+
+// Holds back the answer to the requests `match` picks until `release()`. The fake server has already handled them,
+// so what is released is a snapshot of the moment they were sent.
+function hold(match: (url: string, init?: RequestInit) => boolean) {
+	const answer = fetchMock.getMockImplementation()!;
+	const held: Array<() => void> = [];
+	fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+		const response = answer(url, init);
+		return match(url, init) ? new Promise((resolve) => held.push(() => resolve(response))) : response;
+	});
+	return { pending: () => held.length, release: () => held.splice(0).forEach((send) => send()) };
 }
 
 describe("signing in for the first time", () => {
@@ -259,6 +271,8 @@ describe("signing in for the first time", () => {
 			"textContent",
 			"✕ Enter a company name between 2 and 80 characters",
 		);
+		// Focus goes to the field with the problem.
+		expect(document.activeElement).toBe(input);
 		expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining("/orgs"), expect.anything());
 
 		fireEvent.change(input, { target: { value: "  Sprite   Labs " } });
@@ -338,6 +352,33 @@ describe("jobs", () => {
 		expect(await screen.findByRole("link", { name: /Sprite test role/ })).toBeTruthy();
 	});
 
+	it("offers Post a job on the list once there are jobs, and Post your first job before", async () => {
+		jobs = [];
+		renderAt("/dashboard");
+		expect(await screen.findByRole("link", { name: /Post your first job/ })).toBeTruthy();
+		expect(screen.queryByRole("link", { name: /Post a job/ })).toBeNull();
+		cleanup();
+
+		jobs = [
+			{
+				id: "job_5",
+				title: "Product Designer",
+				description: "Figma",
+				status: "open",
+				createdAt: "2026-10-22T12:00:00Z",
+				updatedAt: "2026-10-22T12:00:00Z",
+			},
+		];
+		const router = renderAt("/dashboard");
+		const post = await screen.findByRole("link", { name: /Post a job/ });
+		expect(screen.queryByRole("link", { name: /New job/ })).toBeNull();
+		expect(screen.queryByRole("link", { name: /Post your first job/ })).toBeNull();
+
+		fireEvent.click(post);
+		expect(await screen.findByRole("heading", { level: 1, name: "Post a job" })).toBeTruthy();
+		expect(router.state.location.pathname).toBe("/dashboard/jobs/new");
+	});
+
 	it("saves a draft, and rewrites rough notes with AI that the recruiter can undo", async () => {
 		renderAt("/dashboard/jobs/new");
 
@@ -383,6 +424,11 @@ describe("jobs", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Close job" }));
 		expect(await screen.findByRole("button", { name: /Reopen job/ })).toBeTruthy();
 		expect(screen.getAllByText("Closed").length).toBeGreaterThan(0);
+		expect((await screen.findByText("Job closed")).getAttribute("aria-live")).toBe("polite");
+
+		fireEvent.click(screen.getByRole("button", { name: /Reopen job/ }));
+		expect(await screen.findByText("Job reopened")).toBeTruthy();
+		expect(screen.queryByText("Job closed")).toBeNull();
 	});
 
 	it("lets an admin delete a job after confirming", async () => {
@@ -401,6 +447,10 @@ describe("jobs", () => {
 		fireEvent.click(await screen.findByRole("button", { name: "Delete job" }));
 		const dialog = await screen.findByRole("alertdialog", { name: "Delete “Sprite test role”?" });
 		expect(document.activeElement).toHaveProperty("textContent", "Cancel");
+		// The dialog is described by its body text.
+		expect(document.getElementById(dialog.getAttribute("aria-describedby")!)?.textContent).toBe(
+			"It's removed for everyone at Sprite Labs. You can't undo this.",
+		);
 		// Hold the list's refetch, so the list can only show what the cache holds after the delete.
 		const answer = fetchMock.getMockImplementation()!;
 		fetchMock.mockImplementation((url: string, init?: RequestInit) =>
@@ -408,7 +458,9 @@ describe("jobs", () => {
 		);
 		fireEvent.click(within(dialog).getByRole("button", { name: "Delete job" }));
 
-		expect(await screen.findByText("Deleted “Sprite test role”")).toBeTruthy();
+		const deleted = await screen.findByText("Deleted “Sprite test role”");
+		// Announced: the banner went into a polite live region that was already on the page.
+		expect(deleted.closest("[aria-live]")?.getAttribute("aria-live")).toBe("polite");
 		expect(router.state.location.pathname).toBe("/dashboard");
 		const list = screen.getByRole("region", { name: "Your jobs" });
 		expect(within(list).queryByText("Sprite test role")).toBeNull();
@@ -437,6 +489,403 @@ describe("jobs", () => {
 	});
 });
 
+describe("unsaved changes on the job form", () => {
+	const dataScientist = (): FakeJob => ({
+		id: "job_7",
+		title: "Data Scientst",
+		description: "Python",
+		status: "draft",
+		createdAt: "2026-10-22T12:00:00Z",
+		updatedAt: "2026-10-22T12:00:00Z",
+	});
+	// What the browser does when the tab is closed or reloaded: true if something asked to hold it back.
+	const unloadIsHeldBack = () => {
+		const event = new Event("beforeunload", { cancelable: true });
+		window.dispatchEvent(event);
+		return event.defaultPrevented;
+	};
+	// The dialog goes once the blocker has been told which way to go, which takes a tick.
+	const dialogGone = () => waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+	let confirm: MockInstance<typeof window.confirm>;
+
+	beforeEach(() => {
+		org = { id: "org_1", name: "Sprite Labs", role: "admin" };
+		jobs = [dataScientist()];
+		confirm = vi.spyOn(window, "confirm");
+	});
+
+	afterEach(() => confirm.mockRestore());
+
+	it("asks before Cancel throws away typing on a new job, and stays on Keep editing", async () => {
+		const router = renderAt("/dashboard/jobs/new");
+		const title = (await screen.findByLabelText("Job title")) as HTMLInputElement;
+		fireEvent.change(title, { target: { value: "iOS Engineer" } });
+		const cancel = screen.getByRole("link", { name: "Cancel" });
+		cancel.focus();
+
+		fireEvent.click(cancel);
+		const dialog = await screen.findByRole("alertdialog", { name: "Leave without saving?" });
+		expect(document.getElementById(dialog.getAttribute("aria-describedby")!)?.textContent).toBe(
+			"Your changes to this job aren't saved.",
+		);
+		expect(within(dialog).getAllByRole("button").map((button) => button.textContent)).toEqual(["Keep editing", "Leave"]);
+		expect(document.activeElement).toHaveProperty("textContent", "Keep editing");
+		expect(router.state.location.pathname).toBe("/dashboard/jobs/new");
+
+		// Tab stays inside the dialog.
+		within(dialog).getByRole("button", { name: "Leave" }).focus();
+		expect(fireEvent.keyDown(document, { key: "Tab" })).toBe(false);
+		expect(document.activeElement).toHaveProperty("textContent", "Keep editing");
+
+		// Escape is Keep editing: the form is as it was, and focus is back on the link that was clicked.
+		fireEvent.keyDown(document, { key: "Escape" });
+		await dialogGone();
+		expect(router.state.location.pathname).toBe("/dashboard/jobs/new");
+		expect(title.value).toBe("iOS Engineer");
+		expect(document.activeElement).toBe(cancel);
+
+		// Leave goes where the link goes.
+		fireEvent.click(cancel);
+		fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Leave" }));
+		expect(await screen.findByRole("heading", { level: 1, name: "Jobs" })).toBeTruthy();
+		expect(router.state.location.pathname).toBe("/dashboard");
+		expect(screen.queryByRole("alertdialog")).toBeNull();
+		expect(confirm).not.toHaveBeenCalled();
+	});
+
+	it("lets a form nobody has typed in go at once, by Cancel or any other link", async () => {
+		const router = renderAt("/dashboard/jobs/new");
+		fireEvent.click(await screen.findByRole("link", { name: "Cancel" }));
+		expect(await screen.findByRole("heading", { level: 1, name: "Jobs" })).toBeTruthy();
+		expect(screen.queryByRole("alertdialog")).toBeNull();
+		expect(router.state.location.pathname).toBe("/dashboard");
+	});
+
+	it("asks before any link leaves an edited job, and lets go once the edit is undone", async () => {
+		const router = renderAt("/dashboard/jobs/job_7/edit");
+		const title = (await screen.findByLabelText("Job title")) as HTMLInputElement;
+		fireEvent.change(title, { target: { value: "Data Scientist" } });
+
+		fireEvent.click(screen.getByRole("link", { name: "LucidHire dashboard" }));
+		expect(await screen.findByRole("alertdialog", { name: "Leave without saving?" })).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+		await dialogGone();
+		fireEvent.click(screen.getByRole("link", { name: /Jobs/ }));
+		expect(await screen.findByRole("alertdialog", { name: "Leave without saving?" })).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+		await dialogGone();
+		expect(router.state.location.pathname).toBe("/dashboard/jobs/job_7/edit");
+
+		// The same words as before: nothing to lose.
+		fireEvent.change(title, { target: { value: "Data Scientst" } });
+		fireEvent.click(screen.getByRole("link", { name: "Cancel" }));
+		expect(await screen.findByRole("heading", { level: 1, name: "Data Scientst" })).toBeTruthy();
+		expect(router.state.location.pathname).toBe("/dashboard/jobs/job_7");
+		expect(screen.queryByRole("alertdialog")).toBeNull();
+	});
+
+	it("holds back closing the tab only while there is something unsaved", async () => {
+		// Only a browser history listens for the tab closing.
+		window.history.replaceState({}, "", "/dashboard/jobs/new");
+		const router = createAppRouter(createBrowserHistory());
+		render(
+			<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+				<RouterProvider router={router} />
+			</QueryClientProvider>,
+		);
+		try {
+			const title = await screen.findByLabelText("Job title");
+			expect(unloadIsHeldBack()).toBe(false);
+
+			fireEvent.change(title, { target: { value: "iOS Engineer" } });
+			await waitFor(() => expect(unloadIsHeldBack()).toBe(true));
+			fireEvent.change(title, { target: { value: "" } });
+			await waitFor(() => expect(unloadIsHeldBack()).toBe(false));
+		} finally {
+			router.history.destroy();
+			window.history.replaceState({}, "", "/");
+		}
+	});
+
+	it("never holds back a save: Open job, Save as draft and Save changes go straight through", async () => {
+		const router = renderAt("/dashboard/jobs/new");
+		fireEvent.change(await screen.findByLabelText("Job title"), { target: { value: "iOS Engineer" } });
+		fireEvent.change(screen.getByLabelText("Description"), { target: { value: "swift 5y" } });
+		fireEvent.click(screen.getByRole("button", { name: /Open job/ }));
+
+		expect(await screen.findByRole("heading", { level: 1, name: "iOS Engineer" })).toBeTruthy();
+		expect(router.state.location.pathname).toBe("/dashboard/jobs/job_2");
+		expect(screen.queryByRole("alertdialog")).toBeNull();
+		expect(unloadIsHeldBack()).toBe(false);
+		cleanup();
+
+		const second = renderAt("/dashboard/jobs/new");
+		fireEvent.change(await screen.findByLabelText("Job title"), { target: { value: "Product Designer" } });
+		fireEvent.change(screen.getByLabelText("Description"), { target: { value: "figma" } });
+		fireEvent.click(screen.getByRole("button", { name: "Save as draft" }));
+
+		expect(await screen.findByRole("heading", { level: 1, name: "Product Designer" })).toBeTruthy();
+		expect(second.state.location.pathname).toBe("/dashboard/jobs/job_3");
+		expect(screen.queryByRole("alertdialog")).toBeNull();
+		cleanup();
+
+		const third = renderAt("/dashboard/jobs/job_7/edit");
+		fireEvent.change(await screen.findByLabelText("Job title"), { target: { value: "Data Scientist" } });
+		fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+		expect(await screen.findByRole("heading", { level: 1, name: "Data Scientist" })).toBeTruthy();
+		expect(third.state.location.pathname).toBe("/dashboard/jobs/job_7");
+		expect(screen.queryByRole("alertdialog")).toBeNull();
+		expect(unloadIsHeldBack()).toBe(false);
+		expect(confirm).not.toHaveBeenCalled();
+	});
+});
+
+describe("page states and focus", () => {
+	const keptRole = (fields: Partial<FakeJob> = {}): FakeJob => ({
+		id: "job_3",
+		title: "Kept role",
+		description: "Swift, SwiftUI, 5 years.",
+		status: "open",
+		createdAt: "2026-10-22T12:00:00Z",
+		updatedAt: "2026-10-22T12:00:00Z",
+		...fields,
+	});
+	// Makes the requests `match` picks fail with `respond`'s answer; everything else is answered as before.
+	const failRequests = (match: (url: string) => boolean, respond: () => Promise<Response>) => {
+		const answer = fetchMock.getMockImplementation()!;
+		fetchMock.mockImplementation((url: string, init?: RequestInit) => (match(url) ? respond() : answer(url, init)));
+	};
+
+	beforeEach(() => {
+		org = { id: "org_1", name: "Sprite Labs", role: "admin" };
+		jobs = [keptRole()];
+	});
+
+	it("moves focus to the page's h1 when a page opens, and draws no ring on it", async () => {
+		renderAt("/dashboard");
+
+		const heading = await screen.findByRole("heading", { level: 1, name: "Jobs" });
+		await waitFor(() => expect(document.activeElement).toBe(heading));
+		expect(heading.getAttribute("tabindex")).toBe("-1");
+		expect(heading.className).toContain("focus:outline-none");
+
+		fireEvent.click(screen.getByRole("link", { name: /Kept role/ }));
+		const title = await screen.findByRole("heading", { level: 1, name: "Kept role" });
+		await waitFor(() => expect(document.activeElement).toBe(title));
+	});
+
+	it("gives a page that is loading an h1 for screen readers", async () => {
+		const loading = hold((url) => url.endsWith("/jobs/job_3"));
+		renderAt("/dashboard/jobs/job_3");
+
+		const heading = await screen.findByRole("heading", { level: 1, name: "Loading job" });
+		expect(heading.className).toContain("sr-only");
+		await act(async () => loading.release());
+		expect(await screen.findByRole("heading", { level: 1, name: "Kept role" })).toBeTruthy();
+	});
+
+	it("words every wait as Loading, on the page it is for", async () => {
+		const account = hold((url) => url.endsWith("/me"));
+		renderAt("/dashboard");
+		expect(await screen.findByRole("heading", { level: 1, name: "Loading your dashboard" })).toBeTruthy();
+		await act(async () => account.release());
+		cleanup();
+
+		org = null;
+		const onboarding = hold((url) => url.endsWith("/me"));
+		renderAt("/onboarding");
+		expect(await screen.findByRole("heading", { level: 1, name: "Loading your account" })).toBeTruthy();
+		await act(async () => onboarding.release());
+	});
+
+	it("words the wait for a job, a job to edit and a candidate the same way", async () => {
+		candidates = [fakeCandidate({ id: "cand_grace", jobId: "job_3" })];
+		const waiting = hold((url) => /\/jobs\/job_3(\/candidates\/cand_grace)?$/.test(url));
+
+		renderAt("/dashboard/jobs/job_3/edit");
+		expect(await screen.findByRole("heading", { level: 1, name: "Loading job" })).toBeTruthy();
+		cleanup();
+
+		renderAt("/dashboard/jobs/job_3/candidates/cand_grace");
+		expect(await screen.findByRole("heading", { level: 1, name: "Loading candidate" })).toBeTruthy();
+		await act(async () => waiting.release());
+	});
+
+	it("makes an error that is the whole page its h1, and keeps h2 for one inside a page", async () => {
+		renderAt("/dashboard/jobs/missing");
+		expect(await screen.findByRole("heading", { level: 1, name: "✕ This job doesn't exist" })).toBeTruthy();
+		cleanup();
+
+		renderAt("/dashboard/jobs/job_3/candidates/missing");
+		expect(await screen.findByRole("heading", { level: 1, name: "✕ This candidate doesn't exist" })).toBeTruthy();
+		cleanup();
+
+		// A job is asked for twice before it counts as failed, a second apart.
+		const couldntLoad = { level: 1, name: "✕ We couldn't load this job" };
+		failRequests((url) => url.endsWith("/jobs/job_3"), async () => apiError(503, "unavailable", "Try again later"));
+		renderAt("/dashboard/jobs/job_3");
+		expect(await screen.findByRole("heading", couldntLoad, { timeout: 3000 })).toBeTruthy();
+		cleanup();
+		renderAt("/dashboard/jobs/job_3/edit");
+		expect(await screen.findByRole("heading", couldntLoad, { timeout: 3000 })).toBeTruthy();
+		cleanup();
+
+		// The jobs list already sits under the page's own "Jobs".
+		failRequests((url) => url.endsWith("/jobs"), async () => apiError(503, "unavailable", "Try again later"));
+		renderAt("/dashboard");
+		expect(await screen.findByRole("heading", { level: 2, name: "✕ We couldn't load your jobs" })).toBeTruthy();
+		expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+	});
+
+	it("says in plain words when the API can't be reached or has nothing to say", async () => {
+		failRequests((url) => url.endsWith("/jobs"), async () => Promise.reject(new TypeError("Failed to fetch")));
+		renderAt("/dashboard");
+		expect(await screen.findByText("We couldn't reach LucidHire. Check your connection and try again.")).toBeTruthy();
+		expect(screen.queryByText(/Failed to fetch/)).toBeNull();
+		cleanup();
+
+		failRequests((url) => url.endsWith("/jobs"), async () => new Response("<html>Bad gateway</html>", { status: 502 }));
+		renderAt("/dashboard");
+		expect(await screen.findByText("Something went wrong on our side. Try again.")).toBeTruthy();
+		expect(screen.queryByText(/Request failed with/)).toBeNull();
+	});
+
+	it("shows a page for an address that matches nothing, with a link back for signed-in and signed-out visitors", async () => {
+		renderAt("/dashboard/nowhere");
+		expect(await screen.findByRole("heading", { level: 1, name: "✕ This page doesn't exist" })).toBeTruthy();
+		expect(document.title).toBe("Page not found · LucidHire");
+		expect(screen.getByRole("link", { name: "Back to your jobs" }).getAttribute("href")).toBe("/dashboard");
+		cleanup();
+
+		session.signedIn = false;
+		renderAt("/nowhere");
+		expect(await screen.findByRole("heading", { level: 1, name: "✕ This page doesn't exist" })).toBeTruthy();
+		expect(screen.getByRole("link", { name: "Back to home" }).getAttribute("href")).toBe("/");
+		expect(screen.queryByRole("link", { name: "Back to your jobs" })).toBeNull();
+	});
+
+	it("catches a page that crashes, says so plainly and offers to try again", async () => {
+		const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			// A date nobody can format crashes the list while it renders.
+			jobs = [keptRole({ createdAt: "not a date" })];
+			renderAt("/dashboard");
+
+			expect(await screen.findByRole("heading", { level: 1, name: "✕ Something went wrong" })).toBeTruthy();
+			expect(screen.getByText("This page hit a problem. Try again.")).toBeTruthy();
+			expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+			expect(screen.queryByText(/RangeError|Invalid time/)).toBeNull();
+		} finally {
+			logged.mockRestore();
+		}
+	});
+
+	it("focuses the first field with a problem when a job is saved", async () => {
+		renderAt("/dashboard/jobs/new");
+		const title = await screen.findByLabelText("Job title");
+
+		fireEvent.click(screen.getByRole("button", { name: /Open job/ }));
+		expect(document.activeElement).toBe(title);
+
+		fireEvent.change(title, { target: { value: "iOS Engineer" } });
+		fireEvent.click(screen.getByRole("button", { name: /Open job/ }));
+		expect(document.activeElement).toBe(screen.getByLabelText("Description"));
+	});
+
+	it("keeps the save buttons focusable while a job saves, and saves it once", async () => {
+		renderAt("/dashboard/jobs/new");
+		fireEvent.change(await screen.findByLabelText("Job title"), { target: { value: "iOS Engineer" } });
+		fireEvent.change(screen.getByLabelText("Description"), { target: { value: "swift 5y" } });
+		const saving = hold((url, init) => url.endsWith("/jobs") && init?.method === "POST");
+		const draft = screen.getByRole("button", { name: "Save as draft" }) as HTMLButtonElement;
+		draft.focus();
+
+		fireEvent.click(draft);
+		await waitFor(() => expect(saving.pending()).toBe(1));
+		expect(draft.getAttribute("aria-disabled")).toBe("true");
+		expect(draft.disabled).toBe(false);
+		expect(document.activeElement).toBe(draft);
+		// Neither button saves it a second time while it is busy.
+		fireEvent.click(draft);
+		fireEvent.click(screen.getByRole("button", { name: /Saving/ }));
+		expect(saving.pending()).toBe(1);
+
+		await act(async () => saving.release());
+		expect(await screen.findByRole("heading", { level: 1, name: "iOS Engineer" })).toBeTruthy();
+		expect(jobs.filter((job) => job.title === "iOS Engineer")).toHaveLength(1);
+	});
+
+	it("keeps Retry focusable on the candidate page while it retries", async () => {
+		candidates = [
+			fakeCandidate({
+				id: "cand_bad",
+				fileName: "scan.pdf",
+				status: "failed",
+				error: "Scoring failed. Try again.",
+				canRetry: true,
+			}),
+		];
+		jobs = [{ ...keptRole({ id: "job_1" }), cvCount: 1 }];
+		renderAt("/dashboard/jobs/job_1/candidates/cand_bad");
+		const retry = (await screen.findByRole("button", { name: "Retry" })) as HTMLButtonElement;
+		const retrying = hold((url, init) => init?.method === "POST" && url.endsWith("/retry"));
+		retry.focus();
+
+		fireEvent.click(retry);
+		await waitFor(() => expect(retrying.pending()).toBe(1));
+		expect(retry.textContent).toBe("Retrying");
+		expect(retry.getAttribute("aria-disabled")).toBe("true");
+		expect(retry.disabled).toBe(false);
+		expect(document.activeElement).toBe(retry);
+		fireEvent.click(retry);
+		expect(retrying.pending()).toBe(1);
+		await act(async () => retrying.release());
+	});
+
+	it("keeps Improve with AI focusable while it rewrites, and asks once", async () => {
+		renderAt("/dashboard/jobs/new");
+		fireEvent.change(await screen.findByLabelText("Description"), { target: { value: "swift 5y" } });
+		const rewriting = hold((url) => url.endsWith("/jobs/enhance"));
+		const improve = screen.getByRole("button", { name: "Improve with AI" }) as HTMLButtonElement;
+		improve.focus();
+
+		fireEvent.click(improve);
+		await waitFor(() => expect(rewriting.pending()).toBe(1));
+		expect(improve.textContent).toBe("Rewriting");
+		expect(improve.getAttribute("aria-disabled")).toBe("true");
+		expect(improve.disabled).toBe(false);
+		expect(document.activeElement).toBe(improve);
+		fireEvent.click(improve);
+		expect(rewriting.pending()).toBe(1);
+
+		await act(async () => rewriting.release());
+		expect(await screen.findByText(/Rewritten with AI/)).toBeTruthy();
+		expect(improve.getAttribute("aria-disabled")).toBe("false");
+	});
+
+	it("keeps the status button focusable while it saves, and ignores a second click", async () => {
+		renderAt("/dashboard/jobs/job_3");
+		const close = (await screen.findByRole("button", { name: "Close job" })) as HTMLButtonElement;
+		close.focus();
+		const saving = hold((_url, init) => init?.method === "PATCH");
+
+		fireEvent.click(close);
+		await waitFor(() => expect(saving.pending()).toBe(1));
+		expect(close.textContent).toBe("Saving");
+		expect(close.getAttribute("aria-disabled")).toBe("true");
+		expect(close.disabled).toBe(false);
+		expect(document.activeElement).toBe(close);
+		fireEvent.click(close);
+		expect(saving.pending()).toBe(1);
+
+		await act(async () => saving.release());
+		expect(await screen.findByText("Job closed")).toBeTruthy();
+		expect(close.textContent).toBe("Reopen job");
+		expect(close.getAttribute("aria-disabled")).toBe("false");
+	});
+});
+
 describe("candidates", () => {
 	const openJob = (fields: Partial<FakeJob> = {}): FakeJob => ({
 		id: "job_1",
@@ -458,17 +907,6 @@ describe("candidates", () => {
 			.getAllByRole("link")
 			.map((link) => link.textContent);
 
-	// Holds back the answer to the requests `match` picks until `release()`. The fake server has already handled them,
-	// so what is released is a snapshot of the moment they were sent.
-	function hold(match: (url: string, init?: RequestInit) => boolean) {
-		const answer = fetchMock.getMockImplementation()!;
-		const held: Array<() => void> = [];
-		fetchMock.mockImplementation((url: string, init?: RequestInit) => {
-			const response = answer(url, init);
-			return match(url, init) ? new Promise((resolve) => held.push(() => resolve(response))) : response;
-		});
-		return { pending: () => held.length, release: () => held.splice(0).forEach((send) => send()) };
-	}
 	const isListGet = (url: string, init?: RequestInit) =>
 		url.endsWith("/jobs/job_1/candidates") && init?.method === "GET";
 	const isUpload = (url: string, init?: RequestInit) => init?.method === "POST" && url.includes("/candidates?");
@@ -540,6 +978,19 @@ describe("candidates", () => {
 		expect(init?.headers).toEqual({ "Content-Type": "application/pdf", Authorization: "Bearer session-token" });
 	});
 
+	it("calls the upload zone Add CVs on a phone, and keeps the Choose PDFs button", async () => {
+		vi.stubGlobal("matchMedia", (query: string) => ({
+			matches: query === "(pointer: coarse)",
+			addEventListener: () => {},
+			removeEventListener: () => {},
+		}));
+		renderAt("/dashboard/jobs/job_1");
+
+		expect(await screen.findByText("Add CVs")).toBeTruthy();
+		expect(screen.queryByText("Drop CVs here")).toBeNull();
+		expect(screen.getByLabelText("Choose PDFs")).toBeTruthy();
+	});
+
 	it("takes PDFs dropped on the zone", async () => {
 		renderAt("/dashboard/jobs/job_1");
 
@@ -588,6 +1039,32 @@ describe("candidates", () => {
 		expect(screen.getByText("This job has used its 10 free CVs.")).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: "Clear list" }));
 		expect(screen.queryByText("1 uploaded · 1 not uploaded")).toBeNull();
+		// There is no chooser to go to, so focus lands on the note.
+		expect(document.activeElement).toBe(screen.getByText("This job has used its 10 free CVs."));
+	});
+
+	it("moves focus to Choose PDFs when the results are cleared", async () => {
+		renderAt("/dashboard/jobs/job_1");
+		const input = await screen.findByLabelText("Choose PDFs");
+		fireEvent.change(input, { target: { files: [new File(["notes"], "notes.txt", { type: "text/plain" })] } });
+
+		const clear = await screen.findByRole("button", { name: "Clear list" });
+		clear.focus();
+		fireEvent.click(clear);
+
+		expect(screen.queryByRole("button", { name: "Clear list" })).toBeNull();
+		expect(document.activeElement).toBe(input);
+	});
+
+	it("says so under the upload zone when a job has no candidates yet, until one goes up", async () => {
+		renderAt("/dashboard/jobs/job_1");
+
+		const empty = await screen.findByText("No candidates yet. Uploaded CVs are ranked here.");
+		expect(screen.getByText("Drop CVs here").compareDocumentPosition(empty) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+		fireEvent.change(screen.getByLabelText("Choose PDFs"), { target: { files: [pdf("one.pdf")] } });
+		expect(await screen.findByText("1 CV uploaded")).toBeTruthy();
+		expect(screen.queryByText("No candidates yet. Uploaded CVs are ranked here.")).toBeNull();
 	});
 
 	it("shows the API's reason when it refuses a file, and doesn't send the rest of the batch", async () => {
@@ -682,6 +1159,7 @@ describe("candidates", () => {
 		fireEvent.click(await screen.findByRole("button", { name: /Open job/ }));
 		expect(await screen.findByLabelText("Choose PDFs")).toBeTruthy();
 		expect(screen.queryByText(/This job is a draft/)).toBeNull();
+		expect(screen.getByText("Job opened").getAttribute("aria-live")).toBe("polite");
 	});
 
 	it("ranks scored CVs best first, with yellow matches and pink gaps, then the ones still being read", async () => {
@@ -828,13 +1306,13 @@ describe("candidates", () => {
 		// Only the CV with runs left can be retried. Both failed, so they keep the order they were uploaded in.
 		expect(await screen.findAllByText(/✕ /)).toHaveLength(2);
 		expect(rowTexts()).toEqual([expect.stringContaining("broken.pdf"), expect.stringContaining("scan.pdf")]);
-		expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1);
+		expect(screen.getAllByRole("button", { name: "Retry scan.pdf" })).toHaveLength(1);
 		// The refetch after the retry is held, so the order can only come from the page itself.
 		hold(isListGet);
-		fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+		fireEvent.click(screen.getByRole("button", { name: "Retry scan.pdf" }));
 
 		expect(await screen.findByText("Reading the CV")).toBeTruthy();
-		expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+		expect(screen.queryByRole("button", { name: /^Retry/ })).toBeNull();
 		expect(fetchMock).toHaveBeenCalledWith(
 			"http://localhost:8787/jobs/job_1/candidates/cand_bad/retry",
 			expect.objectContaining({ method: "POST" }),
@@ -859,6 +1337,34 @@ describe("candidates", () => {
 		expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 	});
 
+	it("says Try again on a failed CV only while it can be tried again", async () => {
+		const failed = (id: string, fields: Partial<FakeCandidate>) =>
+			fakeCandidate({
+				id,
+				fileName: `${id}.pdf`,
+				status: "failed",
+				error: "Scoring failed. Try again.",
+				createdAt: "2026-10-22T12:00:00Z",
+				...fields,
+			});
+		candidates = [failed("cand_more", { canRetry: true }), failed("cand_last", { createdAt: "2026-10-22T12:30:00Z" })];
+		renderAt("/dashboard/jobs/job_1");
+
+		expect(await screen.findByText("✕ Scoring failed. Try again.")).toBeTruthy();
+		expect(screen.getByText("✕ Scoring failed.")).toBeTruthy();
+		cleanup();
+
+		renderAt("/dashboard/jobs/job_1/candidates/cand_last");
+		expect(await screen.findByText("Scoring failed.")).toBeTruthy();
+		expect(screen.getByText("We've tried this CV 3 times. It may not be a readable PDF.")).toBeTruthy();
+		expect(screen.queryByText(/Try again/)).toBeNull();
+		cleanup();
+
+		renderAt("/dashboard/jobs/job_1/candidates/cand_more");
+		expect(await screen.findByText("Scoring failed. Try again.")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+	});
+
 	it("keeps each row's retry state to itself", async () => {
 		const failed = (id: string, createdAt: string) =>
 			fakeCandidate({
@@ -873,14 +1379,21 @@ describe("candidates", () => {
 		renderAt("/dashboard/jobs/job_1");
 
 		const retrying = hold(isRetry);
-		fireEvent.click((await screen.findAllByRole("button", { name: "Retry" }))[0]);
+		fireEvent.click((await screen.findAllByRole("button", { name: /^Retry/ }))[0]);
 		await waitFor(() => expect(retrying.pending()).toBe(1));
 
 		const buttons = screen.getAllByRole("button", { name: /Retry/ });
-		expect(buttons.map((button) => [button.textContent, (button as HTMLButtonElement).disabled])).toEqual([
-			["Retrying", true],
-			["Retry", false],
+		expect(buttons.map((button) => [button.textContent, button.getAttribute("aria-label")])).toEqual([
+			["Retrying", "Retrying cand_a.pdf"],
+			["Retry", "Retry cand_b.pdf"],
 		]);
+		// The busy one only looks disabled: it keeps focus, and a second click sends nothing.
+		expect(buttons.map((button) => button.getAttribute("aria-disabled"))).toEqual(["true", "false"]);
+		expect(buttons.map((button) => (button as HTMLButtonElement).disabled)).toEqual([false, false]);
+		buttons[0].focus();
+		fireEvent.click(buttons[0]);
+		expect(document.activeElement).toBe(buttons[0]);
+		expect(retrying.pending()).toBe(1);
 		await act(async () => retrying.release());
 	});
 
@@ -898,14 +1411,14 @@ describe("candidates", () => {
 		// Over 5 minutes is slow; the API allows a retry once it has been stuck much longer.
 		expect(await screen.findAllByText("Reading the CV")).toHaveLength(3);
 		expect(screen.getAllByText("This is taking longer than usual.")).toHaveLength(2);
-		expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(1);
+		expect(screen.getAllByRole("button", { name: "Retry cand_stuck.pdf" })).toHaveLength(1);
 		const stuck = screen.getByRole("link", { name: /cand_stuck\.pdf/ }).closest("li")!;
 		expect(within(stuck).getByText("This is taking longer than usual.")).toBeTruthy();
-		expect(within(stuck).getByRole("button", { name: "Retry" })).toBeTruthy();
+		expect(within(stuck).getByRole("button", { name: "Retry cand_stuck.pdf" })).toBeTruthy();
 
 		// Retrying starts the clock again, which only the API's updatedAt can say.
-		fireEvent.click(within(stuck).getByRole("button", { name: "Retry" }));
-		await waitFor(() => expect(screen.queryByRole("button", { name: "Retry" })).toBeNull());
+		fireEvent.click(within(stuck).getByRole("button", { name: "Retry cand_stuck.pdf" }));
+		await waitFor(() => expect(screen.queryByRole("button", { name: /^Retry/ })).toBeNull());
 		expect(within(stuck).queryByText("This is taking longer than usual.")).toBeNull();
 		cleanup();
 
@@ -917,6 +1430,38 @@ describe("candidates", () => {
 		await waitFor(() => expect(screen.queryByRole("button", { name: "Retry" })).toBeNull());
 		expect(screen.queryByText("This is taking longer than usual.")).toBeNull();
 		expect(screen.getByText("Reading the CV")).toBeTruthy();
+	});
+
+	it("starts saying a CV is taking longer than usual while the list stays open", async () => {
+		vi.useFakeTimers({ now: new Date("2026-10-22T12:30:00Z"), shouldAdvanceTime: true });
+		candidates = [fakeCandidate({ id: "cand_slow", fileName: "slow.pdf", status: "scoring", createdAt: "2026-10-22T12:28:00Z" })];
+		renderAt("/dashboard/jobs/job_1");
+
+		// Two minutes in. Every poll brings the same answer, so only the clock can change what the row says.
+		expect(await screen.findByText("Reading the CV")).toBeTruthy();
+		expect(screen.queryByText("This is taking longer than usual.")).toBeNull();
+		await act(() => vi.advanceTimersByTimeAsync(2 * 60_000));
+		expect(screen.queryByText("This is taking longer than usual.")).toBeNull();
+
+		// Past five minutes, within one tick.
+		await act(() => vi.advanceTimersByTimeAsync(2 * 60_000));
+		expect(screen.getByText("This is taking longer than usual.")).toBeTruthy();
+	});
+
+	it("starts saying it on the candidate page too, and stops the clock once the CV is read", async () => {
+		vi.useFakeTimers({ now: new Date("2026-10-22T12:30:00Z"), shouldAdvanceTime: true });
+		candidates = [fakeCandidate({ id: "cand_slow", fileName: "slow.pdf", status: "scoring", createdAt: "2026-10-22T12:28:00Z" })];
+		renderAt("/dashboard/jobs/job_1/candidates/cand_slow");
+
+		expect(await screen.findByText("Reading the CV")).toBeTruthy();
+		expect(screen.queryByText("This is taking longer than usual.")).toBeNull();
+		await act(() => vi.advanceTimersByTimeAsync(4 * 60_000));
+		expect(screen.getByText("This is taking longer than usual.")).toBeTruthy();
+
+		Object.assign(candidates[0], grace({ id: "cand_slow" }));
+		await act(() => vi.advanceTimersByTimeAsync(CANDIDATE_POLL_MS));
+		expect(await screen.findByText(/^Scored 93/)).toBeTruthy();
+		expect(screen.queryByText("This is taking longer than usual.")).toBeNull();
 	});
 
 	it("keeps the ranked list on screen when a poll fails, and recovers on the next one", async () => {
@@ -931,14 +1476,14 @@ describe("candidates", () => {
 		);
 		await act(() => vi.advanceTimersByTimeAsync(CANDIDATE_POLL_MS));
 
-		expect(await screen.findByText(/Couldn't refresh\. Retrying\./)).toBeTruthy();
+		expect(await screen.findByText(/We couldn't refresh\. Retrying\./)).toBeTruthy();
 		expect(screen.queryByText(/We couldn't load the candidates/)).toBeNull();
 		expect(rowTexts()).toHaveLength(2);
 		expect(screen.getByText("Grace Turner")).toBeTruthy();
 
 		fetchMock.mockImplementation(answer);
 		await act(() => vi.advanceTimersByTimeAsync(CANDIDATE_POLL_MS));
-		await waitFor(() => expect(screen.queryByText(/Couldn't refresh/)).toBeNull());
+		await waitFor(() => expect(screen.queryByText(/couldn't refresh/)).toBeNull());
 		expect(screen.getByText("Grace Turner")).toBeTruthy();
 	});
 
@@ -955,7 +1500,7 @@ describe("candidates", () => {
 				: answer(url, init),
 		);
 		await act(() => vi.advanceTimersByTimeAsync(CANDIDATE_POLL_MS));
-		expect(await screen.findByText(/Couldn't refresh\. Retrying\./)).toBeTruthy();
+		expect(await screen.findByText(/We couldn't refresh\. Retrying\./)).toBeTruthy();
 		expect(screen.getByRole("heading", { level: 1, name: "grace_turner.pdf" })).toBeTruthy();
 		expect(screen.queryByText(/We couldn't load this candidate/)).toBeNull();
 
@@ -995,7 +1540,8 @@ describe("candidates", () => {
 		);
 		fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete candidate" }));
 
-		expect(await screen.findByText("Deleted “Grace Turner”")).toBeTruthy();
+		const deleted = await screen.findByText("Deleted “Grace Turner”");
+		expect(deleted.closest("[aria-live]")?.getAttribute("aria-live")).toBe("polite");
 		expect(router.state.location.pathname).toBe("/dashboard/jobs/job_1");
 		expect(fetchMock).toHaveBeenCalledWith(
 			"http://localhost:8787/jobs/job_1/candidates/cand_grace",
@@ -1017,8 +1563,18 @@ describe("candidates", () => {
 		// The API deletes it, but its answer is slow. Polling in that gap would get "doesn't exist".
 		const deleting = hold((_url, init) => init?.method === "DELETE");
 		const asked = () => fetchMock.mock.calls.filter(([url]) => url.endsWith("/candidates/cand_grace")).length;
-		fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete candidate" }));
+		const confirm = within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete candidate" });
+		confirm.focus();
+		fireEvent.click(confirm);
 		await waitFor(() => expect(deleting.pending()).toBe(1));
+		// The buttons only look disabled, so focus stays in the dialog on the one that was pressed.
+		expect(confirm.textContent).toBe("Deleting");
+		expect(confirm.getAttribute("aria-disabled")).toBe("true");
+		expect(document.activeElement).toBe(confirm);
+		fireEvent.click(confirm);
+		fireEvent.keyDown(document, { key: "Escape" });
+		expect(deleting.pending()).toBe(1);
+		expect(screen.getByRole("alertdialog")).toBeTruthy();
 		const before = asked();
 		await act(() => vi.advanceTimersByTimeAsync(CANDIDATE_POLL_MS * 3));
 		expect(asked()).toBe(before);
@@ -1263,6 +1819,30 @@ describe("candidates", () => {
 			await waitFor(() => expect(candidates[0].note).toBeNull());
 			expect(await screen.findByText("Saved")).toBeTruthy();
 			expect(note.value).toBe("");
+		});
+
+		it("keeps Save note focusable while it saves, and sends the note once", async () => {
+			candidates = [grace({ note: "Old note" })];
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+			fireEvent.change(await screen.findByLabelText("Note"), { target: { value: "New note" } });
+			const save = screen.getByRole("button", { name: "Save note" }) as HTMLButtonElement;
+			const saving = hold(isPatch);
+			save.focus();
+
+			fireEvent.click(save);
+			await waitFor(() => expect(saving.pending()).toBe(1));
+			// It looks busy but is not disabled, so keyboard focus stays; a second click sends nothing.
+			expect(save.textContent).toBe("Saving");
+			expect(save.getAttribute("aria-disabled")).toBe("true");
+			expect(save.disabled).toBe(false);
+			expect(document.activeElement).toBe(save);
+			fireEvent.click(save);
+			expect(saving.pending()).toBe(1);
+
+			await act(async () => saving.release());
+			expect(await screen.findByText("Saved")).toBeTruthy();
+			expect(patches()).toHaveLength(1);
+			expect(save.getAttribute("aria-disabled")).toBe("false");
 		});
 
 		it("keeps what was typed and says why when a note can't be saved", async () => {

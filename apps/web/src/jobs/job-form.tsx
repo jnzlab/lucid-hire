@@ -1,6 +1,9 @@
-import { type FormEvent, type ReactNode, useState } from "react";
+import { useBlocker } from "@tanstack/react-router";
+import { type FormEvent, type ReactNode, useRef, useState } from "react";
+import { ConfirmDialog } from "../components/confirm-dialog.tsx";
 import { Check } from "../components/icons.tsx";
 import { ApiError } from "../lib/api.ts";
+import { formatNumber } from "../lib/format.ts";
 import {
 	JOB_DESCRIPTION_MAX,
 	JOB_TITLE_HINT,
@@ -40,6 +43,13 @@ export function JobForm({ initial, actions, onSave, saving, saveError }: JobForm
 	// The notes as they were before "Improve with AI", so the rewrite can be undone.
 	const [beforeRewrite, setBeforeRewrite] = useState<string | null>(null);
 	const enhance = useEnhanceDescription();
+	const titleRef = useRef<HTMLInputElement>(null);
+	const descriptionRef = useRef<HTMLTextAreaElement>(null);
+
+	// Unsaved typing is lost by leaving, whether by a link, Cancel, Back or closing the tab. The pages navigate with
+	// `ignoreBlocker` after a save, so a save is never held up.
+	const dirty = tidyTitle(title) !== (initial?.title ?? "") || description.trim() !== (initial?.description ?? "").trim();
+	const leaving = useBlocker({ shouldBlockFn: () => dirty, enableBeforeUnload: dirty, withResolver: true });
 
 	const serverFields = saveError instanceof ApiError ? saveError.fields : {};
 	const titleError = errors.title ?? serverFields.title;
@@ -48,14 +58,20 @@ export function JobForm({ initial, actions, onSave, saving, saveError }: JobForm
 
 	const onSubmit = (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
+		// The save buttons only look disabled while saving (aria-disabled), so a click can still submit.
+		if (saving) return;
 		const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
 		const input = { title: tidyTitle(title), description: description.trim() };
 		const found = validate(input);
 		setErrors(found);
-		if (!found.title && !found.description) onSave(input, submitter?.value ?? "save");
+		// Focus goes to the first field with a problem, so its message is read out and fixing it is one keystroke away.
+		if (found.title) titleRef.current?.focus();
+		else if (found.description) descriptionRef.current?.focus();
+		else onSave(input, submitter?.value ?? "save");
 	};
 
 	const improve = () => {
+		if (enhance.isPending || saving) return;
 		const notes = description.trim();
 		if (!notes) {
 			setErrors({ ...errors, description: "Write a few notes first, then improve them" });
@@ -87,6 +103,7 @@ export function JobForm({ initial, actions, onSave, saving, saveError }: JobForm
 					Job title
 				</label>
 				<input
+					ref={titleRef}
 					id="job-title"
 					name="title"
 					className="field mt-2"
@@ -112,10 +129,11 @@ export function JobForm({ initial, actions, onSave, saving, saveError }: JobForm
 						Description
 					</label>
 					<span className="font-mono text-[12px] text-ink-muted" aria-hidden="true">
-						{description.length.toLocaleString("en-US")} / {JOB_DESCRIPTION_MAX.toLocaleString("en-US")}
+						{formatNumber(description.length)} / {formatNumber(JOB_DESCRIPTION_MAX)}
 					</span>
 				</div>
 				<textarea
+					ref={descriptionRef}
 					id="job-description"
 					name="description"
 					className="field mt-2 min-h-[320px] resize-y leading-[1.55]"
@@ -138,7 +156,13 @@ export function JobForm({ initial, actions, onSave, saving, saveError }: JobForm
 				)}
 
 				<div className="mt-5 flex flex-wrap items-center gap-3 rounded-lg bg-paper p-3 shadow-[0_1px_0_var(--line)]">
-					<button type="button" className="btn ghost" onClick={improve} disabled={enhance.isPending || saving}>
+					{/* Only looks disabled while it works, so it keeps keyboard focus; improve() ignores the click. */}
+					<button
+						type="button"
+						className="btn ghost"
+						onClick={improve}
+						aria-disabled={enhance.isPending || saving}
+					>
 						{enhance.isPending ? "Rewriting" : "Improve with AI"}
 					</button>
 					{enhance.isPending ? (
@@ -175,6 +199,17 @@ export function JobForm({ initial, actions, onSave, saving, saveError }: JobForm
 				</p>
 			)}
 			<div className="mt-6 flex flex-wrap items-center justify-end gap-3">{actions({ saving })}</div>
+			{leaving.status === "blocked" && (
+				<ConfirmDialog
+					heading="Leave without saving?"
+					cancelLabel="Keep editing"
+					confirmLabel="Leave"
+					onCancel={leaving.reset}
+					onConfirm={leaving.proceed}
+				>
+					Your changes to this job aren't saved.
+				</ConfirmDialog>
+			)}
 		</form>
 	);
 }

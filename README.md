@@ -55,7 +55,7 @@ on failure.
 | Story chapters and FAQ answers open on demand | The "Rank" chapter shows the ranked list, and an FAQ question expands to its answer |
 | Signed-out visitors are sent to sign in from the dashboard | /dashboard without a session lands on the sign-in page |
 | Recruiter signs in and reaches the jobs dashboard | The recruiter test account signs in with email and password, names its company "Sprite Labs" if it hasn't yet, and lands on its "Jobs" page |
-| Recruiter posts a job and sees it in the list | "New job" → "Sprite post role" → "Open job"; the list shows it marked Open, then the test deletes it |
+| Recruiter posts a job and sees it in the list | "Post a job" → "Sprite post role" → "Open job"; the list shows it marked Open, then the test deletes it |
 | Recruiter deletes a job after confirming | An admin saves a "Sprite delete role" draft, deletes it through the confirm dialog, and the list says "Deleted “Sprite delete role”" without showing it |
 | Recruiter closes an open job | "Sprite archive role" (reused every run) is closed and offers "Reopen job" |
 | Recruiter rewrites rough job notes with AI | "Improve with AI" turns rough notes into sections with gemini-3.5-flash-lite, without saving |

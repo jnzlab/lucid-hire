@@ -13,7 +13,7 @@ export function EditJobPage({ jobId }: { jobId: string }) {
 		<div className="wrap py-[clamp(32px,5vw,64px)]">
 			<BackToJobs />
 			{job.isPending ? (
-				<SectionLoading label="Opening the job" />
+				<SectionLoading label="Loading job" page />
 			) : job.isError ? (
 				<JobLoadError error={job.error} onRetry={() => void job.refetch()} />
 			) : (
@@ -36,13 +36,13 @@ function EditJob({ job }: { job: Job }) {
 					initial={{ title: job.title, description: job.description }}
 					saving={update.isPending}
 					saveError={update.error}
-					onSave={(input) => update.mutate(input, { onSuccess: () => void navigate(toJob) })}
+					onSave={(input) => update.mutate(input, { onSuccess: () => void navigate({ ...toJob, ignoreBlocker: true }) })}
 					actions={({ saving }) => (
 						<>
 							<Link {...toJob} className="btn ghost">
 								Cancel
 							</Link>
-							<button type="submit" className="btn" disabled={saving}>
+							<button type="submit" className="btn" aria-disabled={saving}>
 								{saving ? "Saving" : "Save changes"}
 							</button>
 						</>

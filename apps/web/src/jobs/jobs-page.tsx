@@ -1,8 +1,10 @@
 import { Link, useRouterState } from "@tanstack/react-router";
+import { AnnouncedBanner } from "../components/announced-banner.tsx";
 import { ArrowRight } from "../components/icons.tsx";
 import { Swipe } from "../components/swipe.tsx";
 import { useOrg } from "../dashboard/org.ts";
-import { type JobSummary, formatDate, useJobs } from "../lib/jobs.ts";
+import { formatDate } from "../lib/format.ts";
+import { type JobSummary, useJobs } from "../lib/jobs.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
 import { JobStatusTag, PageHeading, SectionError, SectionLoading } from "./job-ui.tsx";
 
@@ -21,21 +23,14 @@ export function JobsPage() {
 
 	const newJob = (
 		<Link to="/dashboard/jobs/new" className="btn">
-			New job <ArrowRight />
+			Post a job <ArrowRight />
 		</Link>
 	);
 
 	return (
 		<div className="wrap py-[clamp(32px,5vw,64px)]">
 			<PageHeading eyebrow={org.name} title="Jobs" actions={jobs.data?.length ? newJob : null} />
-			{deletedJob && (
-				<p
-					role="status"
-					className="mt-6 inline-flex min-h-11 items-center gap-2.5 rounded-md bg-ink px-3.5 font-mono text-[13.5px] text-paper"
-				>
-					Deleted “{deletedJob}”
-				</p>
-			)}
+			<AnnouncedBanner message={deletedJob && `Deleted “${deletedJob}”`} className="mt-6" />
 			<div className="mt-8">
 				{jobs.isPending ? (
 					<SectionLoading label="Loading your jobs" />

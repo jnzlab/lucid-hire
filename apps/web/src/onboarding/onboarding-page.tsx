@@ -1,7 +1,7 @@
 import { UserButton, useAuth } from "@clerk/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Navigate } from "@tanstack/react-router";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useRef, useState } from "react";
 import { AuthLayout } from "../auth/auth-layout.tsx";
 import { RequireSession } from "../auth/require-session.tsx";
 import { ArrowRight } from "../components/icons.tsx";
@@ -28,7 +28,7 @@ export function OnboardingPage() {
 // Recruiters who already have a company skip straight to the dashboard.
 function Onboarding() {
 	const me = useMe();
-	if (me.isPending) return <PageLoading label="Checking your account" />;
+	if (me.isPending) return <PageLoading label="Loading your account" />;
 	if (me.isError) return <PageError message={me.error.message} onRetry={() => void me.refetch()} />;
 	if (me.data.org) return <Navigate to="/dashboard" replace />;
 
@@ -53,6 +53,7 @@ function CompanyForm() {
 	const queryClient = useQueryClient();
 	const [name, setName] = useState("");
 	const [submitted, setSubmitted] = useState(false);
+	const nameRef = useRef<HTMLInputElement>(null);
 
 	// Saving the company into the cached account re-renders Onboarding, which sends them on.
 	const create = useMutation({
@@ -67,8 +68,12 @@ function CompanyForm() {
 
 	const onSubmit = (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
+		// The button only looks disabled while saving (aria-disabled), so a click can still submit.
+		if (create.isPending) return;
 		setSubmitted(true);
-		if (!invalid) create.mutate(cleaned);
+		// Focus goes to the field, so its message is read out and fixing it is one keystroke away.
+		if (invalid) nameRef.current?.focus();
+		else create.mutate(cleaned);
 	};
 
 	return (
@@ -85,6 +90,7 @@ function CompanyForm() {
 				Company name
 			</label>
 			<input
+				ref={nameRef}
 				id="company-name"
 				name="organization"
 				className="field mt-2"
@@ -110,7 +116,7 @@ function CompanyForm() {
 					✕ {create.error.message}
 				</p>
 			)}
-			<button type="submit" className="btn mt-6 w-full" disabled={create.isPending}>
+			<button type="submit" className="btn mt-6 w-full" aria-disabled={create.isPending}>
 				{create.isPending ? (
 					"Setting up your dashboard"
 				) : (

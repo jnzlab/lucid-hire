@@ -5,8 +5,6 @@ import { useInterviewQuestions, useWriteQuestions } from "../lib/interview-quest
 
 // How long "Copied" stays up.
 const COPIED_MS = 2000;
-// The button only looks disabled while the questions are written (aria-disabled), so it keeps focus.
-const PENDING = "aria-disabled:cursor-progress aria-disabled:opacity-70 aria-disabled:[background-size:0%_100%] aria-disabled:[color:var(--fg)]";
 
 // Questions that probe a scored candidate's gaps and check their strongest claims, written by Gemini on request.
 // Nothing is shown until the CV is scored.
@@ -51,10 +49,11 @@ export function InterviewQuestions({ jobId, candidate }: { jobId: string; candid
 		);
 	};
 
+	// Only looks disabled while the questions are written (aria-disabled), so it keeps focus.
 	const writeButton = (
 		<button
 			type="button"
-			className={`btn${questions ? " ghost" : ""} ${PENDING}`}
+			className={`btn${questions ? " ghost" : ""}`}
 			aria-disabled={write.isPending}
 			onClick={writeQuestions}
 		>

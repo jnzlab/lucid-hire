@@ -1,5 +1,6 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useState } from "react";
+import { AnnouncedBanner } from "../components/announced-banner.tsx";
 import { ScoreRing } from "../components/score-ring.tsx";
 import { SectionError, SectionLoading } from "../jobs/job-ui.tsx";
 import {
@@ -7,7 +8,9 @@ import {
 	CV_LIMIT_PER_JOB,
 	DECISION_LABEL,
 	type Decision,
+	SLOW_CHECK_MS,
 	candidateName,
+	failureMessage,
 	isSlow,
 	isWorking,
 	useCandidates,
@@ -15,6 +18,7 @@ import {
 	useUploadCvs,
 } from "../lib/candidates.ts";
 import type { Job } from "../lib/jobs.ts";
+import { useNow } from "../lib/use-now.ts";
 import { CandidateTags, DecisionTag } from "./candidate-tags.tsx";
 import { RefreshFailed } from "./refresh-failed.tsx";
 import { type Segment, SegmentedControl } from "./segmented-control.tsx";
@@ -65,14 +69,7 @@ export function CandidatesSection({ job }: { job: Job }) {
 				</div>
 			</div>
 
-			{deletedCandidate && (
-				<p
-					role="status"
-					className="mt-4 inline-flex min-h-11 items-center gap-2.5 rounded-md bg-ink px-3.5 font-mono text-[13.5px] text-paper"
-				>
-					Deleted “{deletedCandidate}”
-				</p>
-			)}
+			<AnnouncedBanner message={deletedCandidate && `Deleted “${deletedCandidate}”`} className="mt-4" />
 
 			<div className="mt-4">
 				<UploadZone uploads={uploads} note={note} slotsLeft={slotsLeft} />
@@ -97,7 +94,13 @@ export function CandidatesSection({ job }: { job: Job }) {
 						{candidates.isError && (
 							<RefreshFailed polling={list.some(isWorking)} onRetry={() => void candidates.refetch()} />
 						)}
-						{list.length > 0 && <RankedList jobId={job.id} candidates={list} />}
+						{list.length > 0 ? (
+							<RankedList jobId={job.id} candidates={list} />
+						) : (
+							<p className="rounded-xl bg-sheet px-6 py-5 text-[15px] text-ink-2 shadow-card">
+								No candidates yet. Uploaded CVs are ranked here.
+							</p>
+						)}
 					</>
 				)}
 			</div>
@@ -194,6 +197,7 @@ function CandidateItem({
 	rank: number | undefined;
 }) {
 	const retry = useRetryCandidate(jobId);
+	const retryLabel = retry.isPending ? "Retrying" : "Retry";
 	return (
 		<li className="border-b border-line-2 py-1 last:border-b-0">
 			<CandidateRow jobId={jobId} candidate={candidate} rank={rank} />
@@ -204,13 +208,17 @@ function CandidateItem({
 			/>
 			{candidate.canRetry && (
 				<div className="mb-3 ml-[42px]">
+					{/* Only looks disabled while it retries, so it keeps keyboard focus; the click is ignored. */}
 					<button
 						type="button"
 						className="btn ghost"
-						disabled={retry.isPending}
-						onClick={() => retry.mutate(candidate.id)}
+						aria-label={`${retryLabel} ${candidateName(candidate)}`}
+						aria-disabled={retry.isPending}
+						onClick={() => {
+							if (!retry.isPending) retry.mutate(candidate.id);
+						}}
 					>
-						{retry.isPending ? "Retrying" : "Retry"}
+						{retryLabel}
 					</button>
 				</div>
 			)}
@@ -276,23 +284,27 @@ function CandidateRow({
 // stroke the text is on-marker, as it is on every mark.
 function Detail({ candidate, top }: { candidate: CandidateSummary; top: boolean }) {
 	const line = `mt-1 block font-mono text-[12px] leading-[1.3] [overflow-wrap:anywhere] ${top ? "text-on-marker" : "text-ink-muted"}`;
-	if (isWorking(candidate)) {
-		return (
-			<>
-				<span className={`${line} flex items-center gap-2`}>
-					<span className="live-dot" aria-hidden="true" />
-					Reading the CV
-				</span>
-				{isSlow(candidate) && <span className={line}>This is taking longer than usual.</span>}
-			</>
-		);
-	}
+	if (isWorking(candidate)) return <Reading candidate={candidate} line={line} />;
 	if (candidate.status === "failed") {
 		return (
 			<span className="mt-1 block font-mono text-[12px] leading-[1.3] text-gap-ink [overflow-wrap:anywhere]">
-				✕ {candidate.error ?? "Scoring failed. Try again."}
+				✕ {failureMessage(candidate)}
 			</span>
 		);
 	}
 	return <span className={line}>{candidate.headline || candidate.fileName}</span>;
+}
+
+// Only mounted while the CV is being read, so the clock that decides "taking longer than usual" ticks only then.
+function Reading({ candidate, line }: { candidate: CandidateSummary; line: string }) {
+	const now = useNow(SLOW_CHECK_MS);
+	return (
+		<>
+			<span className={`${line} flex items-center gap-2`}>
+				<span className="live-dot" aria-hidden="true" />
+				Reading the CV
+			</span>
+			{isSlow(candidate, now) && <span className={line}>This is taking longer than usual.</span>}
+		</>
+	);
 }

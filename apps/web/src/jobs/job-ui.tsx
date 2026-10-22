@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { type JobStatus, STATUS_LABEL } from "../lib/jobs.ts";
 
 // Draft, open or closed, in words with a dot beside them, so the colour is never the only signal.
@@ -20,7 +20,8 @@ export function JobStatusTag({ status }: { status: JobStatus }) {
 	);
 }
 
-// The heading block every dashboard page starts with: an eyebrow label, the page title and actions.
+// The heading block every dashboard page starts with: an eyebrow label, the page title and actions. The
+// title takes focus when the page appears, so a keyboard or screen reader user starts at the top of the new page.
 export function PageHeading({
 	eyebrow,
 	title,
@@ -32,11 +33,21 @@ export function PageHeading({
 	actions?: ReactNode;
 	children?: ReactNode;
 }) {
+	const titleRef = useRef<HTMLHeadingElement>(null);
+	useEffect(() => {
+		titleRef.current?.focus();
+	}, []);
+
 	return (
 		<header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
 			<div className="min-w-0">
 				<p className="font-mono text-[12px] leading-[1.4] tracking-[.08em] text-ink-muted uppercase">{eyebrow}</p>
-				<h1 className="mt-2 font-display text-[clamp(32px,4vw,52px)] leading-[.98] font-[820] tracking-[-0.038em] [overflow-wrap:anywhere] [font-stretch:112%]">
+				{/* Focused from code, not by a click or Tab, so it gets no ring. */}
+				<h1
+					ref={titleRef}
+					tabIndex={-1}
+					className="mt-2 font-display text-[clamp(32px,4vw,52px)] leading-[.98] font-[820] tracking-[-0.038em] [overflow-wrap:anywhere] [font-stretch:112%] focus:outline-none"
+				>
 					{title}
 				</h1>
 				{children}
@@ -70,25 +81,41 @@ export function BackToJob({ jobId, title }: { jobId: string; title?: string }) {
 	);
 }
 
-// In-page states, as the status pill (design system §4). The app shell stays around them.
-export function SectionLoading({ label }: { label: string }) {
+// In-page states, as the status pill (design system §4). The app shell stays around them. A `page` state
+// stands in for the whole page, so it carries the page's h1 for screen readers.
+export function SectionLoading({ label, page = false }: { label: string; page?: boolean }) {
 	return (
-		<p
-			role="status"
-			className="inline-flex min-h-11 items-center gap-2.5 rounded-md bg-sheet px-3.5 font-mono text-[13.5px] text-ink shadow-card"
-		>
-			<span className="live-dot" aria-hidden="true" />
-			{label}
-		</p>
+		<>
+			{page && <h1 className="sr-only">{label}</h1>}
+			<p
+				role="status"
+				className="inline-flex min-h-11 items-center gap-2.5 rounded-md bg-sheet px-3.5 font-mono text-[13.5px] text-ink shadow-card"
+			>
+				<span className="live-dot" aria-hidden="true" />
+				{label}
+			</p>
+		</>
 	);
 }
 
-export function SectionError({ title, message, action }: { title: string; message: string; action: ReactNode }) {
+// `level` is 1 when the error is the whole page, 2 when it sits in a page that has its own h1.
+export function SectionError({
+	title,
+	message,
+	action,
+	level = 2,
+}: {
+	title: string;
+	message: string;
+	action: ReactNode;
+	level?: 1 | 2;
+}) {
+	const Heading = level === 1 ? "h1" : "h2";
 	return (
 		<div role="alert" className="flex max-w-md flex-col items-start gap-4 rounded-xl bg-sheet p-6 shadow-card">
-			<h2 className="text-[19px] leading-[1.2] font-[800] tracking-[-0.01em] [font-stretch:108%]">
+			<Heading className="text-[19px] leading-[1.2] font-[800] tracking-[-0.01em] [font-stretch:108%]">
 				<span className="mk mk-gap">✕ {title}</span>
-			</h2>
+			</Heading>
 			<p className="text-[15px] text-ink-2">{message}</p>
 			{action}
 		</div>
