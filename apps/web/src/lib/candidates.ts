@@ -48,6 +48,9 @@ export type CandidateSummary = {
 	name: string | null;
 	headline: string | null;
 	score: number | null;
+	// Place among the job's scored CVs (1 is best); null until the CV is scored. It belongs to the CV, so filtering
+	// the list never renumbers it.
+	rank: number | null;
 	// Labels of met requirements (must-haves first, at most 4) and of unmet must-haves (at most 2).
 	matches: string[];
 	gaps: string[];
@@ -59,6 +62,8 @@ export type CandidateSummary = {
 	scoredAt: string | null;
 };
 export type Candidate = CandidateSummary & {
+	// How many of the job's CVs are ranked, for "#2 of 7".
+	rankedCount: number;
 	summary: string | null;
 	requirements: Requirement[] | null;
 	fileSize: number;

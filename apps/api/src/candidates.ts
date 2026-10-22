@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, lt, or, sql } from "drizzle-orm";
 import type { SQLiteColumn } from "drizzle-orm/sqlite-core";
 import { z } from "zod";
 import type { Db } from "./db/client.ts";
@@ -40,6 +40,9 @@ export type CandidateSummary = {
 	name: string | null;
 	headline: string | null;
 	score: number | null;
+	// Place among the job's scored CVs (1 is best), or null while the CV has no score. The list, the candidate page
+	// and the CSV export all take it from rankOrder.
+	rank: number | null;
 	// Labels of met requirements (must-haves first, at most 4) and of unmet must-haves (at most 2).
 	matches: string[];
 	gaps: string[];
@@ -51,6 +54,8 @@ export type CandidateSummary = {
 	scoredAt: Date | null;
 };
 export type Candidate = CandidateSummary & {
+	// How many CVs of the job are ranked, for "#2 of 7".
+	rankedCount: number;
 	summary: string | null;
 	requirements: Requirement[] | null;
 	// What the CV states about the candidate. Null for a CV that hasn't been read.
@@ -97,7 +102,7 @@ function isRetryable(status: CandidateStatus, updatedAt: Date): boolean {
 	return status === "failed" || stuck;
 }
 
-function toSummary(row: SummaryRow): CandidateSummary {
+function toSummary(row: SummaryRow, rank: number | null = null): CandidateSummary {
 	const requirements = row.requirements ?? [];
 	return {
 		id: row.id,
@@ -107,6 +112,7 @@ function toSummary(row: SummaryRow): CandidateSummary {
 		name: row.name,
 		headline: row.headline,
 		score: row.score,
+		rank,
 		matches: requirements
 			.filter((r) => r.met)
 			.sort(mustFirst)
@@ -124,8 +130,9 @@ function toSummary(row: SummaryRow): CandidateSummary {
 	};
 }
 
-const toCandidate = (row: CandidateRow): Candidate => ({
-	...toSummary(row),
+const toCandidate = (row: CandidateRow, rank: number | null = null, rankedCount = 0): Candidate => ({
+	...toSummary(row, rank),
+	rankedCount,
 	summary: row.summary,
 	requirements: row.requirements,
 	profile: row.profile,
@@ -156,24 +163,45 @@ export async function getCvCount(db: Db, orgId: string, jobId: string): Promise<
 	return job?.cvCount ?? null;
 }
 
-// Scored by score (ties: scored first), then CVs still being read, then failed ones.
+// THE ranking, used by the list, the candidate page and the CSV export so their ranks agree: higher score first,
+// then whoever was scored first, then whoever uploaded first, then the id so that two rows never tie.
+const rankOrder = [desc(candidates.score), asc(candidates.scoredAt), asc(candidates.createdAt), asc(candidates.id)];
+// Only a CV that has been scored has a rank.
+const isRanked = and(eq(candidates.status, "scored"), isNotNull(candidates.score));
+
+// The job's ranked CVs, best first.
+async function rankedIds(db: Db, orgId: string, jobId: string): Promise<string[]> {
+	const rows = await db
+		.select({ id: candidates.id })
+		.from(candidates)
+		.where(and(inJob(orgId, jobId), isRanked))
+		.orderBy(...rankOrder);
+	return rows.map(({ id }) => id);
+}
+
+// Scored by rank, then CVs still being read, then failed ones. Ranks are counted over the whole job, so they
+// don't depend on what the list shows.
 export async function listCandidates(db: Db, orgId: string, jobId: string): Promise<CandidateSummary[]> {
 	const rows = await db
 		.select(summaryColumns)
 		.from(candidates)
 		.where(inJob(orgId, jobId))
-		.orderBy(
-			sql`case ${candidates.status} when 'scored' then 0 when 'failed' then 2 else 1 end`,
-			desc(candidates.score),
-			asc(candidates.scoredAt),
-			asc(candidates.createdAt),
-		);
-	return rows.map(toSummary);
+		.orderBy(sql`case ${candidates.status} when 'scored' then 0 when 'failed' then 2 else 1 end`, ...rankOrder);
+	let rank = 0;
+	return rows.map((row) => toSummary(row, row.status === "scored" && row.score !== null ? ++rank : null));
+}
+
+// The candidate with its place among the job's scored CVs.
+async function ranked(db: Db, orgId: string, jobId: string, row: CandidateRow): Promise<Candidate> {
+	if (row.status !== "scored" || row.score === null) return toCandidate(row);
+	const ids = await rankedIds(db, orgId, jobId);
+	const index = ids.indexOf(row.id);
+	return toCandidate(row, index === -1 ? null : index + 1, ids.length);
 }
 
 export async function getCandidate(db: Db, orgId: string, jobId: string, id: string): Promise<Candidate | null> {
 	const [row] = await db.select(candidateColumns).from(candidates).where(inJobById(orgId, jobId, id)).limit(1);
-	return row ? toCandidate(row) : null;
+	return row ? ranked(db, orgId, jobId, row) : null;
 }
 
 export type SlotResult = { ok: true } | { ok: false; reason: "job_not_found" | "job_not_open" | "cv_limit" };
@@ -310,7 +338,7 @@ export async function decideCandidate(
 		})
 		.where(inJobById(orgId, jobId, id))
 		.returning(candidateColumns);
-	return row ? toCandidate(row) : null;
+	return row ? ranked(db, orgId, jobId, row) : null;
 }
 
 // The R2 key and name of a CV file, or null when the candidate isn't the company's.

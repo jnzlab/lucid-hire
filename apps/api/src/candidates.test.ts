@@ -126,6 +126,8 @@ type CandidateJson = {
 	fileSize: number;
 	status: string;
 	score: number | null;
+	rank: number | null;
+	rankedCount: number;
 	name: string | null;
 	matches: string[];
 	gaps: string[];
@@ -410,6 +412,43 @@ describe("GET /jobs/:jobId/candidates", () => {
 		expect(body.candidates.find((c) => c.id === spent)).toMatchObject({ canRetry: false });
 		expect(body.candidates[0]).not.toHaveProperty("summary");
 		expect(body.candidates[0]).not.toHaveProperty("requirements");
+	});
+
+	it("breaks ties by score, then scored_at, then created_at, then id, and ranks only scored CVs", async () => {
+		const jobId = await createJob();
+		const at = (minute: number) => new Date(Date.UTC(2026, 9, 22, 10, minute));
+		const scored = (score: number, scoredAt: Date, createdAt: Date) => ({ status: "scored" as const, score, scoredAt, createdAt });
+		// Same score and scored_at: the earlier upload wins. Then the id decides between two identical rows.
+		const laterUpload = await seed(jobId, { id: "z-later", ...scored(70, at(5), at(4)) });
+		const earlierUpload = await seed(jobId, { id: "z-earlier", ...scored(70, at(5), at(2)) });
+		const idTieB = await seed(jobId, { id: "tie-b", ...scored(70, at(5), at(4)) });
+		const idTieA = await seed(jobId, { id: "tie-a", ...scored(70, at(5), at(4)) });
+		const best = await seed(jobId, scored(71, at(30), at(30)));
+		const reading = await seed(jobId, { status: "scoring", score: null });
+		const failed = await seed(jobId, { status: "failed" });
+		await seed(await createJob("open", "user_acme"), scored(100, at(0), at(0)), acmeOrgId);
+
+		const { candidates: list } = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates`)).json()) as {
+			candidates: CandidateJson[];
+		};
+		expect(list.map((c) => [c.id, c.rank])).toEqual([
+			[best, 1],
+			[earlierUpload, 2],
+			[idTieA, 3],
+			[idTieB, 4],
+			[laterUpload, 5],
+			[reading, null],
+			[failed, null],
+		]);
+
+		// The candidate page says the same, out of the same five.
+		for (const row of list.filter((c) => c.rank !== null)) {
+			const res = await send("user_admin", "GET", `/jobs/${jobId}/candidates/${row.id}`);
+			const { candidate } = (await res.json()) as { candidate: CandidateJson };
+			expect([candidate.rank, candidate.rankedCount]).toEqual([row.rank, 5]);
+		}
+		const unranked = await send("user_admin", "GET", `/jobs/${jobId}/candidates/${failed}`);
+		expect(((await unranked.json()) as { candidate: CandidateJson }).candidate).toMatchObject({ rank: null, rankedCount: 0 });
 	});
 
 	it("shows met requirements as matches (must-haves first) and unmet must-haves as gaps, capped at 4 and 2", async () => {

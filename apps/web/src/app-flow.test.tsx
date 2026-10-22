@@ -142,6 +142,7 @@ function fakeJobs(path: string, method: string, body: Record<string, string>, qu
 // A candidate as the list shows it, without the fields only the candidate page needs.
 const summary = ({
 	jobId: _jobId,
+	rankedCount: _rankedCount,
 	summary: _summary,
 	requirements: _requirements,
 	fileSize: _size,
@@ -170,7 +171,12 @@ function fakeCandidates(url: URL, init: RequestInit | undefined): Response {
 						place(a) - place(b) ||
 						(a.status === "scored" ? (b.score ?? 0) - (a.score ?? 0) : a.createdAt.localeCompare(b.createdAt)),
 				);
-			return Response.json({ candidates: ranked.map(summary), cvCount: job.cvCount ?? 0, cvLimit: 10 });
+			let rank = 0;
+			const withRanks = ranked.map((candidate) => ({
+				...candidate,
+				rank: candidate.status === "scored" && candidate.score !== null ? ++rank : null,
+			}));
+			return Response.json({ candidates: withRanks.map(summary), cvCount: job.cvCount ?? 0, cvLimit: 10 });
 		}
 		const fileName = url.searchParams.get("fileName") ?? "cv.pdf";
 		if (new Headers(init?.headers).get("Content-Type") !== "application/pdf" || !fileName.endsWith(".pdf"))
@@ -234,6 +240,8 @@ function fakeCandidate(fields: Partial<FakeCandidate> & { id: string }): FakeCan
 		name: null,
 		headline: null,
 		score: null,
+		rank: null,
+		rankedCount: 0,
 		matches: [],
 		gaps: [],
 		error: null,

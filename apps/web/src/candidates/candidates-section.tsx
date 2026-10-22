@@ -133,13 +133,8 @@ const EMPTY_FILTER: Record<Decision, string> = {
 
 function RankedList({ jobId, candidates }: { jobId: string; candidates: CandidateSummary[] }) {
 	const [show, setShow] = useState<Show>("all");
-	// Only a CV that has been scored has a rank. The API already sends them best first. A rank belongs to the
-	// CV, not to its place on screen: filtering hides rows and never renumbers the rest.
-	const ranks = new Map(
-		candidates
-			.filter(({ status, score }) => status === "scored" && score !== null)
-			.map(({ id }, index) => [id, index + 1]),
-	);
+	// A rank belongs to the CV (the API sends it), not to its place on screen: filtering hides rows and never
+	// renumbers the rest.
 	// The filter appears once there is something to decide on.
 	const filterable = candidates.some(({ status }) => status === "scored");
 	const shown = filterable && show !== "all" ? candidates.filter(({ decision }) => decision === show) : candidates;
@@ -152,7 +147,7 @@ function RankedList({ jobId, candidates }: { jobId: string; candidates: Candidat
 			) : (
 				<ol aria-labelledby="candidates-h" className="rounded-xl bg-sheet px-6 shadow-card">
 					{shown.map((candidate) => (
-						<CandidateItem key={candidate.id} jobId={jobId} candidate={candidate} rank={ranks.get(candidate.id)} />
+						<CandidateItem key={candidate.id} jobId={jobId} candidate={candidate} />
 					))}
 				</ol>
 			)}
@@ -187,20 +182,12 @@ function DecisionFilter({
 }
 
 // A row with its tags and, when the API allows it, a Retry button. Each row keeps its own retry state.
-function CandidateItem({
-	jobId,
-	candidate,
-	rank,
-}: {
-	jobId: string;
-	candidate: CandidateSummary;
-	rank: number | undefined;
-}) {
+function CandidateItem({ jobId, candidate }: { jobId: string; candidate: CandidateSummary }) {
 	const retry = useRetryCandidate(jobId);
 	const retryLabel = retry.isPending ? "Retrying" : "Retry";
 	return (
 		<li className="border-b border-line-2 py-1 last:border-b-0">
-			<CandidateRow jobId={jobId} candidate={candidate} rank={rank} />
+			<CandidateRow jobId={jobId} candidate={candidate} />
 			<CandidateTags
 				matches={candidate.matches}
 				gaps={candidate.gaps}
@@ -233,15 +220,8 @@ function CandidateItem({
 
 // One candidate: rank, name and headline, score. The best match sits on the marker stroke with its score
 // ringed (design system §3). A CV still being read, or one that failed, says so where the headline would be.
-function CandidateRow({
-	jobId,
-	candidate,
-	rank,
-}: {
-	jobId: string;
-	candidate: CandidateSummary;
-	rank: number | undefined;
-}) {
+function CandidateRow({ jobId, candidate }: { jobId: string; candidate: CandidateSummary }) {
+	const { rank } = candidate;
 	const top = rank === 1;
 	// Rejected: the name and score go grey, which stays above 4.5:1 on the sheet and on the marker stroke.
 	const rejected = candidate.decision === "rejected";
@@ -258,7 +238,7 @@ function CandidateRow({
 				<span
 					className={`block font-[800] [overflow-wrap:anywhere] [font-stretch:108%] group-hover:underline group-hover:underline-offset-[.18em] ${top ? "text-[24px] leading-[1.05] tracking-[-0.02em]" : "text-[17px] leading-[1.2] tracking-[-0.01em]"} ${rejected ? "text-ink-muted" : ""}`}
 				>
-					{rank !== undefined && <span className="sr-only">Rank {rank}: </span>}
+					{rank !== null && <span className="sr-only">Rank {rank}: </span>}
 					{candidateName(candidate)}
 				</span>
 				<Detail candidate={candidate} top={top} />
