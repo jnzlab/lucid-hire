@@ -21,6 +21,7 @@ import {
 } from "../lib/candidates.ts";
 import { useJob } from "../lib/jobs.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
+import { InterviewQuestions } from "./interview-questions.tsx";
 import { RefreshFailed } from "./refresh-failed.tsx";
 
 export function CandidatePage({ jobId, candidateId }: { jobId: string; candidateId: string }) {
@@ -212,6 +213,7 @@ function CandidateDetails({
 					</div>
 				</section>
 			)}
+			<InterviewQuestions jobId={jobId} candidate={candidate} />
 
 			<p className="mt-10 font-mono text-[12.5px] text-ink-muted [overflow-wrap:anywhere]">
 				CV file · {candidate.fileName} · {formatFileSize(candidate.fileSize)}
