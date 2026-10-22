@@ -1,0 +1,99 @@
+@import "@fontsource-variable/archivo/wdth.css";
+@import "@fontsource/fragment-mono/400.css";
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Design tokens: docs/design/design-system.md §5. Don't add values here without updating that file. */
+:root {
+  --paper:#F5F5F1; --paper-2:#ECECE5; --desk:#E4E4DC; --sheet:#FFFFFF;
+  --ink:#141414; --ink-2:#34342F; --ink-muted:#5C5C55; --ink-faint:#8C8C84;
+  --line:#D9D9D1; --line-2:#E8E8E1;
+  --marker:#FFE84A; --marker-soft:#FFF4A8; --gap:#FF9BC8; --gap-soft:#FFD6E8; --gap-ink:#A3134F;
+  --on-marker:#141414;
+
+  /* shadcn/ui */
+  --background:var(--paper); --foreground:var(--ink);
+  --card:var(--sheet); --card-foreground:var(--ink);
+  --popover:var(--sheet); --popover-foreground:var(--ink);
+  --primary:var(--ink); --primary-foreground:var(--paper);
+  --secondary:var(--paper-2); --secondary-foreground:var(--ink);
+  --muted:var(--paper-2); --muted-foreground:var(--ink-muted);
+  --accent:var(--marker); --accent-foreground:var(--on-marker);
+  --destructive:var(--gap-ink);
+  --border:var(--line); --input:var(--line); --ring:var(--ink);
+  --chart-1:var(--ink); --chart-2:var(--ink-muted); --chart-3:var(--marker); --chart-4:var(--gap-ink); --chart-5:var(--line);
+  --radius:8px;
+  color-scheme:light;
+}
+
+.dark {
+  --paper:#141414; --paper-2:#1E1E1C; --desk:#1A1A18; --sheet:#222220;
+  --ink:#F5F5F1; --ink-2:#D6D6CC; --ink-muted:#BEBEB4; --ink-faint:#8C8C84;
+  --line:#373732; --line-2:#2A2A27;
+  --marker-soft:#484320; --gap-soft:#432F38; --gap-ink:#FF9BC8;
+  color-scheme:dark;
+}
+
+@theme inline {
+  --color-*: initial;
+  --color-white:#FFFFFF; --color-black:#000000; --color-transparent:transparent; --color-current:currentColor;
+  --color-paper:var(--paper); --color-paper-2:var(--paper-2); --color-desk:var(--desk); --color-sheet:var(--sheet);
+  --color-ink:var(--ink); --color-ink-2:var(--ink-2); --color-ink-muted:var(--ink-muted); --color-ink-faint:var(--ink-faint);
+  --color-line:var(--line); --color-line-2:var(--line-2);
+  --color-marker:var(--marker); --color-marker-soft:var(--marker-soft);
+  --color-gap:var(--gap); --color-gap-soft:var(--gap-soft); --color-gap-ink:var(--gap-ink);
+  --color-on-marker:var(--on-marker);
+  --color-background:var(--background); --color-foreground:var(--foreground);
+  --color-card:var(--card); --color-card-foreground:var(--card-foreground);
+  --color-popover:var(--popover); --color-popover-foreground:var(--popover-foreground);
+  --color-primary:var(--primary); --color-primary-foreground:var(--primary-foreground);
+  --color-secondary:var(--secondary); --color-secondary-foreground:var(--secondary-foreground);
+  --color-muted:var(--muted); --color-muted-foreground:var(--muted-foreground);
+  --color-accent:var(--accent); --color-accent-foreground:var(--accent-foreground);
+  --color-destructive:var(--destructive);
+  --color-border:var(--border); --color-input:var(--input); --color-ring:var(--ring);
+  --color-chart-1:var(--chart-1); --color-chart-2:var(--chart-2); --color-chart-3:var(--chart-3); --color-chart-4:var(--chart-4); --color-chart-5:var(--chart-5);
+
+  /* Fontsource registers the self-hosted variable Archivo (with the wdth axis) as "Archivo Variable". */
+  --font-sans:"Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif;
+  --font-display:"Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif;
+  --font-mono:"Fragment Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  --radius-sheet:3px; --radius-chip:6px; --radius-sm:6px; --radius-md:8px; --radius-lg:10px; --radius-xl:12px; --radius-2xl:14px;
+
+  --shadow-sheet:0 1px 0 rgba(20,20,20,.05), 0 2px 4px -2px rgba(20,20,20,.12), 0 18px 32px -18px rgba(20,20,20,.32);
+  --shadow-card:0 1px 0 rgba(20,20,20,.06), 0 18px 40px -28px rgba(20,20,20,.35);
+  --shadow-lift:0 22px 44px -30px rgba(20,20,20,.55);
+  --shadow-float:0 34px 64px -30px rgba(20,20,20,.55), 0 1px 0 rgba(20,20,20,.05), 0 18px 32px -18px rgba(20,20,20,.32);
+
+  --ease-out:cubic-bezier(.2,.7,.1,1);
+  --ease-in-out:cubic-bezier(.65,0,.25,1);
+}
+
+@layer base {
+  html { -webkit-text-size-adjust:100%; }
+  body {
+    @apply bg-paper font-sans text-ink antialiased;
+    font-size:17px;
+    line-height:1.55;
+  }
+  :focus-visible { outline:3px solid var(--ink); outline-offset:3px; border-radius:3px; }
+  ::selection { background:var(--marker); color:var(--on-marker); }
+}
+
+@layer components {
+  /* Marker highlight (design system §3). Text on a mark is always on-marker. */
+  .mk{--mkc:var(--marker);color:var(--on-marker);background-image:linear-gradient(101deg,transparent .06em,var(--mkc) .15em,var(--mkc) calc(100% - .16em),transparent calc(100% - .05em));background-repeat:no-repeat;background-position:0 64%;background-size:100% 68%;padding-inline:.1em;margin-inline:-.1em;-webkit-box-decoration-break:clone;box-decoration-break:clone;border-radius:.16em .34em .2em .3em}
+  .mk.mk-gap{--mkc:var(--gap)}
+  .mk.mk-logo{background-size:100% 62%}
+
+  /* Live dot (design system §3): ink, blinking with steps(2). Off means the thing isn't live. */
+  .live-dot{width:8px;height:8px;flex:none;border-radius:50%;background:var(--ink);animation:live-blink 1.2s steps(2) infinite}
+  .live-dot.is-off{background:var(--gap-ink);animation:none}
+}
+
+@keyframes live-blink { to { opacity:.15; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; }
+}
