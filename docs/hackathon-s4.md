@@ -666,10 +666,14 @@ TestSprite's cloud browser has to get in. Constraints, from the docs:
   processed candidates, so the leaderboard and candidate pages have data as
   soon as a run starts. Mark it as sample data.
 - **Test jobs (owner, 2026-10-22):** tests run as Sprite Labs on the live
-  site, so they must not pile up data. "Recruiter posts a job" adds a
-  "Sprite test role" each run and "Recruiter deletes a job" removes one,
-  so they balance out. The close test reuses one "Sprite archive role".
-  The AI and validation tests save nothing.
+  site, so they must not pile up data, and **TestSprite runs a suite's
+  tests in parallel**, so no two tests may share a job. Each test owns its
+  title and cleans up after itself: "Recruiter posts a job" deletes its
+  "Sprite post role" after checking it, and "Recruiter deletes a job"
+  creates and deletes its own "Sprite delete role". The close test reuses
+  one "Sprite archive role". The AI and validation tests save nothing.
+  (PR #4's first gate failed when a post test and a delete test shared
+  "Sprite test role".)
 - Gemini calls cost real money and add latency. Keep test CVs small. The
   test CVs in `lucid-hire-legacy/test/` can be reused.
 - Use stable, accessible selectors and labels (real `<button>`, `<label>`
