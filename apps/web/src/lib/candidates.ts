@@ -79,14 +79,16 @@ export const isWorking = ({ status }: { status: CandidateStatus }) => status ===
 export const isSlow = (candidate: Pick<CandidateSummary, "status" | "createdAt" | "updatedAt">, now = Date.now()) =>
 	isWorking(candidate) && now - Date.parse(candidate.updatedAt ?? candidate.createdAt) > SLOW_READ_MS;
 
+// What a failed CV says. The API words its message for a CV that can be tried again, and keeps it when the CV has
+// no runs left, so "Try again" is dropped unless Retry is on offer.
+export function failureMessage({ error, canRetry }: Pick<CandidateSummary, "error" | "canRetry">) {
+	const message = error ?? "Scoring failed. Try again.";
+	return canRetry ? message : message.replace(/\s*Try again\.?$/, "");
+}
+
 // The name from the CV, or the file name until the CV has been read (or when it has no name on it).
 export const candidateName = ({ name, fileName }: Pick<CandidateSummary, "name" | "fileName">) =>
 	name?.trim() || fileName;
-
-export function formatFileSize(bytes: number) {
-	if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 // The same checks the API makes, in the same words. `slotsLeft` is what the job can still take.
 export function checkCv(file: File, slotsLeft: number): string | null {

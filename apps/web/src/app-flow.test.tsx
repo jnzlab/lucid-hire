@@ -500,16 +500,37 @@ describe("page states and focus", () => {
 		const loading = hold((url) => url.endsWith("/jobs/job_3"));
 		renderAt("/dashboard/jobs/job_3");
 
-		const heading = await screen.findByRole("heading", { level: 1, name: "Opening the job" });
+		const heading = await screen.findByRole("heading", { level: 1, name: "Loading job" });
 		expect(heading.className).toContain("sr-only");
 		await act(async () => loading.release());
 		expect(await screen.findByRole("heading", { level: 1, name: "Kept role" })).toBeTruthy();
-		cleanup();
+	});
 
+	it("words every wait as Loading, on the page it is for", async () => {
 		const account = hold((url) => url.endsWith("/me"));
 		renderAt("/dashboard");
-		expect(await screen.findByRole("heading", { level: 1, name: "Opening your dashboard" })).toBeTruthy();
+		expect(await screen.findByRole("heading", { level: 1, name: "Loading your dashboard" })).toBeTruthy();
 		await act(async () => account.release());
+		cleanup();
+
+		org = null;
+		const onboarding = hold((url) => url.endsWith("/me"));
+		renderAt("/onboarding");
+		expect(await screen.findByRole("heading", { level: 1, name: "Loading your account" })).toBeTruthy();
+		await act(async () => onboarding.release());
+	});
+
+	it("words the wait for a job, a job to edit and a candidate the same way", async () => {
+		candidates = [fakeCandidate({ id: "cand_grace", jobId: "job_3" })];
+		const waiting = hold((url) => /\/jobs\/job_3(\/candidates\/cand_grace)?$/.test(url));
+
+		renderAt("/dashboard/jobs/job_3/edit");
+		expect(await screen.findByRole("heading", { level: 1, name: "Loading job" })).toBeTruthy();
+		cleanup();
+
+		renderAt("/dashboard/jobs/job_3/candidates/cand_grace");
+		expect(await screen.findByRole("heading", { level: 1, name: "Loading candidate" })).toBeTruthy();
+		await act(async () => waiting.release());
 	});
 
 	it("makes an error that is the whole page its h1, and keeps h2 for one inside a page", async () => {
@@ -776,6 +797,19 @@ describe("candidates", () => {
 		const [, init] = uploads()[0];
 		expect(init?.body).toBe(files[0]);
 		expect(init?.headers).toEqual({ "Content-Type": "application/pdf", Authorization: "Bearer session-token" });
+	});
+
+	it("calls the upload zone Add CVs on a phone, and keeps the Choose PDFs button", async () => {
+		vi.stubGlobal("matchMedia", (query: string) => ({
+			matches: query === "(pointer: coarse)",
+			addEventListener: () => {},
+			removeEventListener: () => {},
+		}));
+		renderAt("/dashboard/jobs/job_1");
+
+		expect(await screen.findByText("Add CVs")).toBeTruthy();
+		expect(screen.queryByText("Drop CVs here")).toBeNull();
+		expect(screen.getByLabelText("Choose PDFs")).toBeTruthy();
 	});
 
 	it("takes PDFs dropped on the zone", async () => {
@@ -1124,6 +1158,34 @@ describe("candidates", () => {
 		expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 	});
 
+	it("says Try again on a failed CV only while it can be tried again", async () => {
+		const failed = (id: string, fields: Partial<FakeCandidate>) =>
+			fakeCandidate({
+				id,
+				fileName: `${id}.pdf`,
+				status: "failed",
+				error: "Scoring failed. Try again.",
+				createdAt: "2026-10-22T12:00:00Z",
+				...fields,
+			});
+		candidates = [failed("cand_more", { canRetry: true }), failed("cand_last", { createdAt: "2026-10-22T12:30:00Z" })];
+		renderAt("/dashboard/jobs/job_1");
+
+		expect(await screen.findByText("✕ Scoring failed. Try again.")).toBeTruthy();
+		expect(screen.getByText("✕ Scoring failed.")).toBeTruthy();
+		cleanup();
+
+		renderAt("/dashboard/jobs/job_1/candidates/cand_last");
+		expect(await screen.findByText("Scoring failed.")).toBeTruthy();
+		expect(screen.getByText("We've tried this CV 3 times. It may not be a readable PDF.")).toBeTruthy();
+		expect(screen.queryByText(/Try again/)).toBeNull();
+		cleanup();
+
+		renderAt("/dashboard/jobs/job_1/candidates/cand_more");
+		expect(await screen.findByText("Scoring failed. Try again.")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+	});
+
 	it("keeps each row's retry state to itself", async () => {
 		const failed = (id: string, createdAt: string) =>
 			fakeCandidate({
@@ -1235,14 +1297,14 @@ describe("candidates", () => {
 		);
 		await act(() => vi.advanceTimersByTimeAsync(CANDIDATE_POLL_MS));
 
-		expect(await screen.findByText(/Couldn't refresh\. Retrying\./)).toBeTruthy();
+		expect(await screen.findByText(/We couldn't refresh\. Retrying\./)).toBeTruthy();
 		expect(screen.queryByText(/We couldn't load the candidates/)).toBeNull();
 		expect(rowTexts()).toHaveLength(2);
 		expect(screen.getByText("Grace Turner")).toBeTruthy();
 
 		fetchMock.mockImplementation(answer);
 		await act(() => vi.advanceTimersByTimeAsync(CANDIDATE_POLL_MS));
-		await waitFor(() => expect(screen.queryByText(/Couldn't refresh/)).toBeNull());
+		await waitFor(() => expect(screen.queryByText(/couldn't refresh/)).toBeNull());
 		expect(screen.getByText("Grace Turner")).toBeTruthy();
 	});
 
@@ -1259,7 +1321,7 @@ describe("candidates", () => {
 				: answer(url, init),
 		);
 		await act(() => vi.advanceTimersByTimeAsync(CANDIDATE_POLL_MS));
-		expect(await screen.findByText(/Couldn't refresh\. Retrying\./)).toBeTruthy();
+		expect(await screen.findByText(/We couldn't refresh\. Retrying\./)).toBeTruthy();
 		expect(screen.getByRole("heading", { level: 1, name: "grace_turner.pdf" })).toBeTruthy();
 		expect(screen.queryByText(/We couldn't load this candidate/)).toBeNull();
 

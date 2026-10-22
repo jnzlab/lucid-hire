@@ -6,7 +6,8 @@ import { ArrowRight } from "../components/icons.tsx";
 import { useOrg } from "../dashboard/org.ts";
 import { ApiError } from "../lib/api.ts";
 import { useCandidates } from "../lib/candidates.ts";
-import { type Job, type JobStatus, formatDate, useDeleteJob, useJob, useUpdateJob } from "../lib/jobs.ts";
+import { formatDate } from "../lib/format.ts";
+import { type Job, type JobStatus, useDeleteJob, useJob, useUpdateJob } from "../lib/jobs.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
 import { BackToJobs, JobStatusTag, PageHeading, SectionError, SectionLoading } from "./job-ui.tsx";
 
@@ -18,7 +19,7 @@ export function JobPage({ jobId }: { jobId: string }) {
 		<div className="wrap py-[clamp(32px,5vw,64px)]">
 			<BackToJobs />
 			{job.isPending ? (
-				<SectionLoading label="Opening the job" page />
+				<SectionLoading label="Loading job" page />
 			) : job.isError ? (
 				<JobLoadError error={job.error} onRetry={() => void job.refetch()} />
 			) : (

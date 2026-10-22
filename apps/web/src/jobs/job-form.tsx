@@ -1,6 +1,7 @@
 import { type FormEvent, type ReactNode, useRef, useState } from "react";
 import { Check } from "../components/icons.tsx";
 import { ApiError } from "../lib/api.ts";
+import { formatNumber } from "../lib/format.ts";
 import {
 	JOB_DESCRIPTION_MAX,
 	JOB_TITLE_HINT,
@@ -121,7 +122,7 @@ export function JobForm({ initial, actions, onSave, saving, saveError }: JobForm
 						Description
 					</label>
 					<span className="font-mono text-[12px] text-ink-muted" aria-hidden="true">
-						{description.length.toLocaleString("en-US")} / {JOB_DESCRIPTION_MAX.toLocaleString("en-US")}
+						{formatNumber(description.length)} / {formatNumber(JOB_DESCRIPTION_MAX)}
 					</span>
 				</div>
 				<textarea

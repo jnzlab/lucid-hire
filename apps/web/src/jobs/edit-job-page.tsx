@@ -13,7 +13,7 @@ export function EditJobPage({ jobId }: { jobId: string }) {
 		<div className="wrap py-[clamp(32px,5vw,64px)]">
 			<BackToJobs />
 			{job.isPending ? (
-				<SectionLoading label="Opening the job" page />
+				<SectionLoading label="Loading job" page />
 			) : job.isError ? (
 				<JobLoadError error={job.error} onRetry={() => void job.refetch()} />
 			) : (

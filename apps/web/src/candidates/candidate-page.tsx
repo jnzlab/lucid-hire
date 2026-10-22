@@ -13,13 +13,14 @@ import {
 	type Requirement,
 	SLOW_CHECK_MS,
 	candidateName,
-	formatFileSize,
+	failureMessage,
 	isSlow,
 	isWorking,
 	useCandidate,
 	useDeleteCandidate,
 	useRetryCandidate,
 } from "../lib/candidates.ts";
+import { formatFileSize } from "../lib/format.ts";
 import { useJob } from "../lib/jobs.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
 import { useNow } from "../lib/use-now.ts";
@@ -42,7 +43,7 @@ export function CandidatePage({ jobId, candidateId }: { jobId: string; candidate
 		<div className="wrap py-[clamp(32px,5vw,64px)]">
 			<BackToJob jobId={jobId} title={job.data?.title} />
 			{candidate.isPending ? (
-				<SectionLoading label="Opening the candidate" page />
+				<SectionLoading label="Loading candidate" page />
 			) : candidate.isError && (!candidate.data || gone) ? (
 				<CandidateLoadError jobId={jobId} error={candidate.error} onRetry={() => void candidate.refetch()} />
 			) : candidate.data ? (
@@ -186,7 +187,7 @@ function CandidateDetails({
 				<div className="mt-8">
 					<SectionError
 						title="We couldn't score this CV"
-						message={candidate.error ?? "Scoring failed. Try again."}
+						message={failureMessage(candidate)}
 						action={
 							candidate.canRetry ? (
 								retryButton("btn")

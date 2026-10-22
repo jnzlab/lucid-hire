@@ -2,6 +2,7 @@ import { useId, useState } from "react";
 import { Check } from "../components/icons.tsx";
 import { useOrg } from "../dashboard/org.ts";
 import { type Candidate, DECISION_LABEL, type Decision, NOTE_MAX, useDecideCandidate } from "../lib/candidates.ts";
+import { formatNumber } from "../lib/format.ts";
 import { type Segment, SegmentedControl } from "./segmented-control.tsx";
 
 const SEGMENTS: Segment<Decision>[] = [
@@ -83,7 +84,7 @@ function NoteField({ jobId, candidate }: { jobId: string; candidate: Candidate }
 					Note
 				</label>
 				<span className="font-mono text-[12px] text-ink-muted" aria-hidden="true">
-					{text.length.toLocaleString("en-US")} / {NOTE_MAX.toLocaleString("en-US")}
+					{formatNumber(text.length)} / {formatNumber(NOTE_MAX)}
 				</span>
 			</div>
 			<textarea

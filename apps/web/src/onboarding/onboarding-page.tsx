@@ -28,7 +28,7 @@ export function OnboardingPage() {
 // Recruiters who already have a company skip straight to the dashboard.
 function Onboarding() {
 	const me = useMe();
-	if (me.isPending) return <PageLoading label="Checking your account" />;
+	if (me.isPending) return <PageLoading label="Loading your account" />;
 	if (me.isError) return <PageError message={me.error.message} onRetry={() => void me.refetch()} />;
 	if (me.data.org) return <Navigate to="/dashboard" replace />;
 

@@ -1,6 +1,7 @@
 import { type DragEvent, useId, useRef, useState } from "react";
 import { Check } from "../components/icons.tsx";
 import { CV_MAX_BYTES, type UploadItem, type useUploadCvs } from "../lib/candidates.ts";
+import { useCoarsePointer } from "../lib/use-coarse-pointer.ts";
 
 const hasFiles = (event: DragEvent) => event.dataTransfer.types.includes("Files");
 
@@ -40,6 +41,7 @@ export function UploadZone({
 	slotsLeft: number;
 }) {
 	const [dragging, setDragging] = useState(false);
+	const coarse = useCoarsePointer();
 	const inputId = useId();
 	const helpId = useId();
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -79,7 +81,7 @@ export function UploadZone({
 				<div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4">
 					<div className="min-w-0">
 						<p className="text-[17px] leading-[1.2] font-[800] [font-stretch:108%]">
-							{dragging ? "Drop to upload" : "Drop CVs here"}
+							{dragging ? "Drop to upload" : coarse ? "Add CVs" : "Drop CVs here"}
 						</p>
 						<p id={helpId} className="mt-1 font-mono text-[12px] text-ink-muted">
 							PDF only · up to {CV_MAX_BYTES / (1024 * 1024)} MB each

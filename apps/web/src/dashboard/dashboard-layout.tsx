@@ -17,7 +17,7 @@ export function DashboardLayout() {
 // Recruiters without a company yet are sent to onboarding first.
 function WithOrg() {
 	const me = useMe();
-	if (me.isPending) return <PageLoading label="Opening your dashboard" />;
+	if (me.isPending) return <PageLoading label="Loading your dashboard" />;
 	if (me.isError) return <PageError message={me.error.message} onRetry={() => void me.refetch()} />;
 	if (!me.data.org) return <Navigate to="/onboarding" replace />;
 

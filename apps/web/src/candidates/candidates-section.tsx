@@ -10,6 +10,7 @@ import {
 	type Decision,
 	SLOW_CHECK_MS,
 	candidateName,
+	failureMessage,
 	isSlow,
 	isWorking,
 	useCandidates,
@@ -287,7 +288,7 @@ function Detail({ candidate, top }: { candidate: CandidateSummary; top: boolean 
 	if (candidate.status === "failed") {
 		return (
 			<span className="mt-1 block font-mono text-[12px] leading-[1.3] text-gap-ink [overflow-wrap:anywhere]">
-				✕ {candidate.error ?? "Scoring failed. Try again."}
+				✕ {failureMessage(candidate)}
 			</span>
 		);
 	}

@@ -92,9 +92,3 @@ export function useEnhanceDescription() {
 			(await apiPost<{ description: string }>("/jobs/enhance", input, { token: await token() })).description,
 	});
 }
-
-const DATE_FORMAT = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" });
-
-export function formatDate(iso: string) {
-	return DATE_FORMAT.format(new Date(iso));
-}

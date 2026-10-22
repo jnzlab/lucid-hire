@@ -3,7 +3,7 @@
 export function RefreshFailed({ polling, onRetry }: { polling: boolean; onRetry: () => void }) {
 	return (
 		<p role="status" className="mb-3 flex flex-wrap items-center gap-x-3 font-mono text-[12.5px] text-gap-ink">
-			<span>✕ Couldn't refresh.{polling && " Retrying."}</span>
+			<span>✕ We couldn't refresh.{polling && " Retrying."}</span>
 			{!polling && (
 				<button
 					type="button"

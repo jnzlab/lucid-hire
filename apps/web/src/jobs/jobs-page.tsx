@@ -3,7 +3,8 @@ import { AnnouncedBanner } from "../components/announced-banner.tsx";
 import { ArrowRight } from "../components/icons.tsx";
 import { Swipe } from "../components/swipe.tsx";
 import { useOrg } from "../dashboard/org.ts";
-import { type JobSummary, formatDate, useJobs } from "../lib/jobs.ts";
+import { formatDate } from "../lib/format.ts";
+import { type JobSummary, useJobs } from "../lib/jobs.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
 import { JobStatusTag, PageHeading, SectionError, SectionLoading } from "./job-ui.tsx";
 
