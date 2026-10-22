@@ -1,0 +1,24 @@
+{
+  "name": "@lucid-hire/api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "cf dev",
+    "build": "cf build",
+    "test": "vitest run",
+    "check": "cf workers types && tsc && oxlint && vitest run",
+    "deploy": "cf deploy"
+  },
+  "dependencies": {
+    "@clerk/backend": "^3.21.1",
+    "hono": "^4.13.13"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "beta",
+    "cf": "^1.0.0-beta.20",
+    "oxlint": "^1.89.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5"
+  }
+}
