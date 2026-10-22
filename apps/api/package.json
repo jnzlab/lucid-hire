@@ -7,15 +7,21 @@
     "build": "cf build",
     "test": "vitest run",
     "check": "cf workers types && tsc && oxlint && vitest run",
-    "deploy": "cf deploy"
+    "deploy": "cf deploy",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "cf d1 migrations apply c6c2834b-6af0-4a1b-9799-9dd0a58b13d5 --local --persist-to .cloudflare/state",
+    "db:migrate:remote": "cf d1 migrations apply c6c2834b-6af0-4a1b-9799-9dd0a58b13d5"
   },
   "dependencies": {
     "@clerk/backend": "^3.21.1",
+    "drizzle-orm": "^0.45.4",
     "hono": "^4.13.13"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "beta",
     "cf": "^1.0.0-beta.20",
+    "drizzle-kit": "^0.31.11",
+    "miniflare": "5.20261019.1-beta",
     "oxlint": "^1.89.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.4",

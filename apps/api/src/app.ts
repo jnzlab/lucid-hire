@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { requireAuth, verifyClerkSession, type SessionVerifier } from "./auth.ts";
 import { ALLOWED_ORIGINS } from "./config.ts";
+import { getDb } from "./db/client.ts";
+import { ORG_NAME_MAX, ORG_NAME_MIN, createOrgForUser, findOrgForUser, normalizeOrgName } from "./orgs.ts";
 import type { AppEnv } from "./types.ts";
 
 const REQUEST_ID_HEADER = "x-request-id";
@@ -43,9 +45,34 @@ export function createApp({ verifySession = verifyClerkSession }: AppOptions = {
 		}),
 	);
 
-	app.get("/me", requireAuth(verifySession), (c) =>
-		c.json({ userId: c.get("userId") }, 200, { "Cache-Control": "no-store" }),
-	);
+	const auth = requireAuth(verifySession);
+
+	// The signed-in user and their company, or `org: null` until onboarding creates one.
+	app.get("/me", auth, async (c) => {
+		const userId = c.get("userId");
+		const org = await findOrgForUser(getDb(c.env.DB), userId);
+		return c.json({ userId, org }, 200, { "Cache-Control": "no-store" });
+	});
+
+	// Onboarding: creates the user's company with them as admin. Repeating it returns the same company.
+	app.post("/orgs", auth, async (c) => {
+		const body = await c.req.json<{ name?: unknown }>().catch(() => null);
+		const name = normalizeOrgName(body?.name);
+		if (!name) {
+			return c.json(
+				{
+					error: {
+						code: "invalid_name",
+						message: `Enter a company name between ${ORG_NAME_MIN} and ${ORG_NAME_MAX} characters`,
+					},
+				},
+				400,
+			);
+		}
+
+		const { org, created } = await createOrgForUser(getDb(c.env.DB), c.get("userId"), name);
+		return c.json({ org }, created ? 201 : 200);
+	});
 
 	app.notFound((c) =>
 		c.json(
