@@ -9,9 +9,10 @@ TestSprite check against a live deployment.
 
 - **Status:** the landing page, sign-in and sign-out, onboarding, a dashboard
   with a sidebar and a company overview, jobs (search, filters, duplicate and
-  the AI description rewrite), CV scoring, shortlisting, interview questions,
-  the privacy and terms pages, and public job pages where candidates apply
-  with their CV are live. The rest of the legacy app's features are landing
+  the AI description rewrite), CV scoring with a profile read from each CV,
+  candidate search, filters and CSV export, shortlisting, interview
+  questions, the privacy and terms pages, and public job pages where
+  candidates apply with their CV are live. The rest of the legacy app's features are landing
   layer by layer.
 - **Live URL:** https://lucidhire.io (API: https://api.lucidhire.io)
 
@@ -80,6 +81,9 @@ on failure.
 | Recruiter duplicates a job as a draft | "Duplicate" on "Sprite duplicate role" opens "Sprite duplicate role (copy)" for editing with "Duplicated as a draft". Deletes both jobs afterwards |
 | Overview shows the company dashboard | The sidebar's "Overview" shows active roles, CVs screened, time to shortlist, top match, pipeline velocity, the 90-day funnel, the AI output mix and recent activity |
 | Collapsed sidebar stays collapsed after a reload | "Collapse sidebar", then a reload, still shows "Expand sidebar" |
+| Recruiter searches the candidate list | Uploads grace-turner.pdf and kenji-tanaka.pdf to "Sprite search candidates role", searches "Kenji", and sees only Kenji Tanaka. Deletes its job afterwards |
+| Candidate page shows the rank and the profile read from the CV | Grace Turner's page in "Sprite profile role" says "Ranked #1 of 1 scored CV for this role" and has a "Profile" section with her skills. Deletes its job afterwards |
+| Recruiter opens the CSV export choices | With kenji-tanaka.pdf in "Sprite export role", "Export CSV" offers all, shortlisted, undecided or rejected candidates. Deletes its job afterwards |
 
 The recruiter test account's credentials live only in the TestSprite
 environment, never in this repo.
