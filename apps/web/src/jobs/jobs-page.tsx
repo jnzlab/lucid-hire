@@ -19,6 +19,7 @@ import {
 } from "../lib/jobs.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
 import { JobStatusTag, PageHeading, SectionError, SectionLoading } from "./job-ui.tsx";
+import { RowActions } from "./row-actions.tsx";
 
 declare module "@tanstack/react-router" {
 	interface HistoryState {
@@ -41,7 +42,10 @@ export function JobsPage() {
 	const filters: JobFilters = useSearch({ from: "/dashboard/" });
 	const navigate = useNavigate({ from: "/dashboard/" });
 	const jobs = useJobs(filters);
-	const deletedJob = useRouterState({ select: (state) => state.location.state.deletedJob });
+	const deletedFromJobPage = useRouterState({ select: (state) => state.location.state.deletedJob });
+	// A delete from a row's menu is confirmed the same way as one from the job's page.
+	const [deletedHere, setDeletedHere] = useState<string>();
+	const deletedJob = deletedHere ?? deletedFromJobPage;
 	const filtered = Boolean(filters.q || filters.status);
 	const empty = jobs.data?.total === 0 && !filtered;
 
@@ -89,7 +93,7 @@ export function JobsPage() {
 							</p>
 						)}
 						<div aria-busy={jobs.isPlaceholderData} className={`mt-5 ${jobs.isPlaceholderData ? "opacity-60" : ""}`}>
-							{jobs.data.total === 0 ? <NoJobsMatch /> : <JobList list={jobs.data} filters={filters} />}
+							{jobs.data.total === 0 ? <NoJobsMatch /> : <JobList list={jobs.data} filters={filters} onDeleted={setDeletedHere} />}
 						</div>
 					</>
 				)}
@@ -209,7 +213,15 @@ function Toolbar({ filters, total }: { filters: JobFilters; total: number }) {
 	);
 }
 
-function JobList({ list, filters }: { list: JobListData; filters: JobFilters }) {
+function JobList({
+	list,
+	filters,
+	onDeleted,
+}: {
+	list: JobListData;
+	filters: JobFilters;
+	onDeleted: (title: string) => void;
+}) {
 	const { jobs, total, page, pageSize } = list;
 	const first = (page - 1) * pageSize + 1;
 	const last = first + jobs.length - 1;
@@ -226,7 +238,7 @@ function JobList({ list, filters }: { list: JobListData; filters: JobFilters }) 
 			<div className="rounded-xl bg-sheet px-6 shadow-card">
 				<ul>
 					{jobs.map((job) => (
-						<JobRow key={job.id} job={job} />
+						<JobRow key={job.id} job={job} onDeleted={onDeleted} />
 					))}
 				</ul>
 			</div>
@@ -264,13 +276,13 @@ function Pagination({ page, pages, filters }: { page: number; pages: number; fil
 	);
 }
 
-function JobRow({ job }: { job: JobListItem }) {
+function JobRow({ job, onDeleted }: { job: JobListItem; onDeleted: (title: string) => void }) {
 	return (
-		<li className="border-b border-line-2 last:border-b-0">
+		<li className="flex items-center gap-2 border-b border-line-2 last:border-b-0">
 			<Link
 				to="/dashboard/jobs/$jobId"
 				params={{ jobId: job.id }}
-				className="group -mx-3 my-1.5 flex min-h-16 flex-wrap items-center justify-between gap-x-6 gap-y-2 rounded-md px-3 py-3 hover:bg-paper-2"
+				className="group -mx-3 my-1.5 flex min-h-16 min-w-0 flex-1 flex-wrap items-center justify-between gap-x-6 gap-y-2 rounded-md px-3 py-3 hover:bg-paper-2"
 			>
 				<span className="min-w-0">
 					<span className="block text-[18px] leading-[1.2] font-[800] tracking-[-0.01em] [overflow-wrap:anywhere] [font-stretch:108%] group-hover:underline group-hover:underline-offset-[.18em]">
@@ -283,6 +295,7 @@ function JobRow({ job }: { job: JobListItem }) {
 				</span>
 				<JobStatusTag status={job.status} />
 			</Link>
+			<RowActions job={job} onDeleted={onDeleted} />
 		</li>
 	);
 }

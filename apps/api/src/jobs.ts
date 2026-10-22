@@ -175,6 +175,22 @@ export async function createJob(
 	return job;
 }
 
+const COPY_SUFFIX = " (copy)";
+
+// A new draft with the same title and description and no candidates. It goes through `createJob`, so
+// anything that limits new jobs applies to a copy too. The title is cut so "(copy)" still fits.
+export async function duplicateJob(db: Db, orgId: string, userId: string, id: string): Promise<Job | null> {
+	const source = await getJob(db, orgId, id);
+	if (!source) return null;
+	const room = JOB_TITLE_MAX - COPY_SUFFIX.length;
+	const base = source.title.length > room ? source.title.slice(0, room).trimEnd() : source.title;
+	return createJob(db, orgId, userId, {
+		title: `${base}${COPY_SUFFIX}`,
+		description: source.description,
+		status: "draft",
+	});
+}
+
 export async function updateJob(
 	db: Db,
 	orgId: string,

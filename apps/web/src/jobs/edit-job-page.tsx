@@ -1,10 +1,18 @@
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { AnnouncedBanner } from "../components/announced-banner.tsx";
 import { type Job, useJob, useUpdateJob } from "../lib/jobs.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
 import { CoverField } from "./cover-field.tsx";
 import { JobForm } from "./job-form.tsx";
 import { JobLoadError } from "./job-page.tsx";
 import { BackToJobs, PageHeading, SectionLoading } from "./job-ui.tsx";
+
+declare module "@tanstack/react-router" {
+	interface HistoryState {
+		// Set when this page is opened right after duplicating a job.
+		duplicatedJob?: boolean;
+	}
+}
 
 export function EditJobPage({ jobId }: { jobId: string }) {
 	const job = useJob(jobId);
@@ -27,11 +35,13 @@ export function EditJobPage({ jobId }: { jobId: string }) {
 function EditJob({ job }: { job: Job }) {
 	const navigate = useNavigate();
 	const update = useUpdateJob(job.id);
+	const duplicated = useRouterState({ select: (state) => state.location.state.duplicatedJob });
 	const toJob = { to: "/dashboard/jobs/$jobId", params: { jobId: job.id } } as const;
 
 	return (
 		<>
 			<PageHeading eyebrow="Edit job" title={job.title} />
+			<AnnouncedBanner message={duplicated ? "Duplicated as a draft" : undefined} className="mt-6" />
 			<div className="mt-8">
 				<CoverField job={job} />
 			</div>

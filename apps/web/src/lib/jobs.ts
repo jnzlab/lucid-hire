@@ -103,6 +103,11 @@ export function useUpdateJob(id: string) {
 	);
 }
 
+// Saves a copy of the job as a new draft.
+export function useDuplicateJob(id: string) {
+	return useSaveJob((_: void, token) => apiPost<{ job: Job }>(`/jobs/${id}/duplicate`, undefined, { token }));
+}
+
 export function useDeleteJob(id: string) {
 	const { userId, token } = useSession();
 	const queryClient = useQueryClient();

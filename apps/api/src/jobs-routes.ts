@@ -11,6 +11,7 @@ import {
 	createJob,
 	createJobInput,
 	deleteJob,
+	duplicateJob,
 	enhanceInput,
 	getJob,
 	listJobs,
@@ -88,6 +89,12 @@ export function jobRoutes({ auth, enhance, writeQuestions }: JobRouteOptions) {
 	routes.get("/:id", async (c) => {
 		const job = await getJob(getDb(c.env.DB), c.get("org").id, c.req.param("id"));
 		return job ? c.json({ job }, 200, { "Cache-Control": "no-store" }) : c.json(notFound, 404);
+	});
+
+	// A copy of a job as a new draft. Candidates stay with the original.
+	routes.post("/:id/duplicate", async (c) => {
+		const job = await duplicateJob(getDb(c.env.DB), c.get("org").id, c.get("userId"), c.req.param("id"));
+		return job ? c.json({ job }, 201) : c.json(notFound, 404);
 	});
 
 	routes.patch("/:id", validJson(updateJobInput), async (c) => {

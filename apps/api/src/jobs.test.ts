@@ -366,3 +366,63 @@ describe("GET /jobs search, filter, sort and pages", () => {
 		}
 	});
 });
+
+describe("POST /jobs/:id/duplicate", () => {
+	it("creates a new draft with (copy) after the title, the same description and no CVs", async () => {
+		const original = await createAs("user_admin", { title: "Staff Engineer", description: "Go and Rust", status: "open" });
+		await db.update(jobs).set({ cvCount: 7 }).where(eq(jobs.id, original.id));
+		await db.insert(candidates).values({
+			id: crypto.randomUUID(),
+			orgId: (await db.select().from(jobs).where(eq(jobs.id, original.id)))[0].orgId,
+			jobId: original.id,
+			fileKey: "k",
+			fileName: "cv.pdf",
+			fileSize: 1,
+			createdBy: "user_admin",
+		});
+
+		const res = await call("user_member", "POST", `/jobs/${original.id}/duplicate`);
+		expect(res.status).toBe(201);
+		const { job } = (await res.json()) as { job: { id: string; title: string; status: string; description: string; cvCount: number } };
+		expect(job).toMatchObject({ title: "Staff Engineer (copy)", status: "draft", description: "Go and Rust", cvCount: 0 });
+		expect(job.id).not.toBe(original.id);
+
+		const copyCandidates = await db.select().from(candidates).where(eq(candidates.jobId, job.id));
+		expect(copyCandidates).toHaveLength(0);
+		// The original is untouched.
+		const after = await call("user_admin", "GET", `/jobs/${original.id}`);
+		expect(await after.json()).toMatchObject({ job: { title: "Staff Engineer", status: "open", cvCount: 7 } });
+	});
+
+	it("cuts a long title so the whole title stays within 120 characters", async () => {
+		const long = await createAs("user_admin", { title: `${"A".repeat(119)}B`, description: "d" });
+		const { job } = (await (await call("user_admin", "POST", `/jobs/${long.id}/duplicate`)).json()) as { job: { title: string } };
+		expect(job.title).toHaveLength(120);
+		expect(job.title.endsWith(" (copy)")).toBe(true);
+
+		const spaced = await createAs("user_admin", { title: `${"word ".repeat(23)}tail`, description: "d" });
+		const second = (await (await call("user_admin", "POST", `/jobs/${spaced.id}/duplicate`)).json()) as { job: { title: string } };
+		expect(second.job.title.length).toBeLessThanOrEqual(120);
+		expect(second.job.title).not.toContain("  ");
+		expect(second.job.title.endsWith(" (copy)")).toBe(true);
+	});
+
+	it("copies a copy as (copy) (copy), and a copy of a closed job is still a draft", async () => {
+		const closed = await createAs("user_admin", { title: "Closed role", description: "d", status: "open" });
+		await call("user_admin", "PATCH", `/jobs/${closed.id}`, { status: "closed" });
+		const first = (await (await call("user_admin", "POST", `/jobs/${closed.id}/duplicate`)).json()) as { job: { id: string; status: string; title: string } };
+		expect(first.job).toMatchObject({ status: "draft", title: "Closed role (copy)" });
+		const second = (await (await call("user_admin", "POST", `/jobs/${first.job.id}/duplicate`)).json()) as { job: { title: string } };
+		expect(second.job.title).toBe("Closed role (copy) (copy)");
+	});
+
+	it("answers 404 for another company's job and for one that doesn't exist, and needs a session and company", async () => {
+		const acme = await createAs("user_acme", { title: "Acme only", description: "d" });
+		const res = await call("user_admin", "POST", `/jobs/${acme.id}/duplicate`);
+		expect(res.status).toBe(404);
+		expect(await res.json()).toMatchObject({ error: { code: "not_found" } });
+		expect((await call("user_admin", "POST", "/jobs/missing/duplicate")).status).toBe(404);
+		expect((await call(null, "POST", `/jobs/${acme.id}/duplicate`)).status).toBe(401);
+		expect((await call("user_new", "POST", `/jobs/${acme.id}/duplicate`)).status).toBe(403);
+	});
+});

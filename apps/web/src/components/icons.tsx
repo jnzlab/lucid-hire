@@ -88,3 +88,11 @@ export const IconSidebar = ({ collapsed }: { collapsed: boolean }) => (
 		<path d={collapsed ? "M8 3.5v13M11.5 8l2 2-2 2" : "M8 3.5v13M13.5 8l-2 2 2 2"} />
 	</Icon>
 );
+
+export const IconMore = () => (
+	<Icon>
+		<circle cx="4.5" cy="10" r="1.2" fill="currentColor" />
+		<circle cx="10" cy="10" r="1.2" fill="currentColor" />
+		<circle cx="15.5" cy="10" r="1.2" fill="currentColor" />
+	</Icon>
+);

@@ -104,6 +104,20 @@ function fakeJobs(path: string, method: string, body: Record<string, string>, qu
 		jobs.unshift(created);
 		return Response.json({ job: withCount(created) }, { status: 201 });
 	}
+	if (path.endsWith("/duplicate") && method === "POST" && job) {
+		const now = new Date("2026-10-22T14:00:00Z").toISOString();
+		const copy = {
+			...job,
+			id: `job_${jobs.length + 1}`,
+			title: `${job.title} (copy)`,
+			status: "draft",
+			cvCount: 0,
+			createdAt: now,
+			updatedAt: now,
+		};
+		jobs.unshift(copy);
+		return Response.json({ job: withCount(copy) }, { status: 201 });
+	}
 	if (path === "/jobs/enhance") {
 		return Response.json({ description: `What you need:\n- ${body.description}` });
 	}
@@ -762,6 +776,132 @@ describe("jobs", () => {
 			fail = false;
 			fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
 			expect(await screen.findByText("Showing 1–3 of 3")).toBeTruthy();
+		});
+	});
+
+	describe("row actions and duplicating", () => {
+		const open = (title: string) => fireEvent.click(screen.getByRole("button", { name: `Actions for ${title}` }));
+
+		beforeEach(() => {
+			jobs = [
+				{
+					id: "job_1",
+					title: "Backend Engineer",
+					description: "Go and Rust",
+					status: "open",
+					cvCount: 2,
+					createdAt: "2026-10-22T12:00:00Z",
+					updatedAt: "2026-10-22T12:00:00Z",
+				},
+			];
+		});
+
+		it("opens a menu for each job, closes it with Escape and gives focus back", async () => {
+			renderAt("/dashboard");
+			const button = await screen.findByRole("button", { name: "Actions for Backend Engineer" });
+			expect(button.getAttribute("aria-expanded")).toBe("false");
+
+			fireEvent.click(button);
+			const menu = screen.getByRole("menu", { name: "Actions for Backend Engineer" });
+			expect(button.getAttribute("aria-expanded")).toBe("true");
+			expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+				"Candidates",
+				"Edit",
+				"Duplicate",
+				"Delete",
+			]);
+			expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Candidates" }));
+
+			fireEvent.keyDown(menu, { key: "ArrowDown" });
+			expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Edit" }));
+			fireEvent.keyDown(menu, { key: "End" });
+			expect(document.activeElement).toBe(within(menu).getByRole("menuitem", { name: "Delete" }));
+			fireEvent.keyDown(menu, { key: "Escape" });
+			expect(screen.queryByRole("menu")).toBeNull();
+			expect(document.activeElement).toBe(button);
+		});
+
+		it("opens the job's page and its edit page from the menu", async () => {
+			const router = renderAt("/dashboard");
+			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
+			open("Backend Engineer");
+			fireEvent.click(screen.getByRole("menuitem", { name: "Edit" }));
+			expect(await screen.findByLabelText("Job title")).toBeTruthy();
+			expect(router.state.location.pathname).toBe("/dashboard/jobs/job_1/edit");
+		});
+
+		it("duplicates from the menu and opens the copy's edit page as a draft", async () => {
+			const router = renderAt("/dashboard");
+			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
+			open("Backend Engineer");
+			fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+
+			expect(await screen.findByText("Duplicated as a draft")).toBeTruthy();
+			expect((screen.getByLabelText("Job title") as HTMLInputElement).value).toBe("Backend Engineer (copy)");
+			expect((screen.getByLabelText("Description") as HTMLTextAreaElement).value).toBe("Go and Rust");
+			expect(router.state.location.pathname).toBe("/dashboard/jobs/job_2/edit");
+			expect(fetchMock).toHaveBeenCalledWith(
+				"http://localhost:8787/jobs/job_1/duplicate",
+				expect.objectContaining({ method: "POST" }),
+			);
+			expect(jobs[0]).toMatchObject({ title: "Backend Engineer (copy)", status: "draft", cvCount: 0 });
+		});
+
+		it("duplicates from the job page next to Edit job", async () => {
+			renderAt("/dashboard/jobs/job_1");
+			const edit = await screen.findByRole("link", { name: "Edit job" });
+			const duplicate = screen.getByRole("button", { name: "Duplicate" });
+			expect(edit.compareDocumentPosition(duplicate) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+			fireEvent.click(duplicate);
+			expect(await screen.findByText("Duplicated as a draft")).toBeTruthy();
+			expect((screen.getByLabelText("Job title") as HTMLInputElement).value).toBe("Backend Engineer (copy)");
+		});
+
+		it("shows the real reason when the copy can't be made", async () => {
+			const answer = fetchMock.getMockImplementation()!;
+			fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+				url.endsWith("/duplicate")
+					? Promise.resolve(apiError(403, "job_limit", "You've used this month's jobs. Wait for next month."))
+					: answer(url, init),
+			);
+			renderAt("/dashboard");
+			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
+			open("Backend Engineer");
+			fireEvent.click(screen.getByRole("menuitem", { name: "Duplicate" }));
+
+			const alert = await screen.findByRole("alert");
+			expect(alert.textContent).toBe("✕ You've used this month's jobs. Wait for next month.");
+			expect(alert.textContent).not.toMatch(/upgrade/i);
+		});
+
+		it("deletes only after confirming, and says so", async () => {
+			renderAt("/dashboard");
+			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
+			open("Backend Engineer");
+			fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+
+			const dialog = await screen.findByRole("alertdialog", { name: "Delete “Backend Engineer”?" });
+			expect(dialog.textContent).toContain("It and its 2 CVs are removed");
+			fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+			expect(screen.queryByRole("alertdialog")).toBeNull();
+			expect(document.activeElement).toBe(screen.getByRole("button", { name: "Actions for Backend Engineer" }));
+			expect(jobs).toHaveLength(1);
+
+			open("Backend Engineer");
+			fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+			fireEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Delete job" }));
+			expect(await screen.findByText("Deleted “Backend Engineer”")).toBeTruthy();
+			expect(await screen.findByRole("heading", { name: "No jobs yet" })).toBeTruthy();
+			expect(jobs).toHaveLength(0);
+		});
+
+		it("leaves Delete out for members", async () => {
+			org = { id: "org_1", name: "Sprite Labs", role: "member" };
+			renderAt("/dashboard");
+			await screen.findByRole("button", { name: "Actions for Backend Engineer" });
+			open("Backend Engineer");
+			expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Candidates", "Edit", "Duplicate"]);
 		});
 	});
 });

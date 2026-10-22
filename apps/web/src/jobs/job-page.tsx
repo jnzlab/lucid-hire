@@ -8,7 +8,7 @@ import { useOrg } from "../dashboard/org.ts";
 import { ApiError } from "../lib/api.ts";
 import { useCandidates } from "../lib/candidates.ts";
 import { formatDate } from "../lib/format.ts";
-import { type Job, type JobStatus, useDeleteJob, useJob, useUpdateJob } from "../lib/jobs.ts";
+import { type Job, type JobStatus, useDeleteJob, useDuplicateJob, useJob, useUpdateJob } from "../lib/jobs.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
 import { PublicLink } from "./share-panel.tsx";
 import { BackToJobs, JobStatusTag, PageHeading, SectionError, SectionLoading } from "./job-ui.tsx";
@@ -65,6 +65,7 @@ function JobDetails({ job }: { job: Job }) {
 	const navigate = useNavigate();
 	const update = useUpdateJob(job.id);
 	const remove = useDeleteJob(job.id);
+	const duplicate = useDuplicateJob(job.id);
 	// The CVs that go with the job: the ones listed now, or the upload count until the list has loaded.
 	const cvs = useCandidates(job.id).data?.candidates.length ?? job.cvCount;
 	const removed = cvs > 0 ? `It and its ${cvs} ${cvs === 1 ? "CV are" : "CVs are"} removed` : "It's removed";
@@ -77,6 +78,14 @@ function JobDetails({ job }: { job: Job }) {
 		if (update.isPending) return;
 		setAnnouncement("");
 		update.mutate({ status: next.to }, { onSuccess: () => setAnnouncement(next.done) });
+	};
+
+	const copy = () => {
+		if (duplicate.isPending) return;
+		duplicate.mutate(undefined, {
+			onSuccess: (created) =>
+				void navigate({ to: "/dashboard/jobs/$jobId/edit", params: { jobId: created.id }, state: { duplicatedJob: true } }),
+		});
 	};
 
 	const confirmDelete = () =>
@@ -94,6 +103,9 @@ function JobDetails({ job }: { job: Job }) {
 						<Link to="/dashboard/jobs/$jobId/edit" params={{ jobId: job.id }} className="btn ghost">
 							Edit job
 						</Link>
+						<button type="button" className="btn ghost" aria-disabled={duplicate.isPending} onClick={copy}>
+							{duplicate.isPending ? "Duplicating" : "Duplicate"}
+						</button>
 						{/* Only looks disabled while it saves, so it keeps keyboard focus; changeStatus ignores the click. */}
 						<button
 							type="button"
@@ -118,9 +130,9 @@ function JobDetails({ job }: { job: Job }) {
 			<p aria-live="polite" className="sr-only">
 				{announcement}
 			</p>
-			{update.isError && (
+			{(update.isError || duplicate.isError) && (
 				<p role="alert" className="mt-4 text-[14px] text-gap-ink">
-					✕ {update.error.message}
+					✕ {(update.error ?? duplicate.error)?.message}
 				</p>
 			)}
 
