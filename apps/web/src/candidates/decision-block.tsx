@@ -1,0 +1,125 @@
+import { useId, useState } from "react";
+import { Check } from "../components/icons.tsx";
+import { useOrg } from "../dashboard/org.ts";
+import { type Candidate, DECISION_LABEL, type Decision, NOTE_MAX, useDecideCandidate } from "../lib/candidates.ts";
+import { type Segment, SegmentedControl } from "./segmented-control.tsx";
+
+const SEGMENTS: Segment<Decision>[] = [
+	{ value: "undecided", label: DECISION_LABEL.undecided },
+	{ value: "shortlisted", label: DECISION_LABEL.shortlisted, mark: "yes" },
+	{ value: "rejected", label: DECISION_LABEL.rejected, mark: "no" },
+];
+
+// The recruiters' call on this CV, and a note on why. Anyone at the company can change both. A change shows
+// at once and is put back, with the API's reason, if it is refused.
+export function DecisionBlock({ jobId, candidate }: { jobId: string; candidate: Candidate }) {
+	const decide = useDecideCandidate(jobId, candidate.id);
+	const name = useId();
+	// What screen readers are told after a choice. The region stays on the page, so a change is announced.
+	const [announcement, setAnnouncement] = useState("");
+
+	const choose = (decision: Decision) => {
+		setAnnouncement(`Marked as ${decision}`);
+		decide.mutate({ decision }, { onError: () => setAnnouncement("") });
+	};
+
+	return (
+		<section aria-labelledby="decision-h" className="mt-10">
+			<h2 id="decision-h" className="text-[19px] leading-[1.2] font-[800] tracking-[-0.01em] [font-stretch:108%]">
+				Decision
+			</h2>
+			<SegmentedControl
+				name={name}
+				labelledBy="decision-h"
+				value={candidate.decision}
+				segments={SEGMENTS}
+				onChange={choose}
+				className="mt-4"
+			/>
+			<p aria-live="polite" className="sr-only">
+				{announcement}
+			</p>
+			{decide.isError && (
+				<p role="alert" className="mt-3 text-[14px] text-gap-ink">
+					✕ {decide.error.message}
+				</p>
+			)}
+			<NoteField jobId={jobId} candidate={candidate} />
+		</section>
+	);
+}
+
+function NoteField({ jobId, candidate }: { jobId: string; candidate: Candidate }) {
+	const org = useOrg();
+	const save = useDecideCandidate(jobId, candidate.id);
+	const id = useId();
+	const saved = candidate.note ?? "";
+	// What has been typed and not saved yet. Null while the field shows the saved note, so a note a teammate
+	// saves meanwhile shows up.
+	const [draft, setDraft] = useState<string | null>(null);
+	const [justSaved, setJustSaved] = useState(false);
+	const text = draft ?? saved;
+	const changed = draft !== null && draft.trim() !== saved;
+
+	const submit = () => {
+		if (draft === null) return;
+		const sent = draft;
+		save.mutate(
+			{ note: sent },
+			{
+				onSuccess: () => {
+					// Keep whatever was typed since.
+					setDraft((current) => (current === sent ? null : current));
+					setJustSaved(true);
+				},
+			},
+		);
+	};
+
+	return (
+		<div className="mt-6 max-w-[62ch]">
+			<div className="flex flex-wrap items-baseline justify-between gap-2">
+				<label htmlFor={id} className="block text-[14px] font-semibold text-ink">
+					Note
+				</label>
+				<span className="font-mono text-[12px] text-ink-muted" aria-hidden="true">
+					{text.length.toLocaleString("en-US")} / {NOTE_MAX.toLocaleString("en-US")}
+				</span>
+			</div>
+			<textarea
+				id={id}
+				className="field mt-2 resize-y leading-[1.55]"
+				rows={4}
+				maxLength={NOTE_MAX}
+				value={text}
+				onChange={(event) => {
+					setDraft(event.target.value);
+					setJustSaved(false);
+					if (save.isError) save.reset();
+				}}
+				aria-describedby={`${id}-help`}
+			/>
+			<p id={`${id}-help`} className="mt-2 text-[13px] text-ink-muted">
+				Everyone at {org.name} can read this.
+			</p>
+			<div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+				<button type="button" className="btn" disabled={!changed || save.isPending} onClick={submit}>
+					{save.isPending ? "Saving" : "Save note"}
+				</button>
+				<p aria-live="polite" className="inline-flex items-center gap-1.5 font-mono text-[12.5px] text-ink">
+					{justSaved && !changed && (
+						<>
+							<Check />
+							<span>Saved</span>
+						</>
+					)}
+				</p>
+			</div>
+			{save.isError && (
+				<p role="alert" className="mt-3 text-[14px] text-gap-ink">
+					✕ {save.error.message}
+				</p>
+			)}
+		</div>
+	);
+}

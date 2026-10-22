@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { ApiError, apiDelete, apiGet, apiPost, apiUploadPdf } from "./api.ts";
+import { ApiError, apiDelete, apiGet, apiGetBlob, apiPatch, apiPost, apiUploadPdf } from "./api.ts";
 import { jobKey, jobsKey } from "./jobs.ts";
 import { useSession } from "./session.ts";
 
@@ -9,6 +9,13 @@ export const CV_LIMIT_PER_JOB = 10;
 export const CV_MAX_BYTES = 5 * 1024 * 1024;
 export const MAX_SCORING_RUNS = 3;
 export const CANDIDATE_STATUSES = ["queued", "scoring", "scored", "failed"] as const;
+export const CANDIDATE_DECISIONS = ["undecided", "shortlisted", "rejected"] as const;
+// The longest note the API takes (apps/api/src/candidates.ts).
+export const NOTE_MAX = 1000;
+
+// A temporary link to a CV is revoked after this long, by when the tab or the download has it.
+export const CV_URL_REVOKE_MS = 60_000;
+export const OPEN_CV_FAILED = "We couldn't open the CV. Try again.";
 
 // How often the lists re-ask the API while a CV is still being read.
 export const CANDIDATE_POLL_MS = 3000;
@@ -16,6 +23,12 @@ export const CANDIDATE_POLL_MS = 3000;
 export const SLOW_READ_MS = 5 * 60_000;
 
 export type CandidateStatus = (typeof CANDIDATE_STATUSES)[number];
+export type Decision = (typeof CANDIDATE_DECISIONS)[number];
+export const DECISION_LABEL: Record<Decision, string> = {
+	undecided: "Undecided",
+	shortlisted: "Shortlisted",
+	rejected: "Rejected",
+};
 export type Requirement = {
 	label: string;
 	requirement: string;
@@ -28,6 +41,8 @@ export type CandidateSummary = {
 	id: string;
 	fileName: string;
 	status: CandidateStatus;
+	// The recruiters' call on this CV, whatever its status.
+	decision: Decision;
 	name: string | null;
 	headline: string | null;
 	score: number | null;
@@ -45,6 +60,9 @@ export type Candidate = CandidateSummary & {
 	summary: string | null;
 	requirements: Requirement[] | null;
 	fileSize: number;
+	note: string | null;
+	// When the decision last changed. Null while it is undecided.
+	decidedAt: string | null;
 };
 export type CandidateList = { candidates: CandidateSummary[]; cvCount: number; cvLimit: number };
 
@@ -107,6 +125,109 @@ export function useCandidate(jobId: string, id: string, enabled = true) {
 		refetchInterval: ({ state }) => (state.data && isWorking(state.data) ? CANDIDATE_POLL_MS : false),
 		retry: (failures, error) => failures < 1 && !(error instanceof ApiError && error.status === 404),
 	});
+}
+
+export type DecideInput = { decision?: Decision; note?: string | null };
+
+// What the API will answer for this change, so the page can show it before the answer arrives: the note is
+// trimmed (an empty one is none), and the decision's time changes only when the decision does.
+function decided(candidate: Candidate, { decision, note }: DecideInput): Candidate {
+	const next = { ...candidate };
+	if (note !== undefined) next.note = note?.trim() || null;
+	if (decision !== undefined) {
+		if (decision !== candidate.decision) next.decidedAt = decision === "undecided" ? null : new Date().toISOString();
+		next.decision = decision;
+	}
+	return next;
+}
+
+// Shortlists, rejects or un-decides a CV, and saves its note. Both pages show the change at once and put it back
+// if the API refuses. Changes to one CV go to the API one at a time, in the order they were made.
+export function useDecideCandidate(jobId: string, id: string) {
+	const { userId, token } = useSession();
+	const queryClient = useQueryClient();
+	const mutationKey = ["decide", userId, jobId, id];
+	const detailKey = candidateKey(userId, jobId, id);
+	const listQueryKey = listKey(userId, jobId);
+
+	const setDecision = (decision: Decision) =>
+		queryClient.setQueryData<CandidateList>(
+			listQueryKey,
+			(list) =>
+				list && { ...list, candidates: list.candidates.map((row) => (row.id === id ? { ...row, decision } : row)) },
+		);
+
+	return useMutation({
+		mutationKey,
+		scope: { id: mutationKey.join("/") },
+		mutationFn: async (input: DecideInput) =>
+			(await apiPatch<{ candidate: Candidate }>(`/jobs/${jobId}/candidates/${id}`, input, { token: await token() }))
+				.candidate,
+		onMutate: async (input) => {
+			// A fetch already on its way would land after this and show the old answer.
+			await Promise.all([
+				queryClient.cancelQueries({ queryKey: detailKey, exact: true }),
+				queryClient.cancelQueries({ queryKey: listQueryKey, exact: true }),
+			]);
+			const before = queryClient.getQueryData<Candidate>(detailKey);
+			const row = queryClient.getQueryData<CandidateList>(listQueryKey)?.candidates.find((c) => c.id === id);
+			queryClient.setQueryData<Candidate>(detailKey, (candidate) => candidate && decided(candidate, input));
+			if (input.decision !== undefined) setDecision(input.decision);
+			return { decision: before?.decision ?? row?.decision, note: before?.note };
+		},
+		// Puts back only what this change touched, so a poll that landed meanwhile isn't undone.
+		onError: (_error, input, previous) => {
+			if (input.decision !== undefined && previous?.decision !== undefined) {
+				const { decision } = previous;
+				setDecision(decision);
+				queryClient.setQueryData<Candidate>(detailKey, (candidate) => candidate && { ...candidate, decision });
+			}
+			if (input.note !== undefined && previous?.note !== undefined) {
+				const { note } = previous;
+				queryClient.setQueryData<Candidate>(detailKey, (candidate) => candidate && { ...candidate, note });
+			}
+		},
+		// Also after a refusal: the page then shows what the API holds. While more changes are on their way,
+		// only the last one asks, or the page would flick back to a state that is about to change.
+		onSettled: () => {
+			if (queryClient.isMutating({ mutationKey }) > 1) return;
+			void queryClient.invalidateQueries({ queryKey: detailKey, exact: true });
+			void queryClient.invalidateQueries({ queryKey: listQueryKey, exact: true });
+		},
+	});
+}
+
+// Opens the CV's PDF in a new tab. The tab has to be opened inside the click, or the browser takes it for a
+// popup and blocks it; the PDF is fetched with the session token after that, so the tab starts blank. When the
+// browser blocks the tab anyway, the PDF downloads instead.
+export function useOpenCv(jobId: string, id: string, fileName: string) {
+	const { token } = useSession();
+	const mutation = useMutation({
+		mutationFn: async (tab: Window | null) => {
+			const blob = await apiGetBlob(`/jobs/${jobId}/candidates/${id}/cv`, { token: await token() });
+			const url = URL.createObjectURL(blob);
+			if (tab) {
+				tab.location.href = url;
+			} else {
+				const link = document.createElement("a");
+				link.href = url;
+				link.download = fileName;
+				document.body.append(link);
+				link.click();
+				link.remove();
+			}
+			// By then the tab has the file, or the download has started.
+			setTimeout(() => URL.revokeObjectURL(url), CV_URL_REVOKE_MS);
+		},
+		onError: (_error, tab) => tab?.close(),
+	});
+	return {
+		open: () => {
+			if (!mutation.isPending) mutation.mutate(window.open("", "_blank"));
+		},
+		isPending: mutation.isPending,
+		error: mutation.isError ? OPEN_CV_FAILED : null,
+	};
 }
 
 export type UploadItem = {

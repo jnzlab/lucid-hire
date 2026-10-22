@@ -1,9 +1,12 @@
 import { Link, useRouterState } from "@tanstack/react-router";
+import { useState } from "react";
 import { ScoreRing } from "../components/score-ring.tsx";
 import { SectionError, SectionLoading } from "../jobs/job-ui.tsx";
 import {
 	type CandidateSummary,
 	CV_LIMIT_PER_JOB,
+	DECISION_LABEL,
+	type Decision,
 	candidateName,
 	isSlow,
 	isWorking,
@@ -12,8 +15,9 @@ import {
 	useUploadCvs,
 } from "../lib/candidates.ts";
 import type { Job } from "../lib/jobs.ts";
-import { CandidateTags } from "./candidate-tags.tsx";
+import { CandidateTags, DecisionTag } from "./candidate-tags.tsx";
 import { RefreshFailed } from "./refresh-failed.tsx";
+import { type Segment, SegmentedControl } from "./segmented-control.tsx";
 import { UploadZone } from "./upload-zone.tsx";
 
 declare module "@tanstack/react-router" {
@@ -115,20 +119,67 @@ function ReadProgress({ list }: { list: CandidateSummary[] }) {
 	);
 }
 
+type Show = "all" | Decision;
+
+const SHOW_ORDER: Show[] = ["all", "shortlisted", "undecided", "rejected"];
+const EMPTY_FILTER: Record<Decision, string> = {
+	shortlisted: "No shortlisted candidates yet.",
+	undecided: "No undecided candidates yet.",
+	rejected: "No rejected candidates yet.",
+};
+
 function RankedList({ jobId, candidates }: { jobId: string; candidates: CandidateSummary[] }) {
-	// Only a CV that has been scored has a rank. The API already sends them best first.
+	const [show, setShow] = useState<Show>("all");
+	// Only a CV that has been scored has a rank. The API already sends them best first. A rank belongs to the
+	// CV, not to its place on screen: filtering hides rows and never renumbers the rest.
 	const ranks = new Map(
 		candidates
 			.filter(({ status, score }) => status === "scored" && score !== null)
 			.map(({ id }, index) => [id, index + 1]),
 	);
+	// The filter appears once there is something to decide on.
+	const filterable = candidates.some(({ status }) => status === "scored");
+	const shown = filterable && show !== "all" ? candidates.filter(({ decision }) => decision === show) : candidates;
 
 	return (
-		<ol aria-labelledby="candidates-h" className="rounded-xl bg-sheet px-6 shadow-card">
-			{candidates.map((candidate) => (
-				<CandidateItem key={candidate.id} jobId={jobId} candidate={candidate} rank={ranks.get(candidate.id)} />
-			))}
-		</ol>
+		<>
+			{filterable && <DecisionFilter candidates={candidates} show={show} onChange={setShow} />}
+			{shown.length === 0 && show !== "all" ? (
+				<p className="rounded-xl bg-sheet px-6 py-5 text-[15px] text-ink-2 shadow-card">{EMPTY_FILTER[show]}</p>
+			) : (
+				<ol aria-labelledby="candidates-h" className="rounded-xl bg-sheet px-6 shadow-card">
+					{shown.map((candidate) => (
+						<CandidateItem key={candidate.id} jobId={jobId} candidate={candidate} rank={ranks.get(candidate.id)} />
+					))}
+				</ol>
+			)}
+		</>
+	);
+}
+
+// "Show: All 5, Shortlisted 2, Undecided 2, Rejected 1". It only hides rows; the counts are of the whole list.
+function DecisionFilter({
+	candidates,
+	show,
+	onChange,
+}: {
+	candidates: CandidateSummary[];
+	show: Show;
+	onChange: (show: Show) => void;
+}) {
+	const count = (option: Show) =>
+		option === "all" ? candidates.length : candidates.filter(({ decision }) => decision === option).length;
+	const segments: Segment<Show>[] = SHOW_ORDER.map((option) => ({
+		value: option,
+		label: `${option === "all" ? "All" : DECISION_LABEL[option]} ${count(option)}`,
+	}));
+	return (
+		<div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+			<span id="show-h" className="font-mono text-[12.5px] text-ink-muted">
+				Show
+			</span>
+			<SegmentedControl name="show" labelledBy="show-h" value={show} segments={segments} onChange={onChange} compact />
+		</div>
 	);
 }
 
@@ -146,7 +197,11 @@ function CandidateItem({
 	return (
 		<li className="border-b border-line-2 py-1 last:border-b-0">
 			<CandidateRow jobId={jobId} candidate={candidate} rank={rank} />
-			<CandidateTags matches={candidate.matches} gaps={candidate.gaps} className="mt-1 mb-3 ml-[42px]" />
+			<CandidateTags
+				matches={candidate.matches}
+				gaps={candidate.gaps}
+				className={`mt-1 mb-3 ml-[42px] ${candidate.decision === "rejected" ? "opacity-75" : ""}`}
+			/>
 			{candidate.canRetry && (
 				<div className="mb-3 ml-[42px]">
 					<button
@@ -180,6 +235,8 @@ function CandidateRow({
 	rank: number | undefined;
 }) {
 	const top = rank === 1;
+	// Rejected: the name and score go grey, which stays above 4.5:1 on the sheet and on the marker stroke.
+	const rejected = candidate.decision === "rejected";
 	return (
 		<Link
 			to="/dashboard/jobs/$jobId/candidates/$candidateId"
@@ -191,15 +248,16 @@ function CandidateRow({
 			</span>
 			<span className="min-w-0">
 				<span
-					className={`block font-[800] [overflow-wrap:anywhere] [font-stretch:108%] group-hover:underline group-hover:underline-offset-[.18em] ${top ? "text-[24px] leading-[1.05] tracking-[-0.02em]" : "text-[17px] leading-[1.2] tracking-[-0.01em]"}`}
+					className={`block font-[800] [overflow-wrap:anywhere] [font-stretch:108%] group-hover:underline group-hover:underline-offset-[.18em] ${top ? "text-[24px] leading-[1.05] tracking-[-0.02em]" : "text-[17px] leading-[1.2] tracking-[-0.01em]"} ${rejected ? "text-ink-muted" : ""}`}
 				>
 					{rank !== undefined && <span className="sr-only">Rank {rank}: </span>}
 					{candidateName(candidate)}
 				</span>
 				<Detail candidate={candidate} top={top} />
+				{candidate.decision !== "undecided" && <DecisionTag decision={candidate.decision} className="mt-2" />}
 			</span>
 			{candidate.status === "scored" && candidate.score !== null && (
-				<span className={top ? "mr-3" : ""}>
+				<span className={`${top ? "mr-3" : ""} ${rejected ? "text-ink-muted" : ""}`}>
 					<span className="sr-only">Score </span>
 					{top ? (
 						<ScoreRing score={candidate.score} className="text-[64px]" />
