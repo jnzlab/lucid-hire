@@ -1,6 +1,7 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { type Job, useJob, useUpdateJob } from "../lib/jobs.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
+import { CoverField } from "./cover-field.tsx";
 import { JobForm } from "./job-form.tsx";
 import { JobLoadError } from "./job-page.tsx";
 import { BackToJobs, PageHeading, SectionLoading } from "./job-ui.tsx";
@@ -31,6 +32,9 @@ function EditJob({ job }: { job: Job }) {
 	return (
 		<>
 			<PageHeading eyebrow="Edit job" title={job.title} />
+			<div className="mt-8">
+				<CoverField job={job} />
+			</div>
 			<div className="mt-8">
 				<JobForm
 					initial={{ title: job.title, description: job.description }}

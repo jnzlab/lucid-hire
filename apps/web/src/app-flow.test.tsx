@@ -40,6 +40,7 @@ type FakeJob = {
 	description: string;
 	status: string;
 	cvCount?: number;
+	hasCover?: boolean;
 	createdAt: string;
 	updatedAt: string;
 };
@@ -53,7 +54,7 @@ const notFound = () => Response.json({ error: { message: "That job doesn't exist
 const apiError = (status: number, code: string, message: string) =>
 	Response.json({ error: { code, message } }, { status });
 // What the API sends for a job: the CV count is always there.
-const withCount = (job: FakeJob) => ({ ...job, slug: `${job.id}-slug`, hasCover: false, cvCount: job.cvCount ?? 0 });
+const withCount = (job: FakeJob) => ({ ...job, slug: `${job.id}-slug`, hasCover: job.hasCover ?? false, cvCount: job.cvCount ?? 0 });
 
 // The jobs API, enough of it for the pages: list, create, read, edit, delete and the AI rewrite.
 function fakeJobs(path: string, method: string, body: Record<string, string>): Response {
@@ -87,6 +88,11 @@ function fakeJobs(path: string, method: string, body: Record<string, string>): R
 		return Response.json({ description: `What you need:\n- ${body.description}` });
 	}
 	if (!job) return notFound();
+	if (path.endsWith("/cover")) {
+		if (method === "GET") return new Response(new Blob(["png"], { type: "image/png" }));
+		job.hasCover = method === "PUT";
+		return Response.json({ job: withCount(job) });
+	}
 	if (method === "GET") return Response.json({ job: withCount(job) });
 	if (method === "PATCH") {
 		Object.assign(job, body, { updatedAt: new Date("2026-10-23T09:00:00Z").toISOString() });
@@ -398,6 +404,35 @@ describe("jobs", () => {
 		// The typed text is still there when switching back.
 		fireEvent.click(compose);
 		expect((screen.getByLabelText("Job title") as HTMLInputElement).value).toBe("Preview role");
+	});
+
+	it("adds, replaces and removes a cover image on the edit page", async () => {
+		jobs = [{ id: "job_1", title: "Cover role", description: "Text", status: "open", createdAt: "2026-10-20T10:00:00Z", updatedAt: "2026-10-20T10:00:00Z" }];
+		Object.assign(URL, { createObjectURL: () => "blob:cover-1", revokeObjectURL: () => {} });
+		renderAt("/dashboard/jobs/job_1/edit");
+		expect(await screen.findByRole("heading", { level: 2, name: "Cover image" })).toBeTruthy();
+		const input = document.querySelector('input[accept^="image/"]') as HTMLInputElement;
+		expect(screen.queryByRole("button", { name: "Remove image" })).toBeNull();
+
+		fireEvent.change(input, { target: { files: [new File(["x"], "cover.gif", { type: "image/gif" })] } });
+		expect((await screen.findByRole("alert")).textContent).toContain("Upload a JPEG, PNG or WebP image");
+		fireEvent.change(input, { target: { files: [new File([new Uint8Array(2 * 1024 * 1024 + 1)], "big.png", { type: "image/png" })] } });
+		expect((await screen.findByRole("alert")).textContent).toContain("The cover image must be 2 MB or smaller");
+
+		const png = new File(["x"], "cover.png", { type: "image/png" });
+		fireEvent.change(input, { target: { files: [png] } });
+		expect(await screen.findByText("Cover image saved")).toBeTruthy();
+		const put = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT")!;
+		expect(put[0]).toMatch(/\/jobs\/job_1\/cover$/);
+		expect(put[1]?.body).toBe(png);
+		expect(new Headers(put[1]?.headers).get("Content-Type")).toBe("image/png");
+		expect(await screen.findByRole("img", { name: "Current cover" })).toBeTruthy();
+		expect(screen.getByText("Replace image")).toBeTruthy();
+
+		fireEvent.click(screen.getByRole("button", { name: "Remove image" }));
+		expect(await screen.findByText("Cover image removed")).toBeTruthy();
+		expect(screen.queryByRole("img", { name: "Current cover" })).toBeNull();
+		expect(screen.getByText("Choose an image")).toBeTruthy();
 	});
 
 	it("posts a first job from the empty state and opens it", async () => {

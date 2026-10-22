@@ -389,3 +389,95 @@ describe("verifyTurnstile", () => {
 		fetchMock.mockRestore();
 	});
 });
+
+describe("cover image", () => {
+	const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+	const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+	const WEBP = new Uint8Array([0x52, 0x49, 0x46, 0x46, 4, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 1]);
+	const as = (user: string | null, method: string, path: string, init: { type?: string; body?: Uint8Array; length?: string } = {}) => {
+		const headers: Record<string, string> = {};
+		if (user) headers.authorization = `Bearer t:${user}`;
+		if (init.type) headers["content-type"] = init.type;
+		if (init.body) headers["content-length"] = init.length ?? String(init.body.byteLength);
+		return send(method, path, { headers, body: init.body });
+	};
+
+	it("stores a cover under covers/<org>/<job>, marks the job and serves it publicly", async () => {
+		const job = await makeJob();
+		const put = await as("user_admin", "PUT", `/jobs/${job.id}/cover`, { type: "image/png", body: PNG });
+		expect(put.status).toBe(200);
+		expect(((await put.json()) as { job: { hasCover: boolean } }).job.hasCover).toBe(true);
+		expect(new Uint8Array(await (await bucket.get(`covers/${orgId}/${job.id}`))!.arrayBuffer())).toEqual(PNG);
+
+		const page = await send("GET", `/public/jobs/${job.slug}`);
+		expect(((await page.json()) as { job: { hasCover: boolean } }).job.hasCover).toBe(true);
+		const image = await send("GET", `/public/jobs/${job.slug}/cover`);
+		expect(image.status).toBe(200);
+		expect(image.headers.get("content-type")).toBe("image/png");
+		expect(image.headers.get("cache-control")).toBe("public, max-age=300");
+		expect(new Uint8Array(await image.arrayBuffer())).toEqual(PNG);
+	});
+
+	it("replaces the old cover and takes the type from the bytes", async () => {
+		const job = await makeJob();
+		await as("user_admin", "PUT", `/jobs/${job.id}/cover`, { type: "image/png", body: PNG });
+		await as("user_admin", "PUT", `/jobs/${job.id}/cover`, { type: "image/jpeg", body: WEBP });
+		const image = await send("GET", `/public/jobs/${job.slug}/cover`);
+		expect(image.headers.get("content-type")).toBe("image/webp");
+		expect(new Uint8Array(await image.arrayBuffer())).toEqual(WEBP);
+		const jpeg = await as("user_admin", "PUT", `/jobs/${job.id}/cover`, { type: "image/jpeg", body: JPEG });
+		expect(jpeg.status).toBe(200);
+	});
+
+	it("refuses other types, fake images, empty and big files", async () => {
+		const job = await makeJob();
+		const put = (init: Parameters<typeof as>[3]) => as("user_admin", "PUT", `/jobs/${job.id}/cover`, init);
+		expect((await put({ type: "image/gif", body: PNG })).status).toBe(415);
+		expect((await put({ body: PNG })).status).toBe(415);
+		expect((await put({ type: "image/png", body: new TextEncoder().encode("<svg onload=alert(1)>") })).status).toBe(415);
+		expect((await put({ type: "image/png", body: PNG, length: String(2 * 1024 * 1024 + 1) })).status).toBe(413);
+		expect((await put({ type: "image/png", body: new Uint8Array(0) })).status).toBe(400);
+		const missingLength = await send("PUT", `/jobs/${job.id}/cover`, {
+			headers: { authorization: "Bearer t:user_admin", "content-type": "image/png" },
+		});
+		expect(missingLength.status).toBe(411);
+		expect(await bucket.get(`covers/${orgId}/${job.id}`)).toBeNull();
+	});
+
+	it("shows the recruiter their own cover, even on a draft", async () => {
+		const job = await makeJob("draft");
+		expect((await as("user_admin", "GET", `/jobs/${job.id}/cover`)).status).toBe(404);
+		await as("user_admin", "PUT", `/jobs/${job.id}/cover`, { type: "image/png", body: PNG });
+		const res = await as("user_admin", "GET", `/jobs/${job.id}/cover`);
+		expect(res.status).toBe(200);
+		expect(res.headers.get("cache-control")).toBe("private, no-store");
+		expect(new Uint8Array(await res.arrayBuffer())).toEqual(PNG);
+		expect((await as("user_acme_none", "GET", `/jobs/${job.id}/cover`)).status).toBe(403);
+	});
+
+	it("removes the cover", async () => {
+		const job = await makeJob();
+		await as("user_admin", "PUT", `/jobs/${job.id}/cover`, { type: "image/png", body: PNG });
+		const del = await as("user_admin", "DELETE", `/jobs/${job.id}/cover`);
+		expect(((await del.json()) as { job: { hasCover: boolean } }).job.hasCover).toBe(false);
+		expect(await bucket.get(`covers/${orgId}/${job.id}`)).toBeNull();
+		expect((await send("GET", `/public/jobs/${job.slug}/cover`)).status).toBe(404);
+	});
+
+	it("needs a session and the company's own job", async () => {
+		const job = await makeJob();
+		expect((await as(null, "PUT", `/jobs/${job.id}/cover`, { type: "image/png", body: PNG })).status).toBe(401);
+		const other = await createOrgForUser(db, "user_other", "Other Co");
+		expect(other.created).toBe(true);
+		expect((await as("user_other", "PUT", `/jobs/${job.id}/cover`, { type: "image/png", body: PNG })).status).toBe(404);
+		expect((await as("user_other", "DELETE", `/jobs/${job.id}/cover`)).status).toBe(404);
+	});
+
+	it("is removed with the job, and a draft's cover is never public", async () => {
+		const job = await makeJob("draft");
+		await as("user_admin", "PUT", `/jobs/${job.id}/cover`, { type: "image/png", body: PNG });
+		expect((await send("GET", `/public/jobs/${job.slug}/cover`)).status).toBe(404);
+		await as("user_admin", "DELETE", `/jobs/${job.id}`);
+		expect(await bucket.get(`covers/${orgId}/${job.id}`)).toBeNull();
+	});
+});

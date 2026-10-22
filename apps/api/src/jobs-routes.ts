@@ -6,12 +6,16 @@ import { deleteCvFiles, listFileKeys } from "./candidates.ts";
 import { getDb } from "./db/client.ts";
 import type { QuestionWriter } from "./interview-questions.ts";
 import {
+	COVER_MAX_BYTES,
+	coverKeyFor,
 	createJob,
 	createJobInput,
 	deleteJob,
 	enhanceInput,
 	getJob,
 	listJobs,
+	setJobCover,
+	sniffCover,
 	updateJob,
 	updateJobInput,
 } from "./jobs.ts";
@@ -87,6 +91,61 @@ export function jobRoutes({ auth, enhance, writeQuestions }: JobRouteOptions) {
 		return job ? c.json({ job }) : c.json(notFound, 404);
 	});
 
+	// The optional cover image. The body is the raw image; what it is comes from its first bytes, not from the
+	// Content-Type the client sent. One file per job, so a new one replaces the old.
+	routes.put("/:id/cover", async (c) => {
+		const org = c.get("org");
+		const id = c.req.param("id");
+		const db = getDb(c.env.DB);
+		if (!(await getJob(db, org.id, id))) return c.json(notFound, 404);
+
+		const declared = c.req.header("content-type")?.split(";")[0].trim().toLowerCase();
+		if (declared !== "image/jpeg" && declared !== "image/png" && declared !== "image/webp") {
+			return c.json({ error: { code: "not_image", message: "Upload a JPEG, PNG or WebP image" } }, 415);
+		}
+		const length = c.req.header("content-length");
+		if (!length || !/^\d+$/.test(length)) {
+			return c.json({ error: { code: "length_required", message: "Upload the image again" } }, 411);
+		}
+		if (Number(length) > COVER_MAX_BYTES) {
+			return c.json({ error: { code: "too_large", message: "The cover image must be 2 MB or smaller" } }, 413);
+		}
+		const bytes = new Uint8Array(await c.req.arrayBuffer());
+		if (bytes.byteLength === 0) return c.json({ error: { code: "empty_file", message: "That file is empty" } }, 400);
+		const type = sniffCover(bytes);
+		if (!type) return c.json({ error: { code: "not_image", message: "Upload a JPEG, PNG or WebP image" } }, 415);
+
+		const key = coverKeyFor(org.id, id);
+		await c.env.CVS.put(key, bytes, { httpMetadata: { contentType: type } });
+		const job = await setJobCover(db, org.id, id, key);
+		return job ? c.json({ job }) : c.json(notFound, 404);
+	});
+
+	// The cover for the job's own editor, which works for drafts too (the public route only serves open and closed jobs).
+	routes.get("/:id/cover", async (c) => {
+		const org = c.get("org");
+		const id = c.req.param("id");
+		const job = await getJob(getDb(c.env.DB), org.id, id);
+		if (!job) return c.json(notFound, 404);
+		const object = job.hasCover ? await c.env.CVS.get(coverKeyFor(org.id, id)) : null;
+		if (!object) return c.json({ error: { code: "no_cover", message: "This job has no cover image" } }, 404);
+		return c.body(object.body, 200, {
+			"Content-Type": object.httpMetadata?.contentType ?? "application/octet-stream",
+			"Content-Length": String(object.size),
+			"Cache-Control": "private, no-store",
+			"X-Content-Type-Options": "nosniff",
+		});
+	});
+
+	routes.delete("/:id/cover", async (c) => {
+		const org = c.get("org");
+		const id = c.req.param("id");
+		const job = await setJobCover(getDb(c.env.DB), org.id, id, null);
+		if (!job) return c.json(notFound, 404);
+		c.executionCtx.waitUntil(deleteCvFiles(c.env.CVS, [coverKeyFor(org.id, id)]));
+		return c.json({ job });
+	});
+
 	// Deleting is for admins only (legacy bug B10 let any member delete).
 	routes.delete("/:id", async (c) => {
 		const org = c.get("org");
@@ -96,7 +155,7 @@ export function jobRoutes({ auth, enhance, writeQuestions }: JobRouteOptions) {
 		const db = getDb(c.env.DB);
 		const id = c.req.param("id");
 		// The candidate rows go with the job, so their R2 keys are collected first.
-		const fileKeys = await listFileKeys(db, org.id, id);
+		const fileKeys = [...(await listFileKeys(db, org.id, id)), coverKeyFor(org.id, id)];
 		const deleted = await deleteJob(db, org.id, id);
 		if (!deleted) return c.json(notFound, 404);
 		c.executionCtx.waitUntil(deleteCvFiles(c.env.CVS, fileKeys));

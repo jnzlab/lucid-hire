@@ -124,6 +124,27 @@ export async function updateJob(
 	return job ?? null;
 }
 
+export const COVER_MAX_BYTES = 2 * 1024 * 1024;
+export type CoverType = "image/jpeg" | "image/png" | "image/webp";
+
+const startsWith = (bytes: Uint8Array, at: number, signature: number[]) => signature.every((byte, i) => bytes[at + i] === byte);
+
+// The image type the first bytes say it is, or null. The client's Content-Type is never trusted for what gets served.
+export function sniffCover(bytes: Uint8Array): CoverType | null {
+	if (startsWith(bytes, 0, [0xff, 0xd8, 0xff])) return "image/jpeg";
+	if (startsWith(bytes, 0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "image/png";
+	if (startsWith(bytes, 0, [0x52, 0x49, 0x46, 0x46]) && startsWith(bytes, 8, [0x57, 0x45, 0x42, 0x50])) return "image/webp";
+	return null;
+}
+
+// One cover per job, so the key is fixed and a new upload replaces the old file.
+export const coverKeyFor = (orgId: string, jobId: string) => `covers/${orgId}/${jobId}`;
+
+export async function setJobCover(db: Db, orgId: string, id: string, coverKey: string | null): Promise<Job | null> {
+	const [job] = await db.update(jobs).set({ coverKey }).where(inOrg(orgId, id)).returning(jobColumns);
+	return job ?? null;
+}
+
 export async function deleteJob(db: Db, orgId: string, id: string): Promise<boolean> {
 	const deleted = await db.delete(jobs).where(inOrg(orgId, id)).returning({ id: jobs.id });
 	return deleted.length > 0;

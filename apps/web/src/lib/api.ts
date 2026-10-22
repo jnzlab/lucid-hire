@@ -92,6 +92,11 @@ export function apiPatch<T>(path: string, body: unknown, options: ApiRequestOpti
 	return request<T>("PATCH", path, body, options);
 }
 
+// A DELETE whose answer has a body, such as the job without its cover.
+export function apiDeleteJson<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+	return request<T>("DELETE", path, undefined, options);
+}
+
 export function apiDelete(path: string, options: ApiRequestOptions = {}): Promise<void> {
 	return request<void>("DELETE", path, undefined, options);
 }
@@ -119,4 +124,11 @@ export async function apiApply(
 		"X-File-Name": encodeURIComponent(file.name),
 	};
 	return parse(await send(`${API_URL}${path}`, { method: "POST", headers, body: file, signal }));
+}
+
+// Sends an image (or any file) as the raw body of a PUT, with the file's own type.
+export async function apiPutFile<T>(path: string, file: File, { token, signal }: ApiRequestOptions = {}): Promise<T> {
+	const headers: Record<string, string> = { "Content-Type": file.type };
+	if (token) headers.Authorization = `Bearer ${token}`;
+	return parse<T>(await send(`${API_URL}${path}`, { method: "PUT", headers, body: file, signal }));
 }
