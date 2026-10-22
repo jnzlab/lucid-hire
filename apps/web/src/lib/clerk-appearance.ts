@@ -62,5 +62,39 @@ export const clerkLocalization: Localization = {
 			title: "Create your LucidHire account",
 			subtitle: "It takes a minute. No card needed.",
 		},
+		emailCode: {
+			title: "Check your email",
+			subtitle: "Enter the 6-digit code we sent to",
+			resendButton: "Didn't get it? Send a new code",
+		},
+	},
+};
+
+// Sign-in and sign-up on their own pages (AuthLayout): the form sits flat on the paper instead of in a card. It keeps
+// Clerk's centred alignment, so every later step (verify email, password, reset, two-factor) lines up the same way.
+// Passed to <SignIn> and <SignUp>; it adds to the above.
+export const authFormAppearance: Appearance = {
+	elements: {
+		rootBox: "w-full max-w-[400px]",
+		// Clerk's card sits -1px over the box's border and the box clips, which cut off the fields' right edges and focus
+		// rings once the border was gone, so the card keeps its place and the box shows what reaches past it.
+		cardBox: "w-full max-w-none overflow-visible rounded-none border-0 bg-transparent shadow-none",
+		card: "m-0 gap-7 rounded-none border-0 bg-transparent px-0 pt-0 pb-2 shadow-none",
+		headerTitle: "text-[28px] [font-stretch:112%] tracking-[-0.03em]",
+		footer: "bg-none bg-transparent px-0 [&>*]:px-0",
+		footerAction: "text-[15px]",
+		footerActionText: "text-ink-2",
+		socialButtonsBlockButtonText: "text-[15px] font-semibold text-ink",
+		// The email-code step. Clerk draws the six code boxes 40px square (32px on small screens) and caps them at 36px
+		// tall in its own styles, so their size takes `!`. The row's wrapper is only as wide as its content, so the boxes
+		// get a set width: 56 x 64px, narrowing with the screen so six fit at 360px. Digits are mono, the way the app
+		// shows data, and the box being typed in keeps Clerk's ink focus ring. The email being verified is a mono chip,
+		// and the resend link has room under the boxes.
+		otpCodeFieldInputs: "gap-2",
+		otpCodeFieldInput:
+			"!h-[clamp(52px,15vw,64px)] !max-h-none !w-[clamp(44px,12.5vw,56px)] border-[1.5px] border-solid border-line bg-sheet font-mono !text-[26px] !font-normal text-ink",
+		formResendCodeLink: "mt-2 text-[14px] text-ink-muted hover:text-ink",
+		identityPreview: "mx-auto mt-1 w-fit gap-2 rounded-md border border-line bg-sheet px-3 py-1.5",
+		identityPreviewText: "font-mono text-[13.5px] text-ink",
 	},
 };

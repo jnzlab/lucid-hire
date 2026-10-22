@@ -2,8 +2,9 @@ import { UserButton, useAuth } from "@clerk/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Navigate, getRouteApi } from "@tanstack/react-router";
 import { type FormEvent, useRef, useState } from "react";
-import { AuthLayout } from "../auth/auth-layout.tsx";
+import { AuthLayout, SignUpSteps } from "../auth/auth-layout.tsx";
 import { RequireSession } from "../auth/require-session.tsx";
+import { CompanyStage } from "../auth/stages.tsx";
 import { ArrowRight } from "../components/icons.tsx";
 import { PageError, PageLoading } from "../components/page-state.tsx";
 import { apiPost } from "../lib/api.ts";
@@ -32,13 +33,15 @@ const route = getRouteApi("/onboarding");
 function Onboarding() {
 	const me = useMe();
 	const { next } = route.useSearch();
+	// The stage shows the name on a sample job page as it is typed.
+	const [name, setName] = useState("");
 	if (me.isPending) return <PageLoading label="Loading your account" />;
 	if (me.isError) return <PageError message={me.error.message} onRetry={() => void me.refetch()} />;
 	if (me.data.org) return <PickedPlanRedirect next={next} />;
 
 	return (
 		<AuthLayout
-			eyebrow="Step 2 of 2 · Your company"
+			eyebrow={<SignUpSteps current={2} />}
 			title={
 				<>
 					Name your <span className="mk">company</span>.
@@ -46,8 +49,9 @@ function Onboarding() {
 			}
 			lede="It goes on your dashboard and on every job you post."
 			headerAside={<UserButton />}
+			stage={<CompanyStage name={name} />}
 		>
-			<CompanyForm />
+			<CompanyForm name={name} onNameChange={setName} />
 		</AuthLayout>
 	);
 }
@@ -66,10 +70,9 @@ function PickedPlanRedirect({ next }: { next: string | undefined }) {
 	);
 }
 
-function CompanyForm() {
+function CompanyForm({ name, onNameChange }: { name: string; onNameChange: (name: string) => void }) {
 	const { getToken, userId } = useAuth();
 	const queryClient = useQueryClient();
-	const [name, setName] = useState("");
 	const [submitted, setSubmitted] = useState(false);
 	const nameRef = useRef<HTMLInputElement>(null);
 
@@ -99,9 +102,9 @@ function CompanyForm() {
 			onSubmit={onSubmit}
 			noValidate
 			aria-labelledby="company-h"
-			className="w-full max-w-[440px] rounded-xl bg-sheet p-6 shadow-card min-[561px]:p-8"
+			className="w-full max-w-[400px]"
 		>
-			<h2 id="company-h" className="text-[19px] leading-[1.2] font-[800] tracking-[-0.01em] [font-stretch:108%]">
+			<h2 id="company-h" className="font-display text-[28px] leading-[1.1] font-[800] tracking-[-0.03em] [font-stretch:112%]">
 				Company details
 			</h2>
 			<label htmlFor="company-name" className="mt-5 block text-[14px] font-semibold text-ink">
@@ -116,7 +119,7 @@ function CompanyForm() {
 				placeholder="Acme Hiring"
 				maxLength={NAME_MAX}
 				value={name}
-				onChange={(event) => setName(event.target.value)}
+				onChange={(event) => onNameChange(event.target.value)}
 				aria-invalid={showInvalid}
 				aria-describedby={showInvalid ? "company-name-error" : "company-name-help"}
 			/>
