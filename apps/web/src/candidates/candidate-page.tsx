@@ -14,6 +14,7 @@ import {
 	candidateEmail,
 	candidateName,
 	failureMessage,
+	isEmail,
 	isSlow,
 	isWorking,
 	useCandidate,
@@ -107,8 +108,10 @@ function Contact({ candidate, jobId, jobTitle }: { candidate: Candidate; jobId: 
 	const email = candidateEmail(candidate);
 	if (!email) return <p className="mt-2 font-mono text-[13px] text-ink-muted">No email provided</p>;
 
+	// Only an address that passes the strict rule becomes a link: one stored before the rule could carry a query.
+	const linkable = isEmail(email);
 	// A scored CV with a job to write about can be taken forward.
-	const canOnboard = candidate.status === "scored" && jobTitle !== undefined;
+	const canOnboard = candidate.status === "scored" && jobTitle !== undefined && linkable;
 	const onboard = () => {
 		if (!canOnboard) return;
 		// Opened inside the click, so the browser doesn't take it for a popup. The app sends nothing itself.
@@ -123,9 +126,13 @@ function Contact({ candidate, jobId, jobTitle }: { candidate: Candidate; jobId: 
 
 	return (
 		<div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
-			<a href={`mailto:${email}`} className="font-mono text-[13px] text-ink underline underline-offset-[.18em] [overflow-wrap:anywhere]">
-				{email}
-			</a>
+			{linkable ? (
+				<a href={`mailto:${email}`} className="font-mono text-[13px] text-ink underline underline-offset-[.18em] [overflow-wrap:anywhere]">
+					{email}
+				</a>
+			) : (
+				<span className="font-mono text-[13px] text-ink [overflow-wrap:anywhere]">{email}</span>
+			)}
 			{canOnboard && (
 				<button type="button" className="btn ghost" onClick={onboard}>
 					Onboard
