@@ -3,6 +3,7 @@ import { PageHeading } from "../jobs/job-ui.tsx";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
 import { AccountSection } from "./account-section.tsx";
 import { PlanSection } from "./plan-section.tsx";
+import { TeamSection } from "./team-section.tsx";
 
 export function SettingsPage({ checkout, upgrade }: { checkout: boolean; upgrade: "pro" | "max" | undefined }) {
 	useDocumentTitle("Settings · LucidHire");
@@ -13,6 +14,7 @@ export function SettingsPage({ checkout, upgrade }: { checkout: boolean; upgrade
 			<PageHeading eyebrow={org.name} title="Settings" />
 			<div className="mt-8 grid max-w-[1040px] gap-8">
 				<PlanSection checkout={checkout} upgrade={upgrade} />
+				<TeamSection isAdmin={org.role === "admin"} />
 				<AccountSection />
 			</div>
 		</div>
