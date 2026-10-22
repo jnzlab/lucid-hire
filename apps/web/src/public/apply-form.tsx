@@ -140,6 +140,19 @@ export function ApplyForm({ slug }: { slug: string }) {
 						Loading the security check
 					</p>
 				)}
+				{turnstile.status === "failed" && (
+					<p role="alert" className="mt-2 text-[13px] text-gap-ink">
+						✕ The security check didn't pass.{" "}
+						<button type="button" className="font-semibold underline" onClick={turnstile.reset}>
+							Try again
+						</button>
+						, or email your CV to{" "}
+						<a className="font-semibold underline" href={`mailto:${SUPPORT_EMAIL}`}>
+							{SUPPORT_EMAIL}
+						</a>
+						.
+					</p>
+				)}
 				{turnstile.status === "unavailable" && (
 					<p role="alert" className="mt-2 text-[13px] text-gap-ink">
 						✕ The security check didn't load. Check your connection and reload the page, or email your CV to{" "}

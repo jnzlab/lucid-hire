@@ -39,6 +39,7 @@ let current: FakeJob | null;
 let applyResponse: () => Response;
 let fetchMock: Mock<(url: string, init?: RequestInit) => Promise<Response>>;
 let turnstileCallback: ((token: string) => void) | undefined;
+let turnstileError: (() => void) | undefined;
 let render_: Mock;
 let reset: Mock;
 
@@ -58,8 +59,9 @@ beforeEach(() => {
 	});
 	vi.stubGlobal("fetch", fetchMock);
 	vi.stubGlobal("scrollTo", () => {});
-	render_ = vi.fn((_el: HTMLElement, options: { callback: (token: string) => void }) => {
+	render_ = vi.fn((_el: HTMLElement, options: { callback: (token: string) => void; "error-callback": () => void }) => {
 		turnstileCallback = options.callback;
+		turnstileError = options["error-callback"];
 		return "widget-1";
 	});
 	reset = vi.fn();
@@ -194,6 +196,22 @@ describe("public job page", () => {
 		expect(await screen.findByText(/You have already applied to this job using this email address\./)).toBeTruthy();
 		await waitFor(() => expect(reset).toHaveBeenCalled());
 		expect((screen.getByRole("button", { name: "Submit application" }) as HTMLButtonElement).disabled).toBe(true);
+	});
+
+	it("says why when the security check refuses the browser, and lets the applicant try again", async () => {
+		await openPage();
+		fill("ada@example.com", pdf());
+		await waitFor(() => expect(turnstileError).toBeDefined());
+		act(() => turnstileError!());
+
+		const alert = await screen.findByText(/The security check didn't pass/);
+		expect(alert.textContent).toContain("support@lucidhire.io");
+		expect((screen.getByRole("button", { name: "Submit application" }) as HTMLButtonElement).disabled).toBe(true);
+		fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+		expect(reset).toHaveBeenCalledWith("widget-1");
+		await waitFor(() => expect(screen.queryByText(/The security check didn't pass/)).toBeNull());
+		act(() => turnstileCallback!("token-2"));
+		expect((screen.getByRole("button", { name: "Submit application" }) as HTMLButtonElement).disabled).toBe(false);
 	});
 
 	it("offers the support address when the security check never loads", async () => {

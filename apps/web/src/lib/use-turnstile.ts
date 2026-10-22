@@ -14,8 +14,9 @@ declare global {
 }
 
 // `loading` until the widget is drawn, `ready` once it is, `unavailable` when Cloudflare's script never arrived
-// (blocked, offline) so the page can say why the button stays disabled.
-export type TurnstileStatus = "loading" | "ready" | "unavailable";
+// (blocked, offline) and `failed` when Cloudflare refused this browser, so the page can say why the button stays
+// disabled.
+export type TurnstileStatus = "loading" | "ready" | "unavailable" | "failed";
 
 const SCRIPT_ID = "cf-turnstile-script";
 const SCRIPT_URL = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
@@ -74,10 +75,16 @@ export function useTurnstile(): {
 					sitekey: TURNSTILE_SITE_KEY,
 					theme: document.documentElement.classList.contains("dark") ? "dark" : "light",
 					size: "flexible",
-					callback: (value: string) => setToken(value),
+					callback: (value: string) => {
+						setToken(value);
+						setStatus("ready");
+					},
 					"expired-callback": () => setToken(null),
 					"timeout-callback": () => setToken(null),
-					"error-callback": () => setToken(null),
+					"error-callback": () => {
+						setToken(null);
+						setStatus("failed");
+					},
 				});
 				setStatus("ready");
 			},
@@ -96,7 +103,9 @@ export function useTurnstile(): {
 
 	const reset = useCallback(() => {
 		setToken(null);
-		if (widgetId.current) window.turnstile?.reset(widgetId.current);
+		if (!widgetId.current) return;
+		setStatus("ready");
+		window.turnstile?.reset(widgetId.current);
 	}, []);
 
 	return { containerRef, token, status, reset };
