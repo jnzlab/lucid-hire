@@ -8,7 +8,8 @@ Season 4. Every layer lands through a pull request that is gated by a
 TestSprite check against a live deployment.
 
 - **Status:** the landing page, sign-in, onboarding, jobs (with the AI
-  description rewrite), CV scoring and interview questions are live. Next comes polish. Billing and
+  description rewrite), CV scoring, shortlisting and interview questions are
+  live. Next comes polish. Billing and
   the public apply portal are out of scope.
 - **Live URL:** https://lucidhire.io (API: https://api.lucidhire.io)
 
@@ -25,6 +26,10 @@ evidence.
 LucidHire computes the score itself, and must-haves count double. So the
 same CV always gets the same score, and every point traces back to a quote.
 The job page polls while CVs are scoring.
+
+Recruiters mark each candidate Shortlisted, Rejected or Undecided, keep a
+shared note, and open the original PDF. The ranked list shows each decision and
+can be filtered by it.
 
 On a scored candidate, "Write questions" asks gemini-3.5-flash-lite for 5 to 8
 interview questions. They're built from the scoring's evidence, so the CV isn't
@@ -59,6 +64,7 @@ on failure.
 | Admin deletes a candidate after confirming | Uploads kenji-tanaka.pdf to "Sprite candidate role", deletes the candidate through the confirm dialog, and sees "Deleted …". Deletes its job afterwards |
 | Jobs take PDF CVs only while open | A draft job explains it can't take CVs; once opened, a .txt file is refused with "Upload a PDF file" and no slot is used. Deletes its job afterwards |
 | Recruiter gets interview questions for a candidate | Uploads grace-turner.pdf to "Sprite questions role", opens her once scored, clicks "Write questions", and sees at least 5 numbered questions with "Copy all" and "Write new questions". Deletes its job afterwards |
+| Recruiter shortlists a candidate and filters the list | Uploads kenji-tanaka.pdf to "Sprite shortlist role", marks Kenji "Shortlisted" with a saved note, sees the badge in the list, and filters to "Shortlisted 1". Deletes its job afterwards |
 
 The recruiter test account's credentials live only in the TestSprite
 environment, never in this repo.
