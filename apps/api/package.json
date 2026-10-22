@@ -13,9 +13,13 @@
     "db:migrate:remote": "cf d1 migrations apply c6c2834b-6af0-4a1b-9799-9dd0a58b13d5"
   },
   "dependencies": {
+    "@ai-sdk/google": "^4.0.102",
     "@clerk/backend": "^3.21.1",
+    "@hono/zod-validator": "^0.9.1",
+    "ai": "^7.0.148",
     "drizzle-orm": "^0.45.4",
-    "hono": "^4.13.13"
+    "hono": "^4.13.13",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "beta",

@@ -1,6 +1,8 @@
 import { verifyToken } from "@clerk/backend";
 import { createMiddleware } from "hono/factory";
 import { ALLOWED_ORIGINS } from "./config.ts";
+import { getDb } from "./db/client.ts";
+import { findOrgForUser } from "./orgs.ts";
 import type { AppEnv } from "./types.ts";
 
 export type SessionVerifier = (token: string, env: Env) => Promise<{ userId: string }>;
@@ -39,3 +41,14 @@ export function requireAuth(verify: SessionVerifier) {
 		await next();
 	});
 }
+
+// Runs after requireAuth. Loads the user's company, so routes behind it only ever touch that company's data.
+export const requireOrg = createMiddleware<AppEnv>(async (c, next) => {
+	const org = await findOrgForUser(getDb(c.env.DB), c.get("userId"));
+	if (!org) {
+		return c.json({ error: { code: "no_org", message: "Name your company before you post jobs" } }, 403);
+	}
+
+	c.set("org", org);
+	await next();
+});
