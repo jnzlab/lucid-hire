@@ -7,7 +7,7 @@ import { type Db, getDb } from "./db/client.ts";
 import { jobs, organizations, usageCounters } from "./db/schema.ts";
 import { createJob } from "./jobs.ts";
 import { createOrgForUser } from "./orgs.ts";
-import { type PlanState, effectivePlan, limitSql } from "./plan-state.ts";
+import { type PlanState, RENEWAL_GRACE_MS, effectivePlan, limitSql } from "./plan-state.ts";
 import { createTestD1 } from "./test/d1.ts";
 import { hourPeriod, monthPeriod, readUnits, returnUnit, secondsToNextHour, takeUnit } from "./usage.ts";
 
@@ -43,10 +43,20 @@ describe("effectivePlan", () => {
 		}
 	});
 
-	it("drops to free once the paid period has ended, whatever the status says", () => {
-		expect(effectivePlan(paid({ currentPeriodEnd: now - 1 }), now)).toBe("free");
-		expect(effectivePlan(paid({ currentPeriodEnd: now }), now)).toBe("free");
+	it("drops to free once the paid period and its renewal grace have ended, whatever the status says", () => {
+		expect(effectivePlan(paid({ currentPeriodEnd: now - RENEWAL_GRACE_MS - 1 }), now)).toBe("free");
+		expect(effectivePlan(paid({ currentPeriodEnd: now - RENEWAL_GRACE_MS }), now)).toBe("free");
 		expect(effectivePlan(paid({ currentPeriodEnd: null }), now)).toBe("free");
+	});
+
+	it("keeps a renewing plan through the grace, while Polar's renewal webhook is on the way", () => {
+		expect(effectivePlan(paid({ currentPeriodEnd: now - 1 }), now)).toBe("pro");
+		expect(effectivePlan(paid({ currentPeriodEnd: now - RENEWAL_GRACE_MS + 1 }), now)).toBe("pro");
+	});
+
+	it("ends a plan set to cancel with its period, with no grace", () => {
+		expect(effectivePlan(paid({ currentPeriodEnd: now + 1, cancelAtPeriodEnd: true }), now)).toBe("pro");
+		expect(effectivePlan(paid({ currentPeriodEnd: now, cancelAtPeriodEnd: true }), now)).toBe("free");
 	});
 
 	it("treats an unknown stored plan as free", () => {
@@ -174,7 +184,7 @@ describe("the monthly job allowance", () => {
 	});
 
 	it("falls back to the free allowance once the paid period has ended", async () => {
-		const { userId } = await newOrg({ plan: "max", subscriptionStatus: "active", currentPeriodEnd: Date.now() - 1000 });
+		const { userId } = await newOrg({ plan: "max", subscriptionStatus: "active", currentPeriodEnd: Date.now() - RENEWAL_GRACE_MS - 1000 });
 		for (let i = 0; i < 10; i += 1) expect((await newJob(userId)).status).toBe(201);
 		expect((await newJob(userId)).status).toBe(403);
 	});
@@ -231,7 +241,8 @@ describe("the CV limit per job", () => {
 
 	it("uses the free limit for a lapsed or unpaid subscription", async () => {
 		for (const over of [
-			{ plan: "pro" as const, subscriptionStatus: "active" as const, currentPeriodEnd: Date.now() - 1 },
+			{ plan: "pro" as const, subscriptionStatus: "active" as const, currentPeriodEnd: Date.now() - RENEWAL_GRACE_MS - 1 },
+			{ plan: "pro" as const, subscriptionStatus: "active" as const, currentPeriodEnd: Date.now() - 1, cancelAtPeriodEnd: true },
 			{ plan: "pro" as const, subscriptionStatus: "incomplete" as const, currentPeriodEnd: future() },
 			{ plan: "max" as const, subscriptionStatus: "canceled" as const, currentPeriodEnd: future() },
 		]) {

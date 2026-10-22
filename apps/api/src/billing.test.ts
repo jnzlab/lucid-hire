@@ -10,6 +10,7 @@ import { createOrgForUser } from "./orgs.ts";
 import { hourPeriod, monthPeriod } from "./usage.ts";
 import type { PolarFetch } from "./polar.ts";
 import { createTestD1 } from "./test/d1.ts";
+import { RENEWAL_GRACE_MS } from "./plan-state.ts";
 
 vi.setConfig({ testTimeout: 30_000 });
 
@@ -123,11 +124,25 @@ describe("GET /billing", () => {
 		expect(typeof body.currentPeriodEnd).toBe("string");
 	});
 
-	it("shows the free limits once a paid period has ended, while still naming the stored plan", async () => {
-		const { admin } = await newOrg(paying("pro", { currentPeriodEnd: Date.now() - 1000 }));
+	it("shows the free limits once a paid period and its renewal grace have ended, while still naming the stored plan", async () => {
+		const { admin } = await newOrg(paying("pro", { currentPeriodEnd: Date.now() - RENEWAL_GRACE_MS - 1000 }));
 		const body = (await (await call(admin, "GET", "/billing")).json()) as Record<string, any>;
 		expect(body).toMatchObject({ plan: "pro", effectivePlan: "free" });
 		expect(body.usage.cvLimit).toBe(10);
+	});
+
+	it("keeps a renewing plan while its renewal webhook is on the way", async () => {
+		// Polar charges first and sends the webhook after: a period that ended a minute ago is still paid for.
+		const { admin } = await newOrg(paying("pro", { currentPeriodEnd: Date.now() - 60_000 }));
+		const body = (await (await call(admin, "GET", "/billing")).json()) as Record<string, any>;
+		expect(body).toMatchObject({ plan: "pro", effectivePlan: "pro" });
+		expect(body.usage.cvLimit).toBe(100);
+	});
+
+	it("ends a plan set to cancel with its period, with no renewal grace", async () => {
+		const { admin } = await newOrg(paying("pro", { currentPeriodEnd: Date.now() - 60_000, cancelAtPeriodEnd: true }));
+		const body = (await (await call(admin, "GET", "/billing")).json()) as Record<string, any>;
+		expect(body).toMatchObject({ plan: "pro", effectivePlan: "free" });
 	});
 
 	it("needs a session and a company", async () => {
@@ -194,6 +209,14 @@ describe("POST /billing/checkout", () => {
 		expect(polarCalls).toEqual([
 			{ path: "/subscriptions/sub_1", method: "PATCH", body: { product_id: POLAR.products.max, proration_behavior: "invoice" } },
 		]);
+	});
+
+	it("never opens a second checkout while the stored subscription still says active, however late its renewal is", async () => {
+		// Polar may still be renewing it; a new checkout now would bill the company twice.
+		const { admin } = await newOrg(paying("pro", { currentPeriodEnd: Date.now() - RENEWAL_GRACE_MS - 60_000 }));
+		const res = await call(admin, "POST", "/billing/checkout", { plan: "max" });
+		expect(await res.json()).toEqual({ changed: true, plan: "max" });
+		expect(polarCalls.map(({ path }) => path)).toEqual(["/subscriptions/sub_1"]);
 	});
 
 	it("will not change to the plan the company is already on, or while payment is overdue or a cancellation is pending", async () => {

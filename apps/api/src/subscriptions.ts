@@ -2,7 +2,7 @@ import { and, eq, isNull, lte, or } from "drizzle-orm";
 import type { Db } from "./db/client.ts";
 import { SUBSCRIPTION_STATUSES, type SubscriptionStatus, organizations, webhookEvents } from "./db/schema.ts";
 import { type PolarFetch, SUBSCRIPTION_EVENTS, type SubscriptionData, orderData, planForProduct, subscriptionData } from "./polar.ts";
-import { ACCESS_STATUSES } from "./plan-state.ts";
+import { ACCESS_STATUSES, grantsAccess } from "./plan-state.ts";
 
 export type WebhookOutcome =
 	| { kind: "applied"; orgId: string }
@@ -51,8 +51,6 @@ async function findOrg(db: Db, data: SubscriptionData): Promise<OrgRow | null> {
 	return null;
 }
 
-const grants = (status: string | null, periodEnd: number | null, now: number) =>
-	(ACCESS_STATUSES as readonly string[]).includes(status ?? "") && periodEnd !== null && periodEnd > now;
 
 // Turns one subscription event into the company's plan state. The event carries Polar's whole subscription, so each
 // event is applied as a snapshot, and `modified_at` orders them: a late `updated` can never undo a `revoked` (B1).
@@ -84,7 +82,7 @@ export async function applySubscriptionEvent(
 	if (!sameSubscription && org.polarSubscriptionId) {
 		// Another subscription than the one on file. It takes over only when ours no longer grants access and this
 		// event isn't an ending one; an old subscription's late events must not touch the current one.
-		const currentGrants = grants(org.subscriptionStatus, org.currentPeriodEnd, now);
+		const currentGrants = grantsAccess(org, now);
 		const ending = revoked || status === "canceled" || status === "incomplete_expired" || status === "unpaid";
 		if (currentGrants || ending) return { kind: "ignored", reason: "another subscription" };
 	}

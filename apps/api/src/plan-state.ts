@@ -14,14 +14,27 @@ export type PlanState = {
 	plan: string;
 	subscriptionStatus: string | null;
 	currentPeriodEnd: number | null;
+	cancelAtPeriodEnd?: boolean | null;
 };
 
-// THE function that says which plan a company is on right now. The stored `plan` counts only while the
-// subscription grants access and its paid period hasn't ended, so a missed webhook can't keep a lapsed plan alive.
+// Polar charges a renewal first and sends its webhook after, so a paid period that just ended keeps its plan this
+// much longer. A missed webhook still can't keep a lapsed plan alive past it.
+export const RENEWAL_GRACE_MS = 48 * 60 * 60 * 1000;
+
+// Whether a stored subscription grants its paid plan right now: a status that gives access, and a paid period that
+// hasn't ended. One that renews keeps the renewal grace; one set to cancel ends with its period. effectivePlan,
+// effectivePlanSql and the webhooks all use this rule.
+export function grantsAccess(state: Omit<PlanState, "plan">, now: number = Date.now()): boolean {
+	if (!(ACCESS_STATUSES as readonly string[]).includes(state.subscriptionStatus ?? "")) return false;
+	if (state.currentPeriodEnd === null) return false;
+	return state.currentPeriodEnd + (state.cancelAtPeriodEnd ? 0 : RENEWAL_GRACE_MS) > now;
+}
+
+// THE function that says which plan a company is on right now. The stored `plan` counts only while its subscription
+// grants access.
 export function effectivePlan(state: PlanState, now: number = Date.now()): PlanKey {
 	if (!isPlanKey(state.plan) || state.plan === "free") return "free";
-	const grants = (ACCESS_STATUSES as readonly string[]).includes(state.subscriptionStatus ?? "");
-	return grants && state.currentPeriodEnd !== null && state.currentPeriodEnd > now ? state.plan : "free";
+	return grantsAccess(state, now) ? state.plan : "free";
 }
 
 export async function getPlanState(db: Db, orgId: string) {
@@ -48,10 +61,10 @@ export async function getEffectivePlan(db: Db, orgId: string, now: number = Date
 // Bigger than any real count, standing in for "unlimited" inside SQL comparisons.
 const UNLIMITED = 1e15;
 
-// The company's effective plan as a SQL value, the same rule as effectivePlan() above.
-const effectivePlanSql = (now: number) => sql`(CASE
+// The effective plan of the `organizations` row in scope as a SQL value, the same rule as effectivePlan() above.
+export const effectivePlanSql = (now: number) => sql`(CASE
 	WHEN ${organizations.subscriptionStatus} IN ('active', 'trialing', 'past_due')
-		AND ${organizations.currentPeriodEnd} > ${now}
+		AND ${organizations.currentPeriodEnd} > (CASE WHEN ${organizations.cancelAtPeriodEnd} THEN ${now} ELSE ${now - RENEWAL_GRACE_MS} END)
 	THEN ${organizations.plan} ELSE 'free' END)`;
 
 // One plan setting as a scalar subquery on the company's row, so a guarded UPDATE or upsert can compare with the

@@ -5,7 +5,8 @@ import { STALE_SCORING_MS, computeScore } from "./candidates.ts";
 import { GLOBAL_SCORING_CAP } from "./config.ts";
 import { type CvScore, type CvScorer, isUnreadableFileError } from "./cv-scorer.ts";
 import type { Db } from "./db/client.ts";
-import { candidates, jobs } from "./db/schema.ts";
+import { candidates, jobs, organizations } from "./db/schema.ts";
+import { effectivePlanSql } from "./plan-state.ts";
 
 // The logic behind each step of ScoreCvWorkflow, as plain functions so tests can run them without the
 // Workers runtime. The Workflow class only wires them to steps.
@@ -34,10 +35,9 @@ export const WAITER_LIVE_MS = 60 * 1000;
 // Begins a CV's run: its place in the queue is the time now, minus the head start of its company's plan. Each run
 // is a new Workflow instance, so a retry gets a fresh place. False when the candidate was deleted.
 export async function enterQueue(db: Db, candidateId: string, now: number = Date.now()): Promise<boolean> {
-	const headStartMs = sql`(SELECT CASE (CASE WHEN o.subscription_status IN ('active', 'trialing', 'past_due')
-			AND o.current_period_end > ${now} THEN o.plan ELSE 'free' END)
+	const headStartMs = sql`(SELECT CASE ${effectivePlanSql(now)}
 		WHEN 'max' THEN ${PLANS.max.queueHeadStartSec * 1000} WHEN 'pro' THEN ${PLANS.pro.queueHeadStartSec * 1000}
-		ELSE ${PLANS.free.queueHeadStartSec * 1000} END FROM organizations o WHERE o.id = candidates.org_id)`;
+		ELSE ${PLANS.free.queueHeadStartSec * 1000} END FROM ${organizations} WHERE ${organizations.id} = candidates.org_id)`;
 	const updated = await db.all<{ id: string }>(sql`UPDATE candidates
 		SET queue_priority_at = ${now} - COALESCE(${headStartMs}, 0), updated_at = ${now}
 		WHERE id = ${candidateId} AND status IN ('queued', 'scoring')

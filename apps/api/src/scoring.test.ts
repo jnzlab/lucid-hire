@@ -28,6 +28,7 @@ import {
 	scoreCandidate,
 } from "./scoring.ts";
 import { createTestD1 } from "./test/d1.ts";
+import { RENEWAL_GRACE_MS } from "./plan-state.ts";
 
 let db: Db;
 let bucket: R2Bucket;
@@ -350,8 +351,8 @@ describe("the reading queue", () => {
 		for (const id of ids) expect(await enterQueue(db, id, now)).toBe(true);
 		const at = await Promise.all(ids.map(async (id) => (await rowOf(id)).queuePriorityAt?.getTime()));
 		expect(at).toEqual([now, now - 300_000, now - 1_800_000]);
-		// An expired paid plan counts as Free.
-		await db.update(organizations).set({ currentPeriodEnd: now - 1 }).where(eq(organizations.id, max));
+		// A paid plan past its period and the renewal grace counts as Free.
+		await db.update(organizations).set({ currentPeriodEnd: now - RENEWAL_GRACE_MS - 1 }).where(eq(organizations.id, max));
 		await enterQueue(db, ids[2], now);
 		expect((await rowOf(ids[2])).queuePriorityAt?.getTime()).toBe(now);
 		expect(await enterQueue(db, "deleted")).toBe(false);
