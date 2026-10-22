@@ -72,6 +72,13 @@ export const IconUpload = () => (
 		<path d="M10 13V3.5M6 7l4-4 4 4M3.5 13v2.5a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V13" />
 	</Icon>
 );
+export const IconSettings = () => (
+	<Icon>
+		<path d="M3 6h8M15 6h2M3 14h2M9 14h8" />
+		<circle cx="13" cy="6" r="2" />
+		<circle cx="7" cy="14" r="2" />
+	</Icon>
+);
 export const IconMenu = () => (
 	<Icon>
 		<path d="M3 5.5h14M3 10h14M3 14.5h14" />

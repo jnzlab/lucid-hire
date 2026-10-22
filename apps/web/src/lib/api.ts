@@ -5,13 +5,22 @@ export class ApiError extends Error {
 	readonly code: string | undefined;
 	// Per-field messages for invalid input, keyed by field name.
 	readonly fields: Record<string, string>;
+	// Set on plan-limit errors: where to upgrade.
+	readonly upgradeUrl: string | undefined;
 
-	constructor(status: number, message: string, code?: string, fields: Record<string, string> = {}) {
+	constructor(
+		status: number,
+		message: string,
+		code?: string,
+		fields: Record<string, string> = {},
+		upgradeUrl?: string,
+	) {
 		super(message);
 		this.name = "ApiError";
 		this.status = status;
 		this.code = code;
 		this.fields = fields;
+		this.upgradeUrl = upgradeUrl;
 	}
 }
 
@@ -38,12 +47,15 @@ async function send(url: string, init: RequestInit): Promise<Response> {
 
 // The error the API sent as `{ error: { code, message, fields } }`, or a plain one when it said nothing.
 function toApiError(status: number, body: unknown): ApiError {
-	const error = (body as { error?: { code?: string; message?: string; fields?: Record<string, string> } } | null)?.error;
+	const error = (
+		body as { error?: { code?: string; message?: string; fields?: Record<string, string>; upgradeUrl?: string } } | null
+	)?.error;
 	return new ApiError(
 		status,
 		error?.message || (status >= 500 ? SERVER_ERROR_MESSAGE : UNKNOWN_ERROR_MESSAGE),
 		error?.code,
 		error?.fields,
+		error?.upgradeUrl,
 	);
 }
 
