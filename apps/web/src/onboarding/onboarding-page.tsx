@@ -8,6 +8,7 @@ import { ArrowRight } from "../components/icons.tsx";
 import { PageError, PageLoading } from "../components/page-state.tsx";
 import { apiPost } from "../lib/api.ts";
 import { type Me, type Org, meQueryKey, useMe } from "../lib/me.ts";
+import { takePickedPlan } from "../lib/picked-plan.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
 
 // The same bounds and clean-up the API applies (apps/api/src/orgs.ts).
@@ -33,7 +34,7 @@ function Onboarding() {
 	const { next } = route.useSearch();
 	if (me.isPending) return <PageLoading label="Loading your account" />;
 	if (me.isError) return <PageError message={me.error.message} onRetry={() => void me.refetch()} />;
-	if (me.data.org) return next ? <Navigate to={next} replace /> : <Navigate to="/dashboard" replace />;
+	if (me.data.org) return <PickedPlanRedirect next={next} />;
 
 	return (
 		<AuthLayout
@@ -48,6 +49,20 @@ function Onboarding() {
 		>
 			<CompanyForm />
 		</AuthLayout>
+	);
+}
+
+// Onboarding is done. A deep link the recruiter was sent here from wins; otherwise someone who picked a paid plan on
+// the pricing section lands on the plan cards with theirs highlighted (they pay only if they press Upgrade), and
+// everyone else goes to the jobs.
+function PickedPlanRedirect({ next }: { next: string | undefined }) {
+	// Read once: React may render this twice before the redirect, and the plan is forgotten when read.
+	const [plan] = useState(takePickedPlan);
+	if (next) return <Navigate to={next} replace />;
+	return plan ? (
+		<Navigate to="/dashboard/settings/$" search={{ upgrade: plan }} replace />
+	) : (
+		<Navigate to="/dashboard" replace />
 	);
 }
 

@@ -2,6 +2,8 @@ import { and, asc, count, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "./db/client.ts";
 import { JOB_STATUSES, type JobStatus, candidates, jobs } from "./db/schema.ts";
+import { limitSql } from "./plan-state.ts";
+import { monthPeriod, returnUnit, takeUnit } from "./usage.ts";
 
 export const JOB_TITLE_MIN = 2;
 export const JOB_TITLE_MAX = 120;
@@ -167,19 +169,30 @@ export async function createJob(
 	orgId: string,
 	userId: string,
 	input: z.output<typeof createJobInput>,
-): Promise<Job> {
-	const [job] = await db
-		.insert(jobs)
-		.values({ id: crypto.randomUUID(), orgId, createdBy: userId, slug: newSlug(input.title), ...input })
-		.returning(jobColumns);
-	return job;
+): Promise<Job | "limit"> {
+	const period = monthPeriod();
+	// The allowance is spent first, in one guarded statement, so two requests racing each other can't both take the
+	// last one. A job is never created without being counted.
+	if (!(await takeUnit(db, orgId, "jobs_month", period, limitSql(orgId, (plan) => plan.jobsPerMonth)))) {
+		return "limit";
+	}
+	try {
+		const [job] = await db
+			.insert(jobs)
+			.values({ id: crypto.randomUUID(), orgId, createdBy: userId, slug: newSlug(input.title), ...input })
+			.returning(jobColumns);
+		return job;
+	} catch (error) {
+		await returnUnit(db, orgId, "jobs_month", period);
+		throw error;
+	}
 }
 
 const COPY_SUFFIX = " (copy)";
 
 // A new draft with the same title and description and no candidates. It goes through `createJob`, so
 // anything that limits new jobs applies to a copy too. The title is cut so "(copy)" still fits.
-export async function duplicateJob(db: Db, orgId: string, userId: string, id: string): Promise<Job | null> {
+export async function duplicateJob(db: Db, orgId: string, userId: string, id: string): Promise<Job | "limit" | null> {
 	const source = await getJob(db, orgId, id);
 	if (!source) return null;
 	const room = JOB_TITLE_MAX - COPY_SUFFIX.length;

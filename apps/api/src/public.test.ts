@@ -1,10 +1,11 @@
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { PLANS } from "@lucid-hire/plans";
 import { createApp } from "./app.ts";
 import type { SessionVerifier } from "./auth.ts";
-import { CV_LIMIT_PER_JOB, CV_MAX_BYTES, takeSlot } from "./candidates.ts";
+import { CV_MAX_BYTES, takeSlot } from "./candidates.ts";
 import { type Db, getDb } from "./db/client.ts";
-import { candidates, jobs } from "./db/schema.ts";
+import { candidates, jobs, usageCounters } from "./db/schema.ts";
 import { newSlug, slugify } from "./jobs.ts";
 import { createOrgForUser } from "./orgs.ts";
 import { normalizeEmail, verifyTurnstile } from "./public.ts";
@@ -77,7 +78,9 @@ beforeAll(async () => {
 
 afterAll(() => dispose());
 
-beforeEach(() => {
+beforeEach(async () => {
+	// Every test starts with a fresh monthly job allowance.
+	await db.delete(usageCounters);
 	captchaOk = true;
 	captchaCalls = [];
 	rateLimitOk = true;
@@ -303,7 +306,7 @@ describe("POST /public/jobs/:slug/apply", () => {
 
 	it("never reveals plan usage when the job is full", async () => {
 		const job = await makeJob();
-		for (let i = 0; i < CV_LIMIT_PER_JOB; i++) expect((await takeSlot(db, orgId, job.id)).ok).toBe(true);
+		for (let i = 0; i < PLANS.free.cvsPerJob; i++) expect((await takeSlot(db, orgId, job.id)).ok).toBe(true);
 		const res = await apply(job.slug);
 		expect(res.status).toBe(409);
 		const error = await errorOf(res);

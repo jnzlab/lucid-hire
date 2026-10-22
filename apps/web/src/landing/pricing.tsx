@@ -1,31 +1,19 @@
+import { PLANS as PLAN_CONFIG, PLAN_KEYS, planFeatures, priceLabel } from "@lucid-hire/plans";
 import { useState } from "react";
-import { PILE_STOPS, PLANS, type PlanKey, formatCount, planForPile } from "./data.ts";
+import { PILE_STOPS, PLANS, formatCount, planForPile } from "./data.ts";
 import { vars } from "./dom.ts";
 import { PlanCheck, SignUpCta } from "./ui.tsx";
 
-const PLAN_CARDS: { key: PlanKey; price: string; per: string; features: string[]; cta: string }[] = [
-	{
-		key: "free",
-		price: "$0",
-		per: "no card",
-		features: ["10 CVs per job", "10 jobs a month", "30 AI requests an hour", "Standard reading queue"],
-		cta: "Start free",
-	},
-	{
-		key: "pro",
-		price: "$10",
-		per: "a month",
-		features: ["100 CVs per job", "20 jobs a month", "150 AI requests an hour", "Priority in the reading queue"],
-		cta: "Choose Pro",
-	},
-	{
-		key: "max",
-		price: "$30",
-		per: "a month",
-		features: ["1,000 CVs per job", "Unlimited jobs", "600 AI requests an hour", "First in the reading queue"],
-		cta: "Choose Max",
-	},
-];
+const PLAN_CARDS = PLAN_KEYS.map((key) => {
+	const plan = PLAN_CONFIG[key];
+	return {
+		key,
+		price: priceLabel(plan),
+		per: key === "free" ? "no card" : "a month",
+		features: planFeatures(plan),
+		cta: key === "free" ? "Start free" : `Choose ${plan.name}`,
+	};
+});
 
 const LAST_STOP = PILE_STOPS.length - 1;
 
@@ -96,7 +84,7 @@ export function Pricing() {
 										</li>
 									))}
 								</ul>
-								<SignUpCta className={plan.key === "pro" ? "btn" : "btn ghost"}>{plan.cta}</SignUpCta>
+								<SignUpCta plan={plan.key} className={plan.key === "pro" ? "btn" : "btn ghost"}>{plan.cta}</SignUpCta>
 							</article>
 						);
 					})}

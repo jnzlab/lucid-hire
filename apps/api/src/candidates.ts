@@ -12,11 +12,10 @@ import {
 	jobs,
 } from "./db/schema.ts";
 import { inOrg } from "./jobs.ts";
+import { limitSql } from "./plan-state.ts";
 
 export { CANDIDATE_DECISIONS, type Decision };
 
-// The landing page promises "Free for 10 CVs a job".
-export const CV_LIMIT_PER_JOB = 10;
 export const CV_MAX_BYTES = 5 * 1024 * 1024;
 export const CV_FILE_NAME_MAX = 200;
 export const DEFAULT_CV_FILE_NAME = "cv.pdf";
@@ -73,8 +72,9 @@ export type Candidate = Omit<CandidateSummary, "profile"> & {
 	profile: CandidateProfile | null;
 	fileSize: number;
 	note: string | null;
-	// When the decision last changed. Null while it is undecided.
+	// When the decision last changed, and the Clerk user who changed it. Null while it is undecided.
 	decidedAt: Date | null;
+	decidedBy: string | null;
 };
 
 const summaryColumns = {
@@ -103,6 +103,7 @@ const candidateColumns = {
 	fileSize: candidates.fileSize,
 	note: candidates.note,
 	decidedAt: candidates.decidedAt,
+	decidedBy: candidates.decidedBy,
 };
 
 // What the select returns: the table's columns, plus the two computed ones.
@@ -111,7 +112,7 @@ type SummaryRow = Pick<typeof candidates.$inferSelect, Exclude<keyof typeof summ
 	email: string | null;
 	cvEmail: string | null;
 };
-type CandidateRow = SummaryRow & Pick<typeof candidates.$inferSelect, "profile" | "fileSize" | "note" | "decidedAt">;
+type CandidateRow = SummaryRow & Pick<typeof candidates.$inferSelect, "profile" | "fileSize" | "note" | "decidedAt" | "decidedBy">;
 
 const isMust = (r: Requirement) => Number(r.importance === "must");
 const mustFirst = (a: Requirement, b: Requirement) => isMust(b) - isMust(a);
@@ -164,6 +165,7 @@ const toCandidate = (row: CandidateRow, rank: number | null = null, rankedCount 
 	fileSize: row.fileSize,
 	note: row.note,
 	decidedAt: row.decidedAt,
+	decidedBy: row.decidedBy,
 });
 
 // The score is ours, not the model's: must-haves count double, so it is deterministic and explainable.
@@ -255,12 +257,13 @@ export async function getCandidate(db: Db, orgId: string, jobId: string, id: str
 export type SlotResult = { ok: true } | { ok: false; reason: "job_not_found" | "job_not_open" | "cv_limit" };
 
 // Takes one of the job's CV slots in a single statement, so two uploads racing each other can't pass
-// the limit. `updated_at` is left alone: a new CV isn't an edit to the job.
+// the limit. The limit is the company's effective plan, looked up by a subquery in the same statement.
+// `updated_at` is left alone: a new CV isn't an edit to the job.
 export async function takeSlot(db: Db, orgId: string, jobId: string): Promise<SlotResult> {
 	const [taken] = await db
 		.update(jobs)
 		.set({ cvCount: sql`${jobs.cvCount} + 1`, updatedAt: sql`${jobs.updatedAt}` })
-		.where(and(inOrg(orgId, jobId), eq(jobs.status, "open"), lt(jobs.cvCount, CV_LIMIT_PER_JOB)))
+		.where(and(inOrg(orgId, jobId), eq(jobs.status, "open"), lt(jobs.cvCount, limitSql(orgId, (plan) => plan.cvsPerJob))))
 		.returning({ cvCount: jobs.cvCount });
 	if (taken) return { ok: true };
 

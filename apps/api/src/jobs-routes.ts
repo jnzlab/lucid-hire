@@ -3,7 +3,9 @@ import { type DescriptionEnhancer, recordAiUsage } from "./ai.ts";
 import { requireOrg } from "./auth.ts";
 import { candidateRoutes } from "./candidates-routes.ts";
 import { deleteCvFiles, listFileKeys } from "./candidates.ts";
-import { getDb } from "./db/client.ts";
+import { type Db, getDb } from "./db/client.ts";
+import { UPGRADE_URL, getEffectivePlan } from "./plan-state.ts";
+import { takeAiRequest } from "./usage.ts";
 import type { QuestionWriter } from "./interview-questions.ts";
 import {
 	COVER_MAX_BYTES,
@@ -35,6 +37,18 @@ type JobRouteOptions = {
 };
 
 // The signed-in company's jobs. Every route needs a session and a company.
+// A copy counts against the monthly allowance like any new job.
+async function jobLimitError(db: Db, orgId: string) {
+	const plan = await getEffectivePlan(db, orgId);
+	return {
+		error: {
+			code: "plan_limit",
+			message: `You've used all ${plan.jobsPerMonth} new jobs this month. Deleting a job does not give the slot back.`,
+			upgradeUrl: UPGRADE_URL,
+		},
+	};
+}
+
 export function jobRoutes({ auth, enhance, writeQuestions }: JobRouteOptions) {
 	const routes = new Hono<AppEnv>();
 	routes.use(auth, requireOrg);
@@ -47,14 +61,18 @@ export function jobRoutes({ auth, enhance, writeQuestions }: JobRouteOptions) {
 	});
 
 	routes.post("/", validJson(createJobInput), async (c) => {
-		const job = await createJob(getDb(c.env.DB), c.get("org").id, c.get("userId"), c.req.valid("json"));
+		const db = getDb(c.env.DB);
+		const org = c.get("org");
+		const job = await createJob(db, org.id, c.get("userId"), c.req.valid("json"));
+		if (job === "limit") return c.json(await jobLimitError(db, org.id), 403);
 		return c.json({ job }, 201);
 	});
 
 	// Rewrites rough notes into a structured description. Nothing is saved: the recruiter reviews the
-	// text in the form first. Capped per company by AI_RATE_LIMIT, and every call is metered.
+	// text in the form first. Capped per company by AI_RATE_LIMIT (a burst guard) and by the plan's hourly allowance, and every call is metered.
 	routes.post("/enhance", validJson(enhanceInput), async (c) => {
 		const org = c.get("org");
+		const db = getDb(c.env.DB);
 		const { success } = await c.env.AI_RATE_LIMIT.limit({ key: org.id });
 		if (!success) {
 			return c.json(
@@ -62,9 +80,10 @@ export function jobRoutes({ auth, enhance, writeQuestions }: JobRouteOptions) {
 				429,
 			);
 		}
+		const overHourly = await takeAiRequest(db, org.id);
+		if (overHourly) return c.json(overHourly.body, 429, overHourly.headers);
 
 		const usage = { orgId: org.id, userId: c.get("userId"), operation: "job_description_enhance" };
-		const db = getDb(c.env.DB);
 		try {
 			const result = await enhance(c.env, c.req.valid("json"));
 			c.executionCtx.waitUntil(
@@ -93,7 +112,10 @@ export function jobRoutes({ auth, enhance, writeQuestions }: JobRouteOptions) {
 
 	// A copy of a job as a new draft. Candidates stay with the original.
 	routes.post("/:id/duplicate", async (c) => {
-		const job = await duplicateJob(getDb(c.env.DB), c.get("org").id, c.get("userId"), c.req.param("id"));
+		const db = getDb(c.env.DB);
+		const org = c.get("org");
+		const job = await duplicateJob(db, org.id, c.get("userId"), c.req.param("id"));
+		if (job === "limit") return c.json(await jobLimitError(db, org.id), 403);
 		return job ? c.json({ job }, 201) : c.json(notFound, 404);
 	});
 

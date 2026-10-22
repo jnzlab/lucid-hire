@@ -3,7 +3,7 @@ import { createApp } from "./app.ts";
 import type { SessionVerifier } from "./auth.ts";
 import { type Db, getDb } from "./db/client.ts";
 import { aiUsage, candidates, jobs } from "./db/schema.ts";
-import { getOverview } from "./overview.ts";
+import { getOverviewActivity, getOverviewAiMix, getOverviewFunnel, getOverviewKpis, getOverviewVelocity } from "./overview.ts";
 import { createOrgForUser } from "./orgs.ts";
 import { createTestD1 } from "./test/d1.ts";
 
@@ -55,20 +55,21 @@ const cv = (jobId: string, orgId: string, fields: Partial<typeof candidates.$inf
 
 describe("an empty company", () => {
 	it("gets zeros, nulls and a zero-filled chart", async () => {
-		const overview = await getOverview(db, emptyId, NOW);
-		expect(overview.kpis).toEqual({
+		expect(await getOverviewKpis(db, emptyId, NOW)).toEqual({
 			activeRoles: { value: 0, change: 0 },
 			cvsScreened: { value: 0, thisMonth: 0, lastMonth: 0 },
 			avgTimeToShortlist: { hours: null, previousHours: null },
 			topMatch: null,
 		});
-		expect(overview.funnel).toEqual({ received: 0, scored: 0, shortlisted: 0 });
-		expect(overview.velocity.totals).toEqual(overview.funnel);
-		expect(overview.velocity.days).toHaveLength(10);
-		expect(overview.velocity.days[0]).toEqual({ date: "2026-10-13", uploaded: 0 });
-		expect(overview.velocity.days[9]).toEqual({ date: "2026-10-22", uploaded: 0 });
-		expect(overview.aiMix).toEqual({ scoring: 0, descriptionRewrites: 0, interviewQuestions: 0 });
-		expect(overview.activity).toEqual([]);
+		const funnel = await getOverviewFunnel(db, emptyId, NOW);
+		expect(funnel).toEqual({ received: 0, scored: 0, shortlisted: 0 });
+		const velocity = await getOverviewVelocity(db, emptyId, NOW);
+		expect(velocity.totals).toEqual(funnel);
+		expect(velocity.days).toHaveLength(10);
+		expect(velocity.days[0]).toEqual({ date: "2026-10-13", uploaded: 0 });
+		expect(velocity.days[9]).toEqual({ date: "2026-10-22", uploaded: 0 });
+		expect(await getOverviewAiMix(db, emptyId, NOW)).toEqual({ scoring: 0, descriptionRewrites: 0, interviewQuestions: 0 });
+		expect(await getOverviewActivity(db, emptyId)).toEqual([]);
 	});
 });
 
@@ -144,24 +145,24 @@ describe("a busy company", () => {
 	});
 
 	it("counts active roles and the change in open jobs created since last month", async () => {
-		const { kpis } = await getOverview(db, spriteId, NOW);
+		const kpis = await getOverviewKpis(db, spriteId, NOW);
 		// Open now: three. Created in October: two. In September: one.
 		expect(kpis.activeRoles).toEqual({ value: 3, change: 1 });
 	});
 
 	it("counts scored CVs all-time, this month and last month", async () => {
-		const { kpis } = await getOverview(db, spriteId, NOW);
+		const kpis = await getOverviewKpis(db, spriteId, NOW);
 		expect(kpis.cvsScreened).toEqual({ value: 4, thisMonth: 2, lastMonth: 1 });
 	});
 
 	it("averages upload-to-shortlist hours over 30 days and the 30 before, shortlisted only", async () => {
-		const { kpis } = await getOverview(db, spriteId, NOW);
+		const kpis = await getOverviewKpis(db, spriteId, NOW);
 		// Ada: 6 h, in the last 30 days. Old Timer: 12 h, decided 42 days ago. Bob was rejected, Ancient is too old.
 		expect(kpis.avgTimeToShortlist).toEqual({ hours: 6, previousHours: 12 });
 	});
 
 	it("finds the top match with its candidate and job", async () => {
-		const { kpis } = await getOverview(db, spriteId, NOW);
+		const kpis = await getOverviewKpis(db, spriteId, NOW);
 		expect(kpis.topMatch).toEqual({
 			score: 91,
 			candidateName: "Ada Lovelace",
@@ -172,7 +173,7 @@ describe("a busy company", () => {
 	});
 
 	it("zero-fills the last 10 UTC days and counts uploads per day", async () => {
-		const { velocity } = await getOverview(db, spriteId, NOW);
+		const velocity = await getOverviewVelocity(db, spriteId, NOW);
 		expect(velocity.days.map((d) => d.date)).toEqual([
 			"2026-10-13",
 			"2026-10-14",
@@ -191,19 +192,20 @@ describe("a busy company", () => {
 	});
 
 	it("builds the 90-day funnel from recruiter decisions, not from rank", async () => {
-		const { funnel, velocity } = await getOverview(db, spriteId, NOW);
+		const funnel = await getOverviewFunnel(db, spriteId, NOW);
+		const velocity = await getOverviewVelocity(db, spriteId, NOW);
 		// Received since 24 Jul: all but the ancient one. Scored: Ada, Bob, Old Timer. Shortlisted: Ada, Old Timer.
 		expect(funnel).toEqual({ received: 5, scored: 3, shortlisted: 2 });
 		expect(velocity.totals).toEqual(funnel);
 	});
 
 	it("mixes AI output by operation, successful calls in the last 90 days only", async () => {
-		const { aiMix } = await getOverview(db, spriteId, NOW);
+		const aiMix = await getOverviewAiMix(db, spriteId, NOW);
 		expect(aiMix).toEqual({ scoring: 2, descriptionRewrites: 1, interviewQuestions: 2 });
 	});
 
 	it("lists the latest 8 events, newest first, each linked to its job", async () => {
-		const { activity } = await getOverview(db, spriteId, NOW);
+		const activity = await getOverviewActivity(db, spriteId);
 		expect(activity).toHaveLength(8);
 		expect(activity.map((e) => e.at)).toEqual(activity.map((e) => e.at).toSorted().toReversed());
 		expect(activity[0]).toMatchObject({ type: "description_rewritten", jobId: null });
@@ -226,39 +228,52 @@ describe("a busy company", () => {
 		}
 		await cv("j_batch", batchId, { createdAt: at("2026-10-21T10:05:00Z") });
 
-		const uploads = (await getOverview(db, batchId, NOW)).activity.filter((e) => e.type === "cvs_uploaded");
+		const uploads = (await getOverviewActivity(db, batchId)).filter((e) => e.type === "cvs_uploaded");
 		expect(uploads.map((e) => e.text)).toEqual(["1 CV uploaded to Batch role", "3 CVs uploaded to Batch role"]);
 	});
 
 	it("never mixes in another company's numbers", async () => {
-		const { kpis, funnel } = await getOverview(db, spriteId, NOW);
+		const kpis = await getOverviewKpis(db, spriteId, NOW);
 		expect(kpis.topMatch?.candidateName).not.toBe("Spy");
-		expect(funnel.shortlisted).toBe(2);
-		const acme = await getOverview(db, acmeId, NOW);
-		expect(acme.kpis.activeRoles.value).toBe(1);
-		expect(acme.aiMix.scoring).toBe(1);
+		expect((await getOverviewFunnel(db, spriteId, NOW)).shortlisted).toBe(2);
+		expect((await getOverviewKpis(db, acmeId, NOW)).activeRoles.value).toBe(1);
+		expect((await getOverviewAiMix(db, acmeId, NOW)).scoring).toBe(1);
+		const acmeActivity = await getOverviewActivity(db, acmeId);
+		expect(acmeActivity.map((e) => e.text).join("\n")).not.toContain("Ada");
 	});
 });
 
-describe("GET /overview", () => {
-	const get = (token: string | null) =>
-		app.request("/overview", { headers: token ? { authorization: `Bearer t:${token}` } : {} }, env);
+describe("the overview endpoints", () => {
+	const paths = ["kpis", "velocity", "funnel", "ai-mix", "activity"];
+	const get = (path: string, token: string | null) =>
+		app.request(`/overview/${path}`, { headers: token ? { authorization: `Bearer t:${token}` } : {} }, env);
 
-	it("needs a session and a company", async () => {
-		expect((await get(null)).status).toBe(401);
-		const noOrg = await get("user_new");
-		expect(noOrg.status).toBe(403);
-		expect(await noOrg.json()).toMatchObject({ error: { code: "no_org" } });
+	it("need a session and a company", async () => {
+		for (const path of paths) {
+			expect((await get(path, null)).status).toBe(401);
+			const noOrg = await get(path, "user_new");
+			expect(noOrg.status).toBe(403);
+			expect(await noOrg.json()).toMatchObject({ error: { code: "no_org" } });
+		}
 	});
 
-	it("answers with the company's overview, uncached", async () => {
-		const res = await get("user_empty");
-		expect(res.status).toBe(200);
-		expect(res.headers.get("cache-control")).toBe("no-store");
-		expect(await res.json()).toMatchObject({
-			kpis: { topMatch: null },
-			activity: [],
-			aiMix: { scoring: 0 },
-		});
+	it("answer with one card's numbers each, uncached", async () => {
+		const expected: Record<string, unknown> = {
+			kpis: { topMatch: null, activeRoles: { value: 0 } },
+			velocity: { totals: { received: 0 } },
+			funnel: { received: 0, scored: 0, shortlisted: 0 },
+			"ai-mix": { scoring: 0 },
+			activity: { events: [] },
+		};
+		for (const path of paths) {
+			const res = await get(path, "user_empty");
+			expect(res.status).toBe(200);
+			expect(res.headers.get("cache-control")).toBe("no-store");
+			expect(await res.json()).toMatchObject(expected[path] as object);
+		}
+	});
+
+	it("no longer serve the combined overview", async () => {
+		expect((await get("", "user_empty")).status).toBe(404);
 	});
 });

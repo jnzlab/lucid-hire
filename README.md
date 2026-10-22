@@ -11,9 +11,9 @@ TestSprite check against a live deployment.
   with a sidebar and a company overview, jobs (search, filters, duplicate and
   the AI description rewrite), CV scoring with a profile read from each CV,
   candidate search, filters and CSV export, shortlisting, interview
-  questions, the privacy and terms pages, and public job pages where
-  candidates apply with their CV are live. The rest of the legacy app's features are landing
-  layer by layer.
+  questions, public job pages where candidates apply with their CV, the
+  Free, Pro and Max plans with their limits and Polar billing (sandbox),
+  team roles and invite links, and the privacy and terms pages are live.
 - **Live URL:** https://lucidhire.io (API: https://api.lucidhire.io)
 
 ## How scoring works
@@ -84,9 +84,18 @@ on failure.
 | Recruiter searches the candidate list | Uploads grace-turner.pdf and kenji-tanaka.pdf to "Sprite search candidates role", searches "Kenji", and sees only Kenji Tanaka. Deletes its job afterwards |
 | Candidate page shows the rank and the profile read from the CV | Grace Turner's page in "Sprite profile role" says "Ranked #1 of 1 scored CV for this role" and has a "Profile" section with her skills. Deletes its job afterwards |
 | Recruiter opens the CSV export choices | With kenji-tanaka.pdf in "Sprite export role", "Export CSV" offers all, shortlisted, undecided or rejected candidates. Deletes its job afterwards |
+| Settings shows the company's plan, usage and the plans | Settings says "Current plan Max" with "Active", shows the monthly job meter and compares Free, Pro and Max |
+| Pricing button carries the picked plan to sign-up | "Choose Pro" on the landing pricing opens /sign-up?plan=pro |
+| Admin creates a team invite link | The Team section lists the signed-in admin as "You" and "Create invite link" shows an /invite/ link, which the test then revokes |
+| New job page shows the monthly job allowance | The new job page says "Unlimited jobs on your plan" |
+| Recruiter copies a job's public link from the jobs list | The row menu of an open job says "Copied" after "Copy public link". Deletes its job afterwards |
+| Sidebar shows the company's plan | The "Max" badge beside "Sprite Labs" opens Settings at "Plan & usage" |
 
 The recruiter test account's credentials live only in the TestSprite
 environment, never in this repo.
+Its company, Sprite Labs, is comped to Max by migration
+`0008_comp_test_company`: each run posts and deletes about fifteen jobs, and
+the Free plan's 10 new jobs a month would stop the suite after one run.
 
 ## Local development
 

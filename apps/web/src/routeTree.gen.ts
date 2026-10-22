@@ -17,10 +17,12 @@ import { Route as SignOutRouteImport } from './routes/sign-out'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as DashboardIndexRouteImport } from './routes/dashboard/index'
 import { Route as DashboardOverviewRouteImport } from './routes/dashboard/overview'
+import { Route as InviteTokenRouteImport } from './routes/invite.$token'
 import { Route as JobsSlugRouteImport } from './routes/jobs.$slug'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as DashboardJobsNewRouteImport } from './routes/dashboard/jobs.new'
+import { Route as DashboardSettingsSplatRouteImport } from './routes/dashboard/settings.$'
 import { Route as DashboardJobsJobIdIndexRouteImport } from './routes/dashboard/jobs.$jobId.index'
 import { Route as DashboardJobsJobIdEditRouteImport } from './routes/dashboard/jobs.$jobId.edit'
 import { Route as DashboardJobsJobIdCandidatesCandidateIdRouteImport } from './routes/dashboard/jobs.$jobId.candidates.$candidateId'
@@ -65,6 +67,11 @@ const DashboardOverviewRoute = DashboardOverviewRouteImport.update({
   path: '/overview',
   getParentRoute: () => DashboardRouteRoute,
 } as any)
+const InviteTokenRoute = InviteTokenRouteImport.update({
+  id: '/invite/$token',
+  path: '/invite/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const JobsSlugRoute = JobsSlugRouteImport.update({
   id: '/jobs/$slug',
   path: '/jobs/$slug',
@@ -83,6 +90,11 @@ const SignUpSplatRoute = SignUpSplatRouteImport.update({
 const DashboardJobsNewRoute = DashboardJobsNewRouteImport.update({
   id: '/jobs/new',
   path: '/jobs/new',
+  getParentRoute: () => DashboardRouteRoute,
+} as any)
+const DashboardSettingsSplatRoute = DashboardSettingsSplatRouteImport.update({
+  id: '/settings/$',
+  path: '/settings/$',
   getParentRoute: () => DashboardRouteRoute,
 } as any)
 const DashboardJobsJobIdIndexRoute = DashboardJobsJobIdIndexRouteImport.update({
@@ -110,11 +122,13 @@ export interface FileRoutesByFullPath {
   '/sign-out': typeof SignOutRoute
   '/terms': typeof TermsRoute
   '/dashboard/overview': typeof DashboardOverviewRoute
+  '/invite/$token': typeof InviteTokenRoute
   '/jobs/$slug': typeof JobsSlugRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/dashboard/jobs/new': typeof DashboardJobsNewRoute
+  '/dashboard/settings/$': typeof DashboardSettingsSplatRoute
   '/dashboard/jobs/$jobId/edit': typeof DashboardJobsJobIdEditRoute
   '/dashboard/jobs/$jobId/': typeof DashboardJobsJobIdIndexRoute
   '/dashboard/jobs/$jobId/candidates/$candidateId': typeof DashboardJobsJobIdCandidatesCandidateIdRoute
@@ -126,11 +140,13 @@ export interface FileRoutesByTo {
   '/sign-out': typeof SignOutRoute
   '/terms': typeof TermsRoute
   '/dashboard/overview': typeof DashboardOverviewRoute
+  '/invite/$token': typeof InviteTokenRoute
   '/jobs/$slug': typeof JobsSlugRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/dashboard': typeof DashboardIndexRoute
   '/dashboard/jobs/new': typeof DashboardJobsNewRoute
+  '/dashboard/settings/$': typeof DashboardSettingsSplatRoute
   '/dashboard/jobs/$jobId/edit': typeof DashboardJobsJobIdEditRoute
   '/dashboard/jobs/$jobId': typeof DashboardJobsJobIdIndexRoute
   '/dashboard/jobs/$jobId/candidates/$candidateId': typeof DashboardJobsJobIdCandidatesCandidateIdRoute
@@ -144,11 +160,13 @@ export interface FileRoutesById {
   '/sign-out': typeof SignOutRoute
   '/terms': typeof TermsRoute
   '/dashboard/overview': typeof DashboardOverviewRoute
+  '/invite/$token': typeof InviteTokenRoute
   '/jobs/$slug': typeof JobsSlugRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/dashboard/jobs/new': typeof DashboardJobsNewRoute
+  '/dashboard/settings/$': typeof DashboardSettingsSplatRoute
   '/dashboard/jobs/$jobId/edit': typeof DashboardJobsJobIdEditRoute
   '/dashboard/jobs/$jobId/': typeof DashboardJobsJobIdIndexRoute
   '/dashboard/jobs/$jobId/candidates/$candidateId': typeof DashboardJobsJobIdCandidatesCandidateIdRoute
@@ -163,11 +181,13 @@ export interface FileRouteTypes {
     | '/sign-out'
     | '/terms'
     | '/dashboard/overview'
+    | '/invite/$token'
     | '/jobs/$slug'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/dashboard/'
     | '/dashboard/jobs/new'
+    | '/dashboard/settings/$'
     | '/dashboard/jobs/$jobId/edit'
     | '/dashboard/jobs/$jobId/'
     | '/dashboard/jobs/$jobId/candidates/$candidateId'
@@ -179,11 +199,13 @@ export interface FileRouteTypes {
     | '/sign-out'
     | '/terms'
     | '/dashboard/overview'
+    | '/invite/$token'
     | '/jobs/$slug'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/dashboard'
     | '/dashboard/jobs/new'
+    | '/dashboard/settings/$'
     | '/dashboard/jobs/$jobId/edit'
     | '/dashboard/jobs/$jobId'
     | '/dashboard/jobs/$jobId/candidates/$candidateId'
@@ -196,11 +218,13 @@ export interface FileRouteTypes {
     | '/sign-out'
     | '/terms'
     | '/dashboard/overview'
+    | '/invite/$token'
     | '/jobs/$slug'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/dashboard/'
     | '/dashboard/jobs/new'
+    | '/dashboard/settings/$'
     | '/dashboard/jobs/$jobId/edit'
     | '/dashboard/jobs/$jobId/'
     | '/dashboard/jobs/$jobId/candidates/$candidateId'
@@ -213,6 +237,7 @@ export interface RootRouteChildren {
   PrivacyRoute: typeof PrivacyRoute
   SignOutRoute: typeof SignOutRoute
   TermsRoute: typeof TermsRoute
+  InviteTokenRoute: typeof InviteTokenRoute
   JobsSlugRoute: typeof JobsSlugRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
@@ -276,6 +301,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardOverviewRouteImport
       parentRoute: typeof DashboardRouteRoute
     }
+    '/invite/$token': {
+      id: '/invite/$token'
+      path: '/invite/$token'
+      fullPath: '/invite/$token'
+      preLoaderRoute: typeof InviteTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/jobs/$slug': {
       id: '/jobs/$slug'
       path: '/jobs/$slug'
@@ -302,6 +334,13 @@ declare module '@tanstack/react-router' {
       path: '/jobs/new'
       fullPath: '/dashboard/jobs/new'
       preLoaderRoute: typeof DashboardJobsNewRouteImport
+      parentRoute: typeof DashboardRouteRoute
+    }
+    '/dashboard/settings/$': {
+      id: '/dashboard/settings/$'
+      path: '/settings/$'
+      fullPath: '/dashboard/settings/$'
+      preLoaderRoute: typeof DashboardSettingsSplatRouteImport
       parentRoute: typeof DashboardRouteRoute
     }
     '/dashboard/jobs/$jobId/': {
@@ -332,6 +371,7 @@ interface DashboardRouteRouteChildren {
   DashboardOverviewRoute: typeof DashboardOverviewRoute
   DashboardIndexRoute: typeof DashboardIndexRoute
   DashboardJobsNewRoute: typeof DashboardJobsNewRoute
+  DashboardSettingsSplatRoute: typeof DashboardSettingsSplatRoute
   DashboardJobsJobIdEditRoute: typeof DashboardJobsJobIdEditRoute
   DashboardJobsJobIdIndexRoute: typeof DashboardJobsJobIdIndexRoute
   DashboardJobsJobIdCandidatesCandidateIdRoute: typeof DashboardJobsJobIdCandidatesCandidateIdRoute
@@ -341,6 +381,7 @@ const DashboardRouteRouteChildren: DashboardRouteRouteChildren = {
   DashboardOverviewRoute: DashboardOverviewRoute,
   DashboardIndexRoute: DashboardIndexRoute,
   DashboardJobsNewRoute: DashboardJobsNewRoute,
+  DashboardSettingsSplatRoute: DashboardSettingsSplatRoute,
   DashboardJobsJobIdEditRoute: DashboardJobsJobIdEditRoute,
   DashboardJobsJobIdIndexRoute: DashboardJobsJobIdIndexRoute,
   DashboardJobsJobIdCandidatesCandidateIdRoute:
@@ -358,6 +399,7 @@ const rootRouteChildren: RootRouteChildren = {
   PrivacyRoute: PrivacyRoute,
   SignOutRoute: SignOutRoute,
   TermsRoute: TermsRoute,
+  InviteTokenRoute: InviteTokenRoute,
   JobsSlugRoute: JobsSlugRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,

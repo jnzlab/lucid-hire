@@ -4,7 +4,7 @@ import { createApp } from "./app.ts";
 import type { SessionVerifier } from "./auth.ts";
 import { CV_MAX_BYTES, NOTE_MAX, STALE_SCORING_MS, computeScore, deleteCvFiles } from "./candidates.ts";
 import { type Db, getDb } from "./db/client.ts";
-import { type Requirement, candidates, jobs, members } from "./db/schema.ts";
+import { type Requirement, candidates, jobs, members, usageCounters } from "./db/schema.ts";
 import { createOrgForUser } from "./orgs.ts";
 import { createTestD1 } from "./test/d1.ts";
 
@@ -69,7 +69,9 @@ beforeAll(async () => {
 
 afterAll(() => dispose());
 
-beforeEach(() => {
+beforeEach(async () => {
+	// Every test starts with a fresh monthly job allowance.
+	await db.delete(usageCounters);
 	failPut = false;
 	failCreate = false;
 	creates = [];
@@ -138,6 +140,7 @@ type CandidateJson = {
 	decision: string;
 	note: string | null;
 	decidedAt: string | null;
+	decidedBy: string | null;
 	updatedAt: string;
 };
 
@@ -326,7 +329,9 @@ describe("POST /jobs/:jobId/candidates", () => {
 
 		const res = await upload("user_admin", jobId, { fileName: "cv-11.pdf" });
 		expect(res.status).toBe(403);
-		expect(await res.json()).toEqual({ error: { code: "cv_limit", message: "This job has used its 10 free CVs" } });
+		expect(await res.json()).toEqual({
+			error: { code: "cv_limit", message: "This job has used its 10 free CVs", upgradeUrl: "/dashboard/settings#plan" },
+		});
 		expect((await jobOf(jobId)).cvCount).toBe(10);
 		expect(creates).toHaveLength(10);
 		expect(await keysUnder(`${orgId}/${jobId}/`)).toHaveLength(10);
@@ -773,7 +778,7 @@ describe("PATCH /jobs/:jobId/candidates/:id", () => {
 		const detail = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates/${id}`)).json()) as {
 			candidate: CandidateJson;
 		};
-		expect(detail.candidate).toMatchObject({ decision: "undecided", note: null, decidedAt: null });
+		expect(detail.candidate).toMatchObject({ decision: "undecided", note: null, decidedAt: null, decidedBy: null });
 
 		await decideOk("user_admin", jobId, id, { decision: "shortlisted", note: "Call on Monday" });
 		const list = await send("user_admin", "GET", `/jobs/${jobId}/candidates`);
@@ -781,6 +786,7 @@ describe("PATCH /jobs/:jobId/candidates/:id", () => {
 		expect(listed[0]).toMatchObject({ id, decision: "shortlisted" });
 		expect(listed[0]).not.toHaveProperty("note");
 		expect(listed[0]).not.toHaveProperty("decidedAt");
+		expect(listed[0]).not.toHaveProperty("decidedBy");
 	});
 
 	it("sets decidedAt and decidedBy when the decision changes, and clears them on undecided", async () => {
@@ -788,7 +794,7 @@ describe("PATCH /jobs/:jobId/candidates/:id", () => {
 		const id = await seed(jobId, { status: "scored", score: 80, scoredAt: new Date() });
 
 		const shortlisted = await decideOk("user_admin", jobId, id, { decision: "shortlisted" });
-		expect(shortlisted).toMatchObject({ id, decision: "shortlisted", note: null });
+		expect(shortlisted).toMatchObject({ id, decision: "shortlisted", note: null, decidedBy: "user_admin" });
 		const first = Date.parse(shortlisted.decidedAt ?? "");
 		expect(Date.now() - first).toBeLessThan(60_000);
 		expect(await rowOf(id)).toMatchObject({
@@ -807,6 +813,7 @@ describe("PATCH /jobs/:jobId/candidates/:id", () => {
 		const rejected = await decideOk("user_member", jobId, id, { decision: "rejected" });
 		expect(rejected.decision).toBe("rejected");
 		expect(Date.parse(rejected.decidedAt ?? "")).toBeGreaterThan(first);
+		expect(rejected.decidedBy).toBe("user_member");
 		const second = Date.parse(rejected.decidedAt ?? "");
 		expect(await rowOf(id)).toMatchObject({
 			decision: "rejected",
@@ -907,7 +914,7 @@ describe("PATCH /jobs/:jobId/candidates/:id", () => {
 		expect(await (await decide("user_admin", jobId, id, {})).json()).toMatchObject({
 			error: { message: "Nothing to update" },
 		});
-		expect(await rowOf(id)).toMatchObject({ decision: "undecided", note: null, decidedAt: null });
+		expect(await rowOf(id)).toMatchObject({ decision: "undecided", note: null, decidedAt: null, decidedBy: null });
 	});
 
 	it("leaves updated_at alone, so a stuck scoring run is still timed from its last real change", async () => {

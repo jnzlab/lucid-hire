@@ -72,6 +72,13 @@ export const IconUpload = () => (
 		<path d="M10 13V3.5M6 7l4-4 4 4M3.5 13v2.5a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V13" />
 	</Icon>
 );
+export const IconSettings = () => (
+	<Icon>
+		<path d="M3 6h8M15 6h2M3 14h2M9 14h8" />
+		<circle cx="13" cy="6" r="2" />
+		<circle cx="7" cy="14" r="2" />
+	</Icon>
+);
 export const IconMenu = () => (
 	<Icon>
 		<path d="M3 5.5h14M3 10h14M3 14.5h14" />
@@ -109,6 +116,32 @@ export function NoteMark() {
 				strokeLinecap="round"
 				strokeLinejoin="round"
 			/>
+		</svg>
+	);
+}
+
+// Menu icons: 16px, stroke 2, currentColor (design system §4).
+export function Gear() {
+	return (
+		<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+			<path
+				d="M2 4.5h7M12 4.5h2M2 11.5h2M7 11.5h7"
+				fill="none"
+				stroke="currentColor"
+				strokeWidth="2"
+				strokeLinecap="round"
+			/>
+			<circle cx="10.5" cy="4.5" r="1.8" fill="none" stroke="currentColor" strokeWidth="2" />
+			<circle cx="5.5" cy="11.5" r="1.8" fill="none" stroke="currentColor" strokeWidth="2" />
+		</svg>
+	);
+}
+
+export function Card() {
+	return (
+		<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+			<rect x="1.5" y="3" width="13" height="10" rx="2" fill="none" stroke="currentColor" strokeWidth="2" />
+			<path d="M1.5 6.5h13" fill="none" stroke="currentColor" strokeWidth="2" />
 		</svg>
 	);
 }

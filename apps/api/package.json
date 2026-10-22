@@ -16,6 +16,7 @@
     "@ai-sdk/google": "^4.0.102",
     "@clerk/backend": "^3.21.1",
     "@hono/zod-validator": "^0.9.1",
+    "@lucid-hire/plans": "workspace:*",
     "ai": "^7.0.148",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.13",

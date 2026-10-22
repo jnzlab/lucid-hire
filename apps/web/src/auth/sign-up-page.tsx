@@ -1,9 +1,20 @@
 import { SignUp } from "@clerk/react";
+import { isPaidPlanKey } from "@lucid-hire/plans";
+import { useRouterState } from "@tanstack/react-router";
+import { useEffect } from "react";
+import { rememberPickedPlan } from "../lib/picked-plan.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
 import { AuthAsideLink, AuthLayout } from "./auth-layout.tsx";
 
 export function SignUpPage() {
 	useDocumentTitle("Create your account · LucidHire");
+
+	// /sign-up?plan=pro comes from a pricing button. Keep the plan through sign-up and onboarding.
+	const search = useRouterState({ select: (state) => state.location.searchStr });
+	useEffect(() => {
+		const plan = new URLSearchParams(search).get("plan");
+		if (isPaidPlanKey(plan)) rememberPickedPlan(plan);
+	}, [search]);
 
 	return (
 		<AuthLayout

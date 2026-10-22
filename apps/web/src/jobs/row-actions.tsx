@@ -4,11 +4,15 @@ import { ConfirmDialog } from "../components/confirm-dialog.tsx";
 import { IconMore } from "../components/icons.tsx";
 import { useOrg } from "../dashboard/org.ts";
 import { type JobListItem, useDeleteJob, useDuplicateJob } from "../lib/jobs.ts";
+import { publicJobUrl } from "../lib/public-jobs.ts";
+import { buildShareLinks, shareTargets } from "../lib/share.ts";
+import { useCopy } from "./use-copy.ts";
 
 const item =
 	"flex min-h-11 w-full items-center rounded-md px-3 text-left text-[15px] font-[500] text-ink-2 hover:bg-paper-2 hover:text-ink focus-visible:bg-paper-2";
 
-// The "..." menu on a job row: Candidates, Edit, Duplicate and, for admins, Delete. A real menu button: Enter,
+// The "..." menu on a job row: Candidates, Edit, Duplicate, the public link and sharing (as on the job's page:
+// a draft has no public page, a closed job has one but isn't worth sharing) and, for admins, Delete. A real menu button: Enter,
 // Space or the arrow keys open it, the arrows move, Escape closes it and gives focus back.
 export function RowActions({ job, onDeleted }: { job: JobListItem; onDeleted: (title: string) => void }) {
 	const org = useOrg();
@@ -17,6 +21,8 @@ export function RowActions({ job, onDeleted }: { job: JobListItem; onDeleted: (t
 	const remove = useDeleteJob(job.id);
 	const [open, setOpen] = useState(false);
 	const [confirming, setConfirming] = useState(false);
+	const [sharing, setSharing] = useState(false);
+	const { message, copy: copyText } = useCopy();
 	const buttonRef = useRef<HTMLButtonElement>(null);
 	const rootRef = useRef<HTMLDivElement>(null);
 	// Which item takes focus when the menu opens: the first, or (from the Up arrow) the last.
@@ -41,6 +47,7 @@ export function RowActions({ job, onDeleted }: { job: JobListItem; onDeleted: (t
 	};
 	const close = (returnFocus = true) => {
 		setOpen(false);
+		setSharing(false);
 		if (returnFocus) buttonRef.current?.focus();
 	};
 
@@ -74,6 +81,9 @@ export function RowActions({ job, onDeleted }: { job: JobListItem; onDeleted: (t
 				}),
 		});
 	};
+	// The list doesn't carry descriptions, so a caption from here is the title and the link.
+	const targets = shareTargets(buildShareLinks({ title: job.title, description: "", slug: job.slug }));
+	const hasPublicPage = job.status !== "draft";
 	const removed =
 		job.cvCount > 0 ? `It and its ${job.cvCount} ${job.cvCount === 1 ? "CV are" : "CVs are"} removed` : "It's removed";
 
@@ -122,6 +132,63 @@ export function RowActions({ job, onDeleted }: { job: JobListItem; onDeleted: (t
 					<button type="button" role="menuitem" className={item} onClick={copy}>
 						Duplicate
 					</button>
+					{hasPublicPage && (
+						<button
+							type="button"
+							role="menuitem"
+							className={item}
+							onClick={() => {
+								close();
+								void copyText(publicJobUrl(job.slug), "Copied");
+							}}
+						>
+							Copy public link
+						</button>
+					)}
+					{job.status === "open" && (
+						<>
+							<button
+								type="button"
+								role="menuitem"
+								aria-expanded={sharing}
+								className={item}
+								onClick={() => setSharing(!sharing)}
+							>
+								Share
+							</button>
+							{sharing && (
+								<div role="group" aria-label="Share this job" className="ml-3 border-l border-line pl-1">
+									{targets.map((target) =>
+										"caption" in target ? (
+											<button
+												key={target.label}
+												type="button"
+												role="menuitem"
+												className={item}
+												onClick={() => {
+													close();
+													void copyText(target.caption, "Caption copied");
+												}}
+											>
+												{target.label}
+											</button>
+										) : (
+											<a
+												key={target.label}
+												role="menuitem"
+												href={target.href}
+												{...(target.external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+												className={item}
+												onClick={() => close(false)}
+											>
+												{target.label}
+											</a>
+										),
+									)}
+								</div>
+							)}
+						</>
+					)}
 					{org.role === "admin" && (
 						<button
 							type="button"
@@ -143,6 +210,13 @@ export function RowActions({ job, onDeleted }: { job: JobListItem; onDeleted: (t
 					Duplicating
 				</p>
 			)}
+			<p
+				role="status"
+				aria-live="polite"
+				className="absolute top-full right-0 z-20 mt-1 rounded-md bg-sheet px-3 py-2 font-mono text-[12.5px] text-ink shadow-float empty:hidden"
+			>
+				{message}
+			</p>
 			{duplicate.isError && (
 				<p role="alert" className="absolute top-full right-0 z-20 mt-1 w-64 rounded-md bg-sheet p-3 text-[14px] text-gap-ink shadow-float">
 					✕ {duplicate.error.message}

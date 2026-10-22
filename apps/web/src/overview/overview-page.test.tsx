@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Overview } from "../lib/overview.ts";
+import type { ActivityEvent, FunnelCounts, OverviewAiMix, OverviewKpis, OverviewVelocity } from "../lib/overview.ts";
 import { createAppRouter } from "../router.ts";
 
 vi.mock("@clerk/react", () => ({
@@ -13,6 +13,15 @@ vi.mock("@clerk/react", () => ({
 	SignIn: () => null,
 	SignUp: () => null,
 }));
+
+// What the five card endpoints answer between them.
+type Overview = {
+	kpis: OverviewKpis;
+	velocity: OverviewVelocity;
+	funnel: FunnelCounts;
+	aiMix: OverviewAiMix;
+	activity: ActivityEvent[];
+};
 
 const DAYS = Array.from({ length: 10 }, (_, i) => `2026-10-${String(13 + i).padStart(2, "0")}`);
 const zeros: Overview = {
@@ -48,23 +57,39 @@ const busy: Overview = {
 	],
 };
 
-let overview: Overview | "fail";
-let calls: number;
+let overview: Overview;
+// The card endpoints that answer with an error, and how often each was asked.
+let failing: Set<string>;
+// The card endpoints that never answer.
+let stalled: Set<string>;
+let calls: Record<string, number>;
 
 beforeEach(() => {
 	overview = busy;
-	calls = 0;
+	failing = new Set();
+	stalled = new Set();
+	calls = {};
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async (url: string) => {
 			const path = new URL(url).pathname;
 			if (path === "/me") return Response.json({ userId: "user_1", org: { id: "org_1", name: "Sprite Labs", role: "admin" } });
 			if (path === "/jobs") return Response.json({ jobs: [], total: 0, page: 1, pageSize: 20 });
-			if (path === "/overview") {
-				calls += 1;
-				return overview === "fail"
-					? Response.json({ error: { code: "internal_error", message: "Something went wrong on our side. Try again." } }, { status: 500 })
-					: Response.json(overview);
+			const card = path.match(/^\/overview\/([a-z-]+)$/)?.[1];
+			if (card) {
+				calls[card] = (calls[card] ?? 0) + 1;
+				if (stalled.has(card)) return new Promise<Response>(() => {});
+				if (failing.has(card)) {
+					return Response.json({ error: { code: "internal_error", message: "Something went wrong on our side. Try again." } }, { status: 500 });
+				}
+				const answers: Record<string, unknown> = {
+					kpis: overview.kpis,
+					velocity: overview.velocity,
+					funnel: overview.funnel,
+					"ai-mix": overview.aiMix,
+					activity: { events: overview.activity },
+				};
+				return Response.json(answers[card]);
 			}
 			return Response.json({ error: { message: "not found" } }, { status: 404 });
 		}),
@@ -87,6 +112,12 @@ function renderOverview() {
 	return router;
 }
 
+// Every card has its numbers once none says it is loading.
+const cardsLoaded = async () => {
+	await screen.findByRole("heading", { level: 1, name: "Overview" }, { timeout: 4000 });
+	await waitFor(() => expect(screen.queryByText(/^Loading /)).toBeNull());
+};
+
 describe("overview page", () => {
 	it("is the Overview page, with Post a job and the sidebar item marked", { timeout: 15_000 }, async () => {
 		renderOverview();
@@ -101,7 +132,7 @@ describe("overview page", () => {
 
 	it("shows the four key numbers with changes written out", async () => {
 		renderOverview();
-		await screen.findByRole("heading", { name: "Pipeline velocity" });
+		await cardsLoaded();
 		const kpis = within(screen.getByRole("region", { name: "Key numbers" }));
 
 		expect(kpis.getByText("Active roles").nextElementSibling?.textContent).toBe("5");
@@ -117,7 +148,8 @@ describe("overview page", () => {
 
 	it("draws the velocity bars with labels, a table fallback and the 90-day totals", async () => {
 		renderOverview();
-		const card = within(await screen.findByRole("region", { name: "Pipeline velocity" }));
+		await cardsLoaded();
+		const card = within(screen.getByRole("region", { name: "Pipeline velocity" }));
 
 		expect(card.getByRole("img", { name: /CVs uploaded per day/ })).toBeTruthy();
 		expect(card.getByText("19 Oct: 7 CVs uploaded")).toBeTruthy();
@@ -132,7 +164,8 @@ describe("overview page", () => {
 
 	it("shows the funnel with conversion, and the AI mix with counts", async () => {
 		renderOverview();
-		const funnel = within(await screen.findByRole("region", { name: "90-day funnel" }));
+		await cardsLoaded();
+		const funnel = within(screen.getByRole("region", { name: "90-day funnel" }));
 		expect(funnel.getByText(/88% of received/)).toBeTruthy();
 		expect(funnel.getByText(/20% of scored/)).toBeTruthy();
 
@@ -144,7 +177,8 @@ describe("overview page", () => {
 
 	it("lists recent activity with relative times and links to the candidate or job", async () => {
 		renderOverview();
-		const activity = within(await screen.findByRole("region", { name: "Recent activity" }));
+		await cardsLoaded();
+		const activity = within(screen.getByRole("region", { name: "Recent activity" }));
 
 		expect(activity.getByText("Just now")).toBeTruthy();
 		expect(activity.getByText("5 min ago")).toBeTruthy();
@@ -160,7 +194,7 @@ describe("overview page", () => {
 	it("gives every card its own empty state for a company with no data", async () => {
 		overview = zeros;
 		renderOverview();
-		await screen.findByRole("heading", { name: "Pipeline velocity" });
+		await cardsLoaded();
 
 		const kpis = within(screen.getByRole("region", { name: "Key numbers" }));
 		expect(kpis.getByText("No open jobs. Open one to take CVs.")).toBeTruthy();
@@ -174,16 +208,42 @@ describe("overview page", () => {
 		expect(screen.getByRole("link", { name: /View all jobs/ })).toBeTruthy();
 	});
 
-	it("says what went wrong and tries again", async () => {
-		overview = "fail";
+	it("loads every card on its own, and one card failing leaves the others standing", async () => {
+		failing = new Set(["velocity"]);
 		renderOverview();
-		const alert = await screen.findByRole("alert");
-		expect(alert.textContent).toContain("We couldn't load your overview");
+		const velocity = within(await screen.findByRole("region", { name: "Pipeline velocity" }));
+		const alert = await velocity.findByRole("alert");
+		expect(alert.textContent).toContain("We couldn't load pipeline velocity.");
 		expect(alert.textContent).toContain("Something went wrong on our side. Try again.");
 
-		overview = busy;
+		expect(within(await screen.findByRole("region", { name: "Key numbers" })).getByText("120")).toBeTruthy();
+		expect(within(await screen.findByRole("region", { name: "90-day funnel" })).getByText(/88% of received/)).toBeTruthy();
+		expect(within(await screen.findByRole("region", { name: "AI output mix" })).getByText("CV scoring")).toBeTruthy();
+		expect(within(await screen.findByRole("region", { name: "Recent activity" })).getByText("5 min ago")).toBeTruthy();
+		expect(screen.getAllByRole("alert")).toHaveLength(1);
+
+		failing = new Set();
 		fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
-		expect(await screen.findByRole("heading", { name: "Pipeline velocity" })).toBeTruthy();
-		expect(calls).toBe(2);
+		expect(await velocity.findByRole("img", { name: /CVs uploaded per day/ })).toBeTruthy();
+		expect(screen.queryByRole("alert")).toBeNull();
+		expect(calls).toEqual({ kpis: 1, velocity: 2, funnel: 1, "ai-mix": 1, activity: 1 });
+	});
+
+	it("shows a loading state in the card that is still waiting, while the others fill in", async () => {
+		stalled = new Set(["activity"]);
+		renderOverview();
+		const activity = within(await screen.findByRole("region", { name: "Recent activity" }));
+		expect(activity.getByText("Loading recent activity")).toBeTruthy();
+		expect(within(await screen.findByRole("region", { name: "Key numbers" })).getByText("120")).toBeTruthy();
+		expect(screen.queryByText("Loading your key numbers")).toBeNull();
+	});
+
+	it("says what went wrong in each card when everything fails", async () => {
+		failing = new Set(["kpis", "velocity", "funnel", "ai-mix", "activity"]);
+		renderOverview();
+		expect(await screen.findByRole("heading", { level: 1, name: "Overview" })).toBeTruthy();
+		await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(5));
+		expect(screen.getAllByRole("button", { name: "Try again" })).toHaveLength(5);
+		expect(screen.getByRole("heading", { name: "Recent activity" })).toBeTruthy();
 	});
 });

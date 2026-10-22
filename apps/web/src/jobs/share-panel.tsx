@@ -1,35 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { type Job } from "../lib/jobs.ts";
 import { publicJobUrl } from "../lib/public-jobs.ts";
-import { buildShareLinks } from "../lib/share.ts";
-
-const COPIED_MS = 2500;
-
-// Copies text and says so politely. The status line stays in the page so screen readers hear every change.
-function useCopy() {
-	const [message, setMessage] = useState("");
-	const timer = useRef<number | undefined>(undefined);
-	useEffect(() => () => window.clearTimeout(timer.current), []);
-	const copy = async (text: string, done: string) => {
-		window.clearTimeout(timer.current);
-		try {
-			await navigator.clipboard.writeText(text);
-			setMessage(done);
-		} catch {
-			setMessage("Couldn't copy. Select the text and copy it.");
-		}
-		timer.current = window.setTimeout(() => setMessage(""), COPIED_MS);
-	};
-	return { message, copy };
-}
+import { buildShareLinks, shareTargets } from "../lib/share.ts";
+import { type Copy, useCopy } from "./use-copy.ts";
 
 const MENU_ITEM = "flex min-h-11 w-full items-center rounded-md px-3 text-left text-[14px] font-semibold hover:bg-marker hover:text-on-marker";
 
-function ShareMenu({ job, copy }: { job: Job; copy: ReturnType<typeof useCopy>["copy"] }) {
+function ShareMenu({ job, copy }: { job: Job; copy: Copy }) {
 	const [open, setOpen] = useState(false);
 	const root = useRef<HTMLDivElement>(null);
 	const button = useRef<HTMLButtonElement>(null);
-	const links = buildShareLinks(job);
+	const targets = shareTargets(buildShareLinks(job));
 
 	useEffect(() => {
 		if (!open) return;
@@ -58,43 +39,26 @@ function ShareMenu({ job, copy }: { job: Job; copy: ReturnType<typeof useCopy>["
 			</button>
 			{open && (
 				<ul id="share-menu" aria-label="Share this job" className="absolute right-0 z-30 mt-2 w-56 rounded-lg border border-line bg-sheet p-1.5 shadow-lift">
-					<li>
-						<a href={links.mailto} className={MENU_ITEM} onClick={() => setOpen(false)}>
-							Email
-						</a>
-					</li>
-					<li>
-						<a href={links.x} {...external}>
-							X
-						</a>
-					</li>
-					<li>
-						<a href={links.linkedin} {...external}>
-							LinkedIn
-						</a>
-					</li>
-					<li>
-						<a href={links.whatsapp} {...external}>
-							WhatsApp
-						</a>
-					</li>
-					<li>
-						<a href={links.facebook} {...external}>
-							Facebook
-						</a>
-					</li>
-					<li>
-						<button
-							type="button"
-							className={MENU_ITEM}
-							onClick={() => {
-								void copy(links.caption, "Caption copied");
-								setOpen(false);
-							}}
-						>
-							Copy caption
-						</button>
-					</li>
+					{targets.map((target) => (
+						<li key={target.label}>
+							{"caption" in target ? (
+								<button
+									type="button"
+									className={MENU_ITEM}
+									onClick={() => {
+										void copy(target.caption, "Caption copied");
+										setOpen(false);
+									}}
+								>
+									{target.label}
+								</button>
+							) : (
+								<a href={target.href} {...(target.external ? external : { className: MENU_ITEM, onClick: () => setOpen(false) })}>
+									{target.label}
+								</a>
+							)}
+						</li>
+					))}
 				</ul>
 			)}
 		</div>

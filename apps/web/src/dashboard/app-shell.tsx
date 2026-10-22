@@ -1,11 +1,12 @@
-import { UserButton } from "@clerk/react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { type ReactNode, useEffect, useEffectEvent, useState } from "react";
 import { IconSidebar } from "../components/icons.tsx";
 import { Logo } from "../components/logo.tsx";
 import type { Org } from "../lib/me.ts";
+import { AccountButton } from "./account-button.tsx";
 import { MobileBar } from "./mobile-bar.tsx";
 import { NavLinks } from "./nav-links.tsx";
+import { PlanBadge } from "./plan-badge.tsx";
 import { readCollapsed, writeCollapsed } from "./sidebar-state.ts";
 
 const isEditable = (target: EventTarget | null) =>
@@ -59,13 +60,16 @@ export function AppShell({ org, children }: { org: Org; children: ReactNode }) {
 					</button>
 				</div>
 				{!collapsed && (
-					<p className="truncate border-t border-line px-1 pt-4 font-mono text-[13px] text-ink-2" title={org.name}>
-						{org.name}
-					</p>
+					<div className="flex items-center justify-between gap-2 border-t border-line px-1 pt-4">
+						<p className="truncate font-mono text-[13px] text-ink-2" title={org.name}>
+							{org.name}
+						</p>
+						<PlanBadge />
+					</div>
 				)}
 				<NavLinks pathname={pathname} collapsed={collapsed} />
 				<div className={`mt-auto flex items-center gap-3 border-t border-line pt-4 ${collapsed ? "flex-col" : "px-1"}`}>
-					<UserButton />
+					<AccountButton />
 					{!collapsed && (
 						<p className="font-mono text-[12px] text-ink-muted">
 							Your role: {org.role === "admin" ? "Admin" : "Member"}

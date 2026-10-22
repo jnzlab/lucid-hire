@@ -4,6 +4,7 @@ import { getCandidate } from "./candidates.ts";
 import { getDb } from "./db/client.ts";
 import { type InterviewQuestion, type QuestionWriter, getQuestions, saveQuestions } from "./interview-questions.ts";
 import { getJob } from "./jobs.ts";
+import { takeAiRequest } from "./usage.ts";
 import type { AppEnv } from "./types.ts";
 
 const candidateNotFound = {
@@ -21,8 +22,8 @@ export function questionRoutes({ write }: { write: QuestionWriter }) {
 		return c.json(saved, 200, { "Cache-Control": "no-store" });
 	});
 
-	// Writes a new set from the scoring, replacing any earlier one. Capped per company by AI_RATE_LIMIT, and
-	// every call is metered.
+	// Writes a new set from the scoring, replacing any earlier one. Capped per company by AI_RATE_LIMIT (a burst
+	// guard) and by the plan's hourly allowance, and every call is metered.
 	routes.post("/", async (c) => {
 		const org = c.get("org");
 		const db = getDb(c.env.DB);
@@ -44,6 +45,8 @@ export function questionRoutes({ write }: { write: QuestionWriter }) {
 				429,
 			);
 		}
+		const overHourly = await takeAiRequest(db, org.id);
+		if (overHourly) return c.json(overHourly.body, 429, overHourly.headers);
 
 		// The candidate is in this company's job, so a missing job means it was deleted a moment ago.
 		const job = await getJob(db, org.id, jobId);

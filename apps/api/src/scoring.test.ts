@@ -11,7 +11,7 @@ import {
 } from "./cv-scorer.ts";
 import { GEMINI_TEXT_MODEL } from "./ai.ts";
 import { type Db, getDb } from "./db/client.ts";
-import { aiUsage, candidates, jobs } from "./db/schema.ts";
+import { aiUsage, candidates, jobs, usageCounters } from "./db/schema.ts";
 import { createOrgForUser } from "./orgs.ts";
 import {
 	PermanentScoringError,
@@ -82,7 +82,9 @@ beforeAll(async () => {
 
 afterAll(() => dispose());
 
-beforeEach(() => {
+beforeEach(async () => {
+	// Every test starts with a fresh monthly job allowance.
+	await db.delete(usageCounters);
 	scorerCalls = [];
 	scorerError = undefined;
 });

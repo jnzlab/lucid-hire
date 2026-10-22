@@ -1,5 +1,5 @@
 import { useRouterState } from "@tanstack/react-router";
-import { type DragEvent, useEffect, useId, useRef, useState } from "react";
+import { type DragEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Check } from "../components/icons.tsx";
 import { CV_MAX_BYTES, type UploadItem, type useUploadCvs } from "../lib/candidates.ts";
 import { useCoarsePointer } from "../lib/use-coarse-pointer.ts";
@@ -54,11 +54,16 @@ function summarise(items: UploadItem[]) {
 export function UploadZone({
 	uploads: { items, upload, remove, retry, clear },
 	note,
+	noteAction,
 	slotsLeft,
+	limit,
 }: {
 	uploads: ReturnType<typeof useUploadCvs>;
 	note: string | null;
+	// What to do about the note, such as upgrading.
+	noteAction?: ReactNode;
 	slotsLeft: number;
+	limit: number;
 }) {
 	const [dragging, setDragging] = useState(false);
 	const coarse = useCoarsePointer();
@@ -77,7 +82,7 @@ export function UploadZone({
 	const busy = items.some(({ state }) => state === "waiting" || state === "uploading");
 	const summary = summarise(items);
 	const takeFiles = (files: FileList | null) => {
-		if (files) void upload([...files], slotsLeft);
+		if (files) void upload([...files], slotsLeft, limit);
 	};
 	// The button that was pressed goes away with its row, so focus moves to the next thing that can take it.
 	const removeFile = (key: number) => {
@@ -142,9 +147,12 @@ export function UploadZone({
 					</label>
 				</div>
 			) : (
-				<p ref={noteRef} tabIndex={-1} className="text-[15px] text-ink-2">
-					{note}
-				</p>
+				<div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+					<p ref={noteRef} tabIndex={-1} className="text-[15px] text-ink-2">
+						{note}
+					</p>
+					{noteAction}
+				</div>
 			)}
 
 			<p

@@ -13,6 +13,7 @@ import {
 	type Decision,
 	SLOW_CHECK_MS,
 	candidateName,
+	cvNoun,
 	failureMessage,
 	isSlow,
 	isWorking,
@@ -31,7 +32,10 @@ import {
 	isFiltered,
 	visibleCandidates,
 } from "../lib/candidate-list.ts";
+import { formatNumber } from "../lib/format.ts";
 import type { Job } from "../lib/jobs.ts";
+import { UpgradeAction } from "../settings/upgrade.tsx";
+import { PLANS } from "@lucid-hire/plans";
 import { useNow } from "../lib/use-now.ts";
 import { CandidateTags, DecisionTag } from "./candidate-tags.tsx";
 import { ExportMenu } from "./export-menu.tsx";
@@ -73,12 +77,14 @@ export function CandidatesSection({ job }: { job: Job }) {
 	const used = candidates.data?.cvCount ?? job.cvCount;
 	const limit = candidates.data?.cvLimit ?? CV_LIMIT_PER_JOB;
 	const slotsLeft = Math.max(0, limit - used);
+	const org = useOrg();
+	const full = job.status === "open" && slotsLeft === 0;
 	// Why the job can't take CVs right now, if it can't.
 	const note =
 		job.status !== "open"
 			? CLOSED_NOTE[job.status]
 			: slotsLeft === 0
-				? `This job has used its ${limit} free CVs.`
+				? `This job has used its ${formatNumber(limit)} ${cvNoun(limit)}.`
 				: null;
 
 	return (
@@ -94,7 +100,7 @@ export function CandidatesSection({ job }: { job: Job }) {
 				</h2>
 				<div className="flex flex-wrap items-center gap-x-5 gap-y-1 font-mono text-[12.5px] text-ink-muted">
 					<p>
-						{used} of {limit} free CVs used
+						{formatNumber(used)} of {formatNumber(limit)} {cvNoun(limit)} used
 					</p>
 					<ReadProgress list={list} />
 				</div>
@@ -112,7 +118,14 @@ export function CandidatesSection({ job }: { job: Job }) {
 			<AnnouncedBanner message={deletedHere ?? (deletedCandidate && `Deleted “${deletedCandidate}”`)} className="mt-4" />
 
 			<div className="mt-4">
-				<UploadZone uploads={uploads} note={note} slotsLeft={slotsLeft} />
+				<UploadZone
+					uploads={uploads}
+					note={note}
+					// The top plan has nothing to upgrade to.
+					noteAction={full && limit < PLANS.max.cvsPerJob ? <UpgradeAction isAdmin={org.role === "admin"} /> : undefined}
+					slotsLeft={slotsLeft}
+					limit={limit}
+				/>
 			</div>
 
 			<div className="mt-5">

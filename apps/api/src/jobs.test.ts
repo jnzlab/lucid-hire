@@ -4,7 +4,7 @@ import { type DescriptionEnhancer, GEMINI_TEXT_MODEL } from "./ai.ts";
 import { createApp } from "./app.ts";
 import type { SessionVerifier } from "./auth.ts";
 import { type Db, getDb } from "./db/client.ts";
-import { aiUsage, candidates, jobs, members } from "./db/schema.ts";
+import { aiUsage, candidates, jobs, members, usageCounters } from "./db/schema.ts";
 import { createOrgForUser } from "./orgs.ts";
 import { createTestD1 } from "./test/d1.ts";
 
@@ -48,7 +48,9 @@ beforeAll(async () => {
 
 afterAll(() => dispose());
 
-beforeEach(() => {
+beforeEach(async () => {
+	// Every test starts with a fresh monthly job allowance.
+	await db.delete(usageCounters);
 	allowAi = true;
 	enhanceCalls = 0;
 	enhanceFails = false;

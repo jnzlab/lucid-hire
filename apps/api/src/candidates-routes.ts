@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import {
 	CV_FILE_NAME_MAX,
-	CV_LIMIT_PER_JOB,
 	CV_MAX_BYTES,
 	type Candidate,
 	DEFAULT_CV_FILE_NAME,
@@ -25,6 +24,7 @@ import { buildCsv, exportFileName, exportQuery } from "./candidates-export.ts";
 import { type Db, getDb } from "./db/client.ts";
 import { getJob } from "./jobs.ts";
 import { peekPdf } from "./pdf-stream.ts";
+import { UPGRADE_URL, getEffectivePlan } from "./plan-state.ts";
 import type { AppEnv } from "./types.ts";
 import { validJson, validQuery } from "./validation.ts";
 
@@ -73,7 +73,8 @@ export function candidateRoutes() {
 		if (cvCount === null) return c.json(jobNotFound, 404);
 
 		const candidates = await listCandidates(db, c.get("org").id, jobId);
-		return c.json({ candidates, cvCount, cvLimit: CV_LIMIT_PER_JOB }, 200, { "Cache-Control": "no-store" });
+		const { cvsPerJob } = await getEffectivePlan(db, c.get("org").id);
+		return c.json({ candidates, cvCount, cvLimit: cvsPerJob }, 200, { "Cache-Control": "no-store" });
 	});
 
 	// The job's candidates as a spreadsheet, for any member of the company. Registered before "/:id" so the path is
@@ -133,10 +134,9 @@ export function candidateRoutes() {
 					409,
 				);
 			}
-			return c.json(
-				{ error: { code: "cv_limit", message: `This job has used its ${CV_LIMIT_PER_JOB} free CVs` } },
-				403,
-			);
+			const plan = await getEffectivePlan(db, org.id);
+			const message = `This job has used its ${plan.cvsPerJob} ${plan.key === "free" ? "free " : ""}CVs`;
+			return c.json({ error: { code: "cv_limit", message, upgradeUrl: UPGRADE_URL } }, 403);
 		}
 
 		const id = crypto.randomUUID();

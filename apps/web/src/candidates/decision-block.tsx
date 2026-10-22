@@ -3,6 +3,8 @@ import { Check } from "../components/icons.tsx";
 import { useOrg } from "../dashboard/org.ts";
 import { type Candidate, DECISION_LABEL, type Decision, NOTE_MAX, useDecideCandidate } from "../lib/candidates.ts";
 import { formatDate, formatNumber } from "../lib/format.ts";
+import { useSession } from "../lib/session.ts";
+import { displayName, useTeam } from "../lib/team.ts";
 import { type Segment, SegmentedControl } from "./segmented-control.tsx";
 
 const SEGMENTS: Segment<Decision>[] = [
@@ -37,9 +39,7 @@ export function DecisionBlock({ jobId, candidate }: { jobId: string; candidate: 
 				onChange={choose}
 				className="mt-4"
 			/>
-			{candidate.decision !== "undecided" && candidate.decidedAt && (
-				<p className="mt-3 font-mono text-[12.5px] text-ink-muted">Decided {formatDate(candidate.decidedAt)}</p>
-			)}
+			<WhoDecided candidate={candidate} />
 			<p aria-live="polite" className="sr-only">
 				{announcement}
 			</p>
@@ -50,6 +50,25 @@ export function DecisionBlock({ jobId, candidate }: { jobId: string; candidate: 
 			)}
 			<NoteField jobId={jobId} candidate={candidate} />
 		</section>
+	);
+}
+
+// "Grace Turner · Decided 22 Oct 2026". The decision stores a Clerk user id; names come from the team list.
+function WhoDecided({ candidate }: { candidate: Candidate }) {
+	const { userId } = useSession();
+	const team = useTeam();
+	if (candidate.decision === "undecided" || !candidate.decidedAt) return null;
+
+	let who: string | null = null;
+	if (candidate.decidedBy && candidate.decidedBy === userId) who = "You";
+	else if (candidate.decidedBy && team.data) {
+		const member = team.data.find((person) => person.userId === candidate.decidedBy);
+		who = member ? displayName(member) : "Former member";
+	}
+	return (
+		<p className="mt-3 font-mono text-[12.5px] text-ink-muted [overflow-wrap:anywhere]">
+			{who ? `${who} · ` : ""}Decided {formatDate(candidate.decidedAt)}
+		</p>
 	);
 }
 

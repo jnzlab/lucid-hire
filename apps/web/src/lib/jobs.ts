@@ -1,5 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiDelete, apiDeleteJson, apiGet, apiGetBlob, apiPatch, apiPost, apiPutFile } from "./api.ts";
+import { billingKey } from "./billing.ts";
 import { useSession } from "./session.ts";
 
 export type JobStatus = "draft" | "open" | "closed";
@@ -79,7 +80,10 @@ export function useJob(id: string) {
 }
 
 // Saves a job and primes its page, so opening it after saving needs no request.
-function useSaveJob<V>(save: (variables: V, token: string | null) => Promise<{ job: Job }>) {
+function useSaveJob<V>(
+	save: (variables: V, token: string | null) => Promise<{ job: Job }>,
+	{ spendsAllowance = false }: { spendsAllowance?: boolean } = {},
+) {
 	const { userId, token } = useSession();
 	const queryClient = useQueryClient();
 	return useMutation({
@@ -88,12 +92,17 @@ function useSaveJob<V>(save: (variables: V, token: string | null) => Promise<{ j
 			queryClient.setQueryData(jobKey(userId, job.id), job);
 			void queryClient.invalidateQueries({ queryKey: jobsKey(userId) });
 		},
+		// A new job spends one of the month's allowance, and a refused one means the page's count was out of date.
+		onSettled: () => {
+			if (spendsAllowance) void queryClient.invalidateQueries({ queryKey: billingKey(userId) });
+		},
 	});
 }
 
 export function useCreateJob() {
-	return useSaveJob((input: JobInput & { status: "draft" | "open" }, token) =>
-		apiPost<{ job: Job }>("/jobs", input, { token }),
+	return useSaveJob(
+		(input: JobInput & { status: "draft" | "open" }, token) => apiPost<{ job: Job }>("/jobs", input, { token }),
+		{ spendsAllowance: true },
 	);
 }
 

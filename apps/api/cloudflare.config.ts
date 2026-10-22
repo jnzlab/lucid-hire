@@ -16,6 +16,9 @@ export default defineConfig({
 			GOOGLE_GENERATIVE_AI_API_KEY: bindings.secret(),
 			// Turnstile secret key for the public apply form; the site key is public and lives in the web app.
 			TURNSTILE_SECRET_KEY: bindings.secret(),
+			// Polar billing (sandbox): the API token for checkouts and the portal, and the signing secret of the webhook.
+			POLAR_ACCESS_TOKEN: bindings.secret(),
+			POLAR_WEBHOOK_SECRET: bindings.secret(),
 			// lucidhire-db, primary in US East. Migrations live in ./migrations (see package.json).
 			DB: bindings.d1({ id: "c6c2834b-6af0-4a1b-9799-9dd0a58b13d5", name: "lucidhire-db" }),
 			// Caps request-facing AI calls (such as "Improve with AI") per company: 10 a minute.
