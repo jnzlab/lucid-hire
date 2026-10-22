@@ -228,7 +228,7 @@ describe("scoreCandidate", () => {
 	it("turns missing token counts into nulls, so the step output is plain JSON", async () => {
 		const id = await seedCandidate();
 		const noUsage: CvScorer = async () => ({ value: score, inputTokens: undefined, outputTokens: undefined });
-		expect((await scoreCandidate(db, bucket, noUsage, id)).usage).toEqual({ inputTokens: null, outputTokens: null });
+		expect((await scoreCandidate(db, bucket, noUsage, id))?.usage).toEqual({ inputTokens: null, outputTokens: null });
 	});
 
 	it("fails without a retry when the R2 object is missing, never calls Gemini and books no usage", async () => {
@@ -241,9 +241,9 @@ describe("scoreCandidate", () => {
 		expect(await usageSince(mark)).toEqual([]);
 	});
 
-	it("fails without a retry when the candidate was deleted", async () => {
+	it("stops quietly, with nothing booked, when the candidate was deleted", async () => {
 		const mark = await usageMark();
-		await expect(scoreCandidate(db, bucket, scorer, "deleted")).rejects.toBeInstanceOf(PermanentScoringError);
+		await expect(scoreCandidate(db, bucket, scorer, "deleted")).resolves.toBeNull();
 		expect(await usageSince(mark)).toEqual([]);
 	});
 

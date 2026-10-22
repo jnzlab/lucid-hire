@@ -36,7 +36,7 @@ export async function scoreCandidate(
 	bucket: R2Bucket,
 	scorer: CvScorer,
 	candidateId: string,
-): Promise<ScoreStepOutput> {
+): Promise<ScoreStepOutput | null> {
 	const [row] = await db
 		.select({
 			fileKey: candidates.fileKey,
@@ -50,7 +50,8 @@ export async function scoreCandidate(
 		.innerJoin(jobs, eq(jobs.id, candidates.jobId))
 		.where(eq(candidates.id, candidateId))
 		.limit(1);
-	if (!row) throw new PermanentScoringError("The candidate was deleted");
+	// Null when the candidate was deleted during the run, so the Workflow can stop quietly.
+	if (!row) return null;
 
 	const object = await bucket.get(row.fileKey);
 	if (!object) throw new PermanentScoringError("The uploaded file is missing");

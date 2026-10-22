@@ -134,10 +134,10 @@ export const scoreCvWithGemini = async (
 			maxOutputTokens: 4096,
 			// The Workflow step retries with a longer backoff; quick SDK retries would only spend the daily quota.
 			maxRetries: 0,
-			// Matching a CV to a job needs little reasoning. The model can still take 10 to 80 seconds when it is
-			// busy; waiting on the fetch costs the Worker no CPU time.
+			// Matching a CV to a job needs little reasoning, and a call normally takes 10 to 25 seconds. One still
+			// waiting after a minute has usually hung, so we give up and let the step retry it sooner.
 			providerOptions: { google: { thinkingConfig: { thinkingLevel: "low" } } satisfies GoogleLanguageModelOptions },
-			timeout: 120_000,
+			timeout: 60_000,
 		});
 		return { value: tidyCvScore(output), inputTokens: usage.inputTokens, outputTokens: usage.outputTokens };
 	} finally {

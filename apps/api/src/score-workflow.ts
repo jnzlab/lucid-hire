@@ -41,6 +41,9 @@ export class ScoreCvWorkflow extends WorkflowEntrypoint<Env, ScoreCvParams> {
 					throw error;
 				}
 			});
+			// The candidate was deleted while its run was under way.
+			if (!scored) return;
+
 			await step.do("save", async () => {
 				await saveScore(db, candidateId, scored);
 				return true;
