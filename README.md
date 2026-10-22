@@ -23,10 +23,12 @@ Free, 100 on Pro and 1,000 on Max, 5 MB each. Each CV can carry a name and an
 email the recruiter types, which win over what is read from the CV. The API
 streams each file into the private R2 bucket `lucidhire-cvs`.
 
-Each CV starts its own Workflow (`lucidhire-score-cv`). It sends the PDF to
-gemini-3.5-flash-lite through the Gemini Files API, in one call. Gemini returns
-every requirement of the job as met or not met, with a quote from the CV as
-evidence.
+Each CV starts its own Workflow (`lucidhire-score-cv`). It first waits for a
+reading slot: at most 5 CVs per company and 10 in all read at once, and Pro
+and Max CVs count as queued 5 and 30 minutes earlier, so they go first. Then
+it sends the PDF to gemini-3.5-flash-lite through the Gemini Files API, in one
+call. Gemini returns every requirement of the job as met or not met, with a
+quote from the CV as evidence.
 
 LucidHire computes the score itself, and must-haves count double. So the
 same CV always gets the same score, and every point traces back to a quote.
