@@ -78,49 +78,6 @@ export async function hasApplied(db: Db, jobId: string, email: string): Promise<
 	return Boolean(row);
 }
 
-const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46, 0x2d]; // "%PDF-"
-
-// Reads just enough of the body to check it starts with "%PDF-", then hands back a stream with the same bytes and
-// the same fixed length, ready for R2. Nothing else is buffered or inspected: a Worker on the free plan has 10 ms of
-// CPU, which parsing a 5 MB upload would not fit in. Returns null when the body isn't a PDF.
-export async function checkPdfBody(body: ReadableStream<Uint8Array>, size: number): Promise<ReadableStream<Uint8Array> | null> {
-	const reader = body.getReader();
-	const head: Uint8Array[] = [];
-	let have = 0;
-	while (have < PDF_MAGIC.length) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		head.push(value);
-		have += value.byteLength;
-	}
-	const first = new Uint8Array(have);
-	let offset = 0;
-	for (const chunk of head) {
-		first.set(chunk, offset);
-		offset += chunk.byteLength;
-	}
-	if (have < PDF_MAGIC.length || !PDF_MAGIC.every((byte, i) => first[i] === byte)) {
-		await reader.cancel().catch(() => {});
-		return null;
-	}
-
-	const { readable, writable } = new FixedLengthStream(size);
-	// Not awaited: nothing is read from `readable` until R2 starts, and the first write waits for that.
-	void (async () => {
-		const writer = writable.getWriter();
-		try {
-			await writer.write(first);
-			writer.releaseLock();
-			reader.releaseLock();
-			// The rest of the body is copied across natively.
-			await body.pipeTo(writable);
-		} catch (error) {
-			await writer.abort(error).catch(() => writable.abort(error)).catch(() => {});
-		}
-	})();
-	return readable;
-}
-
 export type CaptchaVerifier = (env: Env, token: string, ip: string | undefined) => Promise<boolean>;
 
 const SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify";

@@ -10,13 +10,6 @@ import { createOrgForUser } from "./orgs.ts";
 import { normalizeEmail, verifyTurnstile } from "./public.ts";
 import { createTestD1 } from "./test/d1.ts";
 
-// Node has no FixedLengthStream; a plain TransformStream has the same readable and writable.
-(globalThis as { FixedLengthStream?: unknown }).FixedLengthStream ??= class extends TransformStream {
-	constructor(_length: number) {
-		super();
-	}
-};
-
 let env: Env;
 let db: Db;
 let bucket: R2Bucket;
