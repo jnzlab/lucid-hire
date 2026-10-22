@@ -8,8 +8,10 @@ import { getDb } from "./db/client.ts";
 import { type QuestionWriter, writeQuestionsWithGemini } from "./interview-questions.ts";
 import { jobRoutes } from "./jobs-routes.ts";
 import { overviewRoutes } from "./overview-routes.ts";
+import { type PolarFetch, polarFetcher } from "./polar.ts";
 import { type CaptchaVerifier, verifyTurnstile } from "./public.ts";
 import { publicRoutes } from "./public-routes.ts";
+import { webhookRoutes } from "./webhook-routes.ts";
 import { ORG_NAME_MAX, ORG_NAME_MIN, createOrgForUser, findOrgForUser, normalizeOrgName } from "./orgs.ts";
 import type { AppEnv } from "./types.ts";
 
@@ -21,6 +23,8 @@ type AppOptions = {
 	enhanceDescription?: DescriptionEnhancer;
 	writeQuestions?: QuestionWriter;
 	verifyCaptcha?: CaptchaVerifier;
+	// How the API reaches Polar; tests replace it.
+	polar?: (env: Env) => PolarFetch;
 };
 
 export function createApp({
@@ -28,6 +32,7 @@ export function createApp({
 	enhanceDescription = enhanceWithGemini,
 	writeQuestions = writeQuestionsWithGemini,
 	verifyCaptcha = verifyTurnstile,
+	polar = (env) => polarFetcher(env.POLAR_ACCESS_TOKEN),
 }: AppOptions = {}) {
 	const app = new Hono<AppEnv>();
 
@@ -90,6 +95,7 @@ export function createApp({
 		return c.json({ org }, created ? 201 : 200);
 	});
 
+	app.route("/webhooks", webhookRoutes({ polar }));
 	app.route("/jobs", jobRoutes({ auth, enhance: enhanceDescription, writeQuestions }));
 
 	app.route("/overview", overviewRoutes({ auth }));
