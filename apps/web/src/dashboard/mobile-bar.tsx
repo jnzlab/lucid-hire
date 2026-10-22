@@ -5,6 +5,7 @@ import { Logo } from "../components/logo.tsx";
 import type { Org } from "../lib/me.ts";
 import { AccountButton } from "./account-button.tsx";
 import { NavLinks } from "./nav-links.tsx";
+import { PlanBadge } from "./plan-badge.tsx";
 import { pageTitle } from "./nav.tsx";
 
 // Below 768px: a top bar with the menu button and a breadcrumb, and the sidebar as a sheet that slides in.
@@ -102,7 +103,10 @@ function Sheet({ org, pathname, onClose }: { org: Org; pathname: string; onClose
 						<span className="sr-only">Close menu</span>
 					</button>
 				</div>
-				<p className="truncate border-t border-line pt-4 font-mono text-[13px] text-ink-2">{org.name}</p>
+				<div className="flex items-center justify-between gap-2 border-t border-line pt-4">
+					<p className="truncate font-mono text-[13px] text-ink-2">{org.name}</p>
+					<PlanBadge onNavigate={onClose} />
+				</div>
 				<NavLinks pathname={pathname} onNavigate={onClose} />
 				<p className="mt-auto border-t border-line pt-4 font-mono text-[12px] text-ink-muted">
 					Your role: {org.role === "admin" ? "Admin" : "Member"}

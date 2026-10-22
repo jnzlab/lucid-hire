@@ -25,9 +25,11 @@ const job = (id: string, title: string, status: string) => ({
 
 let role: "admin" | "member";
 let jobs: ReturnType<typeof job>[];
+let billing: "ok" | "fail";
 
 beforeEach(() => {
 	role = "admin";
+	billing = "ok";
 	jobs = [job("job_3", "Draft role", "draft"), job("job_2", "Open role", "open"), job("job_1", "Older open", "open")];
 	localStorage.clear();
 	vi.stubGlobal(
@@ -35,6 +37,10 @@ beforeEach(() => {
 		vi.fn(async (url: string) => {
 			const { pathname: path, searchParams } = new URL(url);
 			if (path === "/me") return Response.json({ userId: "user_1", org: { id: "org_1", name: "Sprite Labs", role } });
+			if (path === "/billing") {
+				if (billing === "fail") return Response.json({ error: { message: "down" } }, { status: 500 });
+				return Response.json({ plan: "pro", effectivePlan: "pro", status: "active" });
+			}
 			if (path === "/jobs") {
 				const status = searchParams.get("status");
 				const shown = jobs.filter((j) => !status || j.status === status);
@@ -104,6 +110,32 @@ describe("sidebar", () => {
 		const empty = await screen.findByRole("navigation", { name: "Main" });
 		await screen.findByRole("heading", { name: "No jobs yet" });
 		expect(within(empty).getByRole("link", { name: "Upload CVs" }).getAttribute("href")).toBe("/dashboard/jobs/new");
+	});
+});
+
+describe("plan badge", () => {
+	it("shows the plan beside the company and links to the plan section", async () => {
+		renderAt("/dashboard");
+		const badge = await screen.findByRole("link", { name: "Pro plan, see plans" });
+		expect(badge.textContent).toBe("Pro");
+		expect(badge.getAttribute("href")).toBe("/dashboard/settings#plan");
+	});
+
+	it("shows nothing when the plan can't be read, and the shell still works", async () => {
+		billing = "fail";
+		renderAt("/dashboard");
+		await screen.findByRole("navigation", { name: "Main" });
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(screen.queryByRole("link", { name: /plan, see plans/ })).toBeNull();
+	});
+
+	it("is hidden in the collapsed sidebar, and is in the mobile menu", async () => {
+		renderAt("/dashboard");
+		fireEvent.click(await screen.findByRole("button", { name: "Collapse sidebar" }));
+		expect(screen.queryByRole("link", { name: "Pro plan, see plans" })).toBeNull();
+		fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
+		const sheet = await screen.findByRole("dialog", { name: "Menu" });
+		expect(await within(sheet).findByRole("link", { name: "Pro plan, see plans" })).toBeTruthy();
 	});
 });
 
