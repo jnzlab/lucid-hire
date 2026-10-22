@@ -371,6 +371,16 @@ describe("verifyTurnstile", () => {
 		fetchMock.mockRestore();
 	});
 
+	it("accepts the test host example.com only with Cloudflare's always-pass test secret", async () => {
+		const fetchMock = vi
+			.spyOn(globalThis, "fetch")
+			.mockImplementation(async () => Response.json({ success: true, hostname: "example.com" }));
+		expect(await call()).toBe(false);
+		const testSecret = { TURNSTILE_SECRET_KEY: "1x0000000000000000000000000000000AA" } as Env;
+		expect(await verifyTurnstile(testSecret, "t", undefined)).toBe(true);
+		fetchMock.mockRestore();
+	});
+
 	it("accepts localhost, and refuses other hostnames, failures and outages", async () => {
 		let fetchMock = answer({ success: true, hostname: "localhost" });
 		expect(await call()).toBe(true);

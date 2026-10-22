@@ -125,6 +125,8 @@ export type CaptchaVerifier = (env: Env, token: string, ip: string | undefined) 
 
 const SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 const CAPTCHA_HOSTNAMES = ["lucidhire.io", "localhost"];
+// Cloudflare's always-pass test secret, used in local dev, answers for the made-up host example.com.
+const TEST_SECRET_PREFIX = "1x0000000000000000000000000000000";
 
 // Asks Cloudflare whether a Turnstile token is genuine and was issued on one of our own pages. Any failure to
 // reach Cloudflare counts as a failed check.
@@ -135,7 +137,10 @@ export const verifyTurnstile: CaptchaVerifier = async (env, token, ip) => {
 		const res = await fetch(SITEVERIFY_URL, { method: "POST", body: form, signal: AbortSignal.timeout(5000) });
 		if (!res.ok) return false;
 		const result = (await res.json()) as { success?: boolean; hostname?: string };
-		return result.success === true && CAPTCHA_HOSTNAMES.includes(result.hostname ?? "");
+		const hostnames = env.TURNSTILE_SECRET_KEY.startsWith(TEST_SECRET_PREFIX)
+			? [...CAPTCHA_HOSTNAMES, "example.com"]
+			: CAPTCHA_HOSTNAMES;
+		return result.success === true && hostnames.includes(result.hostname ?? "");
 	} catch {
 		return false;
 	}
