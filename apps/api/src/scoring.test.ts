@@ -90,12 +90,12 @@ beforeEach(async () => {
 });
 
 // A queued candidate, with its PDF in R2 unless `withFile` is false.
-async function seedCandidate({ withFile = true }: { withFile?: boolean } = {}) {
+async function seedCandidate({ withFile = true, name }: { withFile?: boolean; name?: string } = {}) {
 	const id = crypto.randomUUID();
 	const fileKey = `${orgId}/${jobId}/${id}.pdf`;
 	await db
 		.insert(candidates)
-		.values({ id, orgId, jobId, fileKey, fileName: "ada.pdf", fileSize: PDF.byteLength, createdBy: "user_admin" });
+		.values({ id, orgId, jobId, fileKey, fileName: "ada.pdf", fileSize: PDF.byteLength, createdBy: "user_admin", name });
 	if (withFile) await bucket.put(fileKey, PDF);
 	return id;
 }
@@ -320,6 +320,12 @@ describe("saveScore", () => {
 		const result = { ...score, name: "", headline: "" };
 		await saveScore(db, id, { result, usage: { inputTokens: null, outputTokens: null } });
 		expect(await rowOf(id)).toMatchObject({ status: "scored", error: null, name: null, headline: null });
+	});
+
+	it("keeps a name the recruiter gave instead of the one read from the CV", async () => {
+		const id = await seedCandidate({ name: "Ada L." });
+		await saveScore(db, id, { result: score, usage: { inputTokens: 1, outputTokens: 1 } });
+		expect(await rowOf(id)).toMatchObject({ status: "scored", name: "Ada L." });
 	});
 
 	it("does nothing for a candidate deleted while Gemini was working", async () => {

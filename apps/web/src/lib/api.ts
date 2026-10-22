@@ -135,12 +135,18 @@ export function apiDelete(path: string, options: ApiRequestOptions = {}): Promis
 export function apiUploadPdf<T>(
 	path: string,
 	file: File,
-	{ token, signal, onProgress }: ApiRequestOptions & { onProgress?: (percent: number) => void } = {},
+	{
+		token,
+		signal,
+		onProgress,
+		headers = {},
+	}: ApiRequestOptions & { onProgress?: (percent: number) => void; headers?: Record<string, string> } = {},
 ): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
 		const xhr = new XMLHttpRequest();
 		xhr.open("POST", `${API_URL}${path}`);
 		xhr.setRequestHeader("Content-Type", "application/pdf");
+		for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
 		if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
 		xhr.upload.onprogress = (event) => {
 			if (event.lengthComputable && event.total > 0) onProgress?.(Math.round((100 * event.loaded) / event.total));

@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import {
+	APPLICANT_NAME_MAX,
 	CV_FILE_NAME_MAX,
 	CV_MAX_BYTES,
 	type Candidate,
@@ -16,6 +17,7 @@ import {
 	listCandidates,
 	listForExport,
 	markStartFailed,
+	parseApplicantName,
 	releaseSlot,
 	startRetry,
 	takeSlot,
@@ -24,6 +26,7 @@ import { buildCsv, exportFileName, exportQuery } from "./candidates-export.ts";
 import { type Db, getDb } from "./db/client.ts";
 import { getJob } from "./jobs.ts";
 import { peekPdf } from "./pdf-stream.ts";
+import { hasApplied, normalizeEmail } from "./public.ts";
 import { UPGRADE_URL, getEffectivePlan } from "./plan-state.ts";
 import type { AppEnv } from "./types.ts";
 import { validJson, validQuery } from "./validation.ts";
@@ -32,6 +35,10 @@ const jobNotFound = { error: { code: "job_not_found", message: "That job doesn't
 const candidateNotFound = {
 	error: { code: "candidate_not_found", message: "That candidate doesn't exist or isn't yours" },
 };
+const emailTaken = {
+	error: { code: "email_taken", message: "Another CV on this job already uses that email address" },
+};
+const err = (code: string, message: string) => ({ error: { code, message } });
 const fileMissing = { error: { code: "file_missing", message: "The CV file is missing" } };
 
 // The file name from the query, tidied; null unless it is a .pdf.
@@ -119,6 +126,15 @@ export function candidateRoutes() {
 			return c.json({ error: { code: "empty_file", message: "That file is empty" } }, 400);
 		}
 
+		// A name and an email the recruiter typed for this CV; blank means none, and the CV's own are used.
+		const name = parseApplicantName(c.req.header("x-applicant-name"));
+		if (name === undefined) {
+			return c.json(err("invalid_name", `Keep the name to ${APPLICANT_NAME_MAX} characters or fewer`), 400);
+		}
+		const rawEmail = c.req.header("x-applicant-email")?.trim();
+		const email = rawEmail ? normalizeEmail(rawEmail) : null;
+		if (rawEmail && !email) return c.json(err("invalid_email", "Enter a valid email address"), 400);
+
 		// The first bytes must say PDF: the content type and the name are only what the client claims. Looked at
 		// before a slot is taken, so a file that isn't a PDF costs nothing.
 		const pdf = c.req.raw.body ? await peekPdf(c.req.raw.body, fileSize) : null;
@@ -137,6 +153,12 @@ export function candidateRoutes() {
 			const plan = await getEffectivePlan(db, org.id);
 			const message = `This job has used its ${plan.cvsPerJob} ${plan.key === "free" ? "free " : ""}CVs`;
 			return c.json({ error: { code: "cv_limit", message, upgradeUrl: UPGRADE_URL } }, 403);
+		}
+
+		// Checked once the job is known to be the company's, so an address can't be probed through another company's job.
+		if (email && (await hasApplied(db, jobId, email))) {
+			await releaseSlot(db, org.id, jobId);
+			return c.json(emailTaken, 409);
 		}
 
 		const id = crypto.randomUUID();
@@ -162,10 +184,16 @@ export function candidateRoutes() {
 				fileName,
 				fileSize,
 				createdBy: c.get("userId"),
+				...(email && { email }),
+				...(name && { name }),
 			});
 		} catch (error) {
 			// Don't leave a file nobody can see, or a slot nobody used.
 			c.executionCtx.waitUntil(Promise.all([deleteCvFiles(c.env.CVS, [fileKey]), releaseSlot(db, org.id, jobId)]));
+			// Two uploads with one email racing each other: the unique index let only the first through.
+			if (email && error instanceof Error && /UNIQUE/i.test(`${error.message} ${error.cause}`)) {
+				return c.json(emailTaken, 409);
+			}
 			throw error;
 		}
 

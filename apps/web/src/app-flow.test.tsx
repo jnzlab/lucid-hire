@@ -1645,6 +1645,10 @@ describe("candidates", () => {
 	// The uploads the page has sent so far.
 	const uploads = () =>
 		fetchMock.mock.calls.filter(([url, init]) => init?.method === "POST" && url.includes("/candidates?"));
+	// Chooses PDFs; they go up at once unless "Add a name or email to each CV" is on.
+	const sendPdfs = async (input: HTMLElement, files: File[]) => {
+		fireEvent.change(input, { target: { files } });
+	};
 	// The ranked rows, in the order they are shown.
 	const rowTexts = () =>
 		within(screen.getByRole("list", { name: "Candidates" }))
@@ -1703,7 +1707,7 @@ describe("candidates", () => {
 		expect(await screen.findByText("0 of 10 free CVs used")).toBeTruthy();
 
 		const files = [pdf("grace_turner.pdf"), pdf("kenji tanaka.pdf")];
-		fireEvent.change(input, { target: { files } });
+		await sendPdfs(input, files);
 
 		expect(await screen.findByText("2 CVs uploaded")).toBeTruthy();
 		expect(screen.getByText("2 of 10 free CVs used")).toBeTruthy();
@@ -1727,7 +1731,7 @@ describe("candidates", () => {
 		renderAt("/dashboard/jobs/job_1");
 		const sending = hold(isUpload);
 
-		fireEvent.change(await screen.findByLabelText("Choose PDFs"), { target: { files: [pdf("grace_turner.pdf")] } });
+		await sendPdfs(await screen.findByLabelText("Choose PDFs"), [pdf("grace_turner.pdf")]);
 
 		const bar = await screen.findByRole("progressbar", { name: "Uploading grace_turner.pdf" });
 		expect(bar.getAttribute("aria-valuenow")).toBe("42");
@@ -1742,9 +1746,7 @@ describe("candidates", () => {
 	it("takes a waiting file out of the batch before it uploads", async () => {
 		renderAt("/dashboard/jobs/job_1");
 		const sending = hold(isUpload);
-		fireEvent.change(await screen.findByLabelText("Choose PDFs"), {
-			target: { files: [pdf("first.pdf"), pdf("second.pdf"), pdf("third.pdf")] },
-		});
+		await sendPdfs(await screen.findByLabelText("Choose PDFs"), [pdf("first.pdf"), pdf("second.pdf"), pdf("third.pdf")]);
 
 		// The first is on its way; the others wait and can be removed.
 		await waitFor(() => expect(sending.pending()).toBe(1));
@@ -1771,7 +1773,7 @@ describe("candidates", () => {
 			return answer(url, init);
 		});
 
-		fireEvent.change(await screen.findByLabelText("Choose PDFs"), { target: { files: [pdf("flaky.pdf")] } });
+		await sendPdfs(await screen.findByLabelText("Choose PDFs"), [pdf("flaky.pdf")]);
 		expect(await screen.findByText("✕ We couldn't reach LucidHire. Check your connection and try again.")).toBeTruthy();
 		expect(screen.getByText("1 not uploaded")).toBeTruthy();
 		expect(screen.getByText("0 of 10 free CVs used")).toBeTruthy();
@@ -1787,14 +1789,14 @@ describe("candidates", () => {
 		fetchMock.mockImplementation((url: string, init?: RequestInit) =>
 			isUpload(url, init) ? Promise.resolve(apiError(502, "upload_failed", "We couldn't store that file. Try again.")) : answer(url, init),
 		);
-		fireEvent.change(screen.getByLabelText("Choose PDFs"), { target: { files: [pdf("later.pdf")] } });
+		await sendPdfs(screen.getByLabelText("Choose PDFs"), [pdf("later.pdf")]);
 		expect(await screen.findByText("✕ We couldn't store that file. Try again.")).toBeTruthy();
 		expect(screen.getByRole("button", { name: "Retry upload later.pdf" })).toBeTruthy();
 
 		fetchMock.mockImplementation((url: string, init?: RequestInit) =>
 			isUpload(url, init) ? Promise.resolve(apiError(400, "not_pdf", "Upload a PDF file")) : answer(url, init),
 		);
-		fireEvent.change(screen.getByLabelText("Choose PDFs"), { target: { files: [pdf("fake.pdf")] } });
+		await sendPdfs(screen.getByLabelText("Choose PDFs"), [pdf("fake.pdf")]);
 		expect(await screen.findByText("✕ Upload a PDF file")).toBeTruthy();
 		expect(screen.queryByRole("button", { name: /Retry upload/ })).toBeNull();
 	});
@@ -1846,6 +1848,111 @@ describe("candidates", () => {
 		expect(within(screen.getByRole("list", { name: "Candidates" })).getByText("dropped.pdf")).toBeTruthy();
 	});
 
+	describe("the name and email of each CV", () => {
+		const stage = async (...names: string[]) => {
+			renderAt("/dashboard/jobs/job_1");
+			fireEvent.click(await screen.findByLabelText("Add a name or email to each CV"));
+			fireEvent.change(screen.getByLabelText("Choose PDFs"), { target: { files: names.map((name) => pdf(name)) } });
+			return screen.findByText(`${names.length} ${names.length === 1 ? "CV" : "CVs"} ready to upload`);
+		};
+		const type = (label: string, value: string) => fireEvent.change(screen.getByLabelText(label), { target: { value } });
+
+		it("is off by default, so chosen files upload at once", async () => {
+			renderAt("/dashboard/jobs/job_1");
+			const toggle = (await screen.findByLabelText("Add a name or email to each CV")) as HTMLInputElement;
+			expect(toggle.type).toBe("checkbox");
+			expect(toggle.checked).toBe(false);
+			fireEvent.change(screen.getByLabelText("Choose PDFs"), { target: { files: [pdf("now.pdf")] } });
+			expect(await screen.findByText("1 CV uploaded")).toBeTruthy();
+			expect(screen.queryByLabelText(/^Name for /)).toBeNull();
+		});
+
+		it("keeps staged files, and their Upload button, when it is turned off", async () => {
+			await stage("held.pdf");
+			fireEvent.click(screen.getByLabelText("Add a name or email to each CV"));
+			expect(uploads()).toHaveLength(0);
+			// Files chosen now go straight up; the held one waits for its button.
+			fireEvent.change(screen.getByLabelText("Choose PDFs"), { target: { files: [pdf("direct.pdf")] } });
+			await waitFor(() => expect(uploads()).toHaveLength(1));
+			fireEvent.click(await screen.findByRole("button", { name: "Upload 1 CV" }));
+			await waitFor(() => expect(uploads()).toHaveLength(2));
+		});
+
+		it("holds the chosen files until Upload, with a labelled name and email for each", async () => {
+			await stage("grace_turner.pdf", "kenji tanaka.pdf");
+
+			expect(uploads()).toHaveLength(0);
+			for (const file of ["grace_turner.pdf", "kenji tanaka.pdf"]) {
+				for (const field of ["Name", "Email"]) {
+					const input = screen.getByLabelText(`${field} for ${file}`) as HTMLInputElement;
+					expect(input.placeholder).toBe("Read from the CV");
+					expect(input.value).toBe("");
+				}
+			}
+			expect(screen.getByRole("button", { name: "Upload 2 CVs" })).toBeTruthy();
+			fireEvent.click(screen.getByRole("button", { name: "Remove kenji tanaka.pdf" }));
+			expect(screen.getByRole("button", { name: "Upload 1 CV" })).toBeTruthy();
+		});
+
+		it("sends what was typed in headers, and nothing for a blank field", async () => {
+			await stage("grace_turner.pdf", "kenji tanaka.pdf");
+			type("Name for grace_turner.pdf", "  Zoë Müller ");
+			type("Email for grace_turner.pdf", " Zoe@Example.com ");
+			fireEvent.click(screen.getByRole("button", { name: "Upload 2 CVs" }));
+
+			expect(await screen.findByText("2 CVs uploaded")).toBeTruthy();
+			const [first, second] = uploads().map(([, init]) => init?.headers);
+			expect(first).toEqual({
+				"Content-Type": "application/pdf",
+				Authorization: "Bearer session-token",
+				"X-Applicant-Name": encodeURIComponent("Zoë Müller"),
+				"X-Applicant-Email": "Zoe@Example.com",
+			});
+			expect(second).toEqual({ "Content-Type": "application/pdf", Authorization: "Bearer session-token" });
+			// The fields give way to the results.
+			expect(screen.queryByLabelText(/^Name for /)).toBeNull();
+		});
+
+		it("holds the upload back for a malformed or repeated email, on the row that has it", async () => {
+			await stage("grace_turner.pdf", "kenji tanaka.pdf", "ada.pdf");
+			type("Email for grace_turner.pdf", "not-an-email");
+			type("Email for kenji tanaka.pdf", "Ada@example.com");
+			type("Email for ada.pdf", "ada@EXAMPLE.com");
+			fireEvent.click(screen.getByRole("button", { name: "Upload 3 CVs" }));
+
+			const alerts = await screen.findAllByRole("alert");
+			expect(alerts.map((alert) => alert.textContent)).toEqual([
+				"✕ Enter a valid email address",
+				"✕ Another file in this batch has this email address",
+			]);
+			expect(screen.getByLabelText("Email for grace_turner.pdf").getAttribute("aria-invalid")).toBe("true");
+			expect(screen.getByLabelText("Email for kenji tanaka.pdf").getAttribute("aria-invalid")).toBeNull();
+			expect(uploads()).toHaveLength(0);
+
+			// Fixing the rows lets the batch go.
+			type("Email for grace_turner.pdf", "");
+			type("Email for ada.pdf", "other@example.com");
+			expect(screen.queryByRole("alert")).toBeNull();
+			fireEvent.click(screen.getByRole("button", { name: "Upload 3 CVs" }));
+			expect(await screen.findByText("3 CVs uploaded")).toBeTruthy();
+		});
+
+		it("shows the API's answer when the email is already on another CV of the job", async () => {
+			await stage("grace_turner.pdf");
+			const answer = fetchMock.getMockImplementation()!;
+			fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+				isUpload(url, init)
+					? Promise.resolve(apiError(409, "email_taken", "Another CV on this job already uses that email address"))
+					: answer(url, init),
+			);
+			type("Email for grace_turner.pdf", "grace@example.com");
+			fireEvent.click(screen.getByRole("button", { name: "Upload 1 CV" }));
+
+			expect(await screen.findByText("✕ Another CV on this job already uses that email address")).toBeTruthy();
+			expect(screen.queryByRole("button", { name: /Retry upload/ })).toBeNull();
+		});
+	});
+
 	it("turns away a file that is not a PDF, is empty or is over 5 MB, without sending it", async () => {
 		renderAt("/dashboard/jobs/job_1");
 
@@ -1871,7 +1978,7 @@ describe("candidates", () => {
 		renderAt("/dashboard/jobs/job_1");
 
 		const input = await screen.findByLabelText("Choose PDFs");
-		fireEvent.change(input, { target: { files: [pdf("ninth.pdf"), pdf("tenth.pdf")] } });
+		await sendPdfs(input, [pdf("ninth.pdf"), pdf("tenth.pdf")]);
 
 		expect(await screen.findByText("1 uploaded · 1 not uploaded")).toBeTruthy();
 		expect(screen.getByText("✕ This job has used its 10 free CVs")).toBeTruthy();
@@ -1905,7 +2012,7 @@ describe("candidates", () => {
 		const empty = await screen.findByText("No candidates yet. Uploaded CVs are ranked here.");
 		expect(screen.getByText("Drop CVs here").compareDocumentPosition(empty) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
-		fireEvent.change(screen.getByLabelText("Choose PDFs"), { target: { files: [pdf("one.pdf")] } });
+		await sendPdfs(screen.getByLabelText("Choose PDFs"), [pdf("one.pdf")]);
 		expect(await screen.findByText("1 CV uploaded")).toBeTruthy();
 		expect(screen.queryByText("No candidates yet. Uploaded CVs are ranked here.")).toBeNull();
 	});
@@ -1916,7 +2023,7 @@ describe("candidates", () => {
 		const input = await screen.findByLabelText("Choose PDFs");
 		// Someone else used the last slots since this page loaded, so only the server knows.
 		jobs[0].cvCount = 10;
-		fireEvent.change(input, { target: { files: [pdf("first.pdf"), pdf("second.pdf")] } });
+		await sendPdfs(input, [pdf("first.pdf"), pdf("second.pdf")]);
 
 		expect(await screen.findByText("2 not uploaded")).toBeTruthy();
 		expect(screen.getAllByText("✕ This job has used its 10 free CVs")).toHaveLength(2);
@@ -1931,7 +2038,7 @@ describe("candidates", () => {
 		renderAt("/dashboard/jobs/job_1");
 		const input = await screen.findByLabelText("Choose PDFs");
 		jobs[0].status = "closed";
-		fireEvent.change(input, { target: { files: [pdf("late.pdf"), pdf("later.pdf")] } });
+		await sendPdfs(input, [pdf("late.pdf"), pdf("later.pdf")]);
 
 		expect(await screen.findByText("2 not uploaded")).toBeTruthy();
 		expect(screen.getAllByText("✕ This job isn't open, so it can't take CVs. Open it first.")).toHaveLength(2);
@@ -1946,7 +2053,7 @@ describe("candidates", () => {
 		renderAt("/dashboard/jobs/job_1");
 		const input = (await screen.findByLabelText("Choose PDFs")) as HTMLInputElement;
 		const uploading = hold(isUpload);
-		fireEvent.change(input, { target: { files: [pdf("one.pdf")] } });
+		await sendPdfs(input, [pdf("one.pdf")]);
 
 		await waitFor(() => expect(uploading.pending()).toBe(1));
 		// Disabling it would drop the keyboard focus, so it only looks busy.
@@ -1971,7 +2078,7 @@ describe("candidates", () => {
 		await act(() => vi.advanceTimersByTimeAsync(CANDIDATE_POLL_MS));
 		expect(lists.pending()).toBe(1);
 		const uploading = hold(isUpload);
-		fireEvent.change(screen.getByLabelText("Choose PDFs"), { target: { files: [pdf("fresh.pdf"), pdf("next.pdf")] } });
+		await sendPdfs(screen.getByLabelText("Choose PDFs"), [pdf("fresh.pdf"), pdf("next.pdf")]);
 		await waitFor(() => expect(uploading.pending()).toBe(1));
 		await act(async () => uploading.release());
 		await waitFor(() => expect(uploading.pending()).toBe(1));

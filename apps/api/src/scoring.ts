@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { recordAiUsage } from "./ai.ts";
 import { computeScore } from "./candidates.ts";
 import { type CvScore, type CvScorer, isUnreadableFileError } from "./cv-scorer.ts";
@@ -88,7 +88,8 @@ export async function saveScore(db: Db, candidateId: string, { result, usage }: 
 		.set({
 			status: "scored",
 			error: null,
-			name: result.name || null,
+			// A name the recruiter gave at upload stays; the CV's own name fills in only when there is none.
+			name: sql`coalesce(${candidates.name}, ${result.name || null})`,
 			headline: result.headline || null,
 			summary: result.summary,
 			requirements: result.requirements,

@@ -1,7 +1,7 @@
 import { useRouterState } from "@tanstack/react-router";
 import { type DragEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { Check } from "../components/icons.tsx";
-import { CV_MAX_BYTES, type UploadItem, type useUploadCvs } from "../lib/candidates.ts";
+import { APPLICANT_NAME_MAX, CV_MAX_BYTES, type UploadItem, type useUploadCvs } from "../lib/candidates.ts";
 import { useCoarsePointer } from "../lib/use-coarse-pointer.ts";
 import { ROW_ACTION } from "./row-action.ts";
 
@@ -17,6 +17,7 @@ function UploadState({ item }: { item: UploadItem }) {
 				<Check /> Uploaded
 			</span>
 		);
+	if (item.state === "staged") return null;
 	if (item.state === "waiting") return <span className="text-ink-muted">Waiting</span>;
 	const percent = item.progress ?? 0;
 	return (
@@ -41,6 +42,8 @@ function UploadState({ item }: { item: UploadItem }) {
 function summarise(items: UploadItem[]) {
 	const pending = items.filter(({ state }) => state === "waiting" || state === "uploading").length;
 	if (pending > 0) return `Uploading ${pending} ${pending === 1 ? "file" : "files"}`;
+	const staged = items.filter(({ state }) => state === "staged").length;
+	if (staged > 0) return `${staged} ${staged === 1 ? "CV" : "CVs"} ready to upload`;
 	const failed = items.filter(({ state }) => state === "failed").length;
 	const done = items.length - failed;
 	if (items.length === 0) return null;
@@ -48,11 +51,64 @@ function summarise(items: UploadItem[]) {
 	return done === 0 ? `${failed} not uploaded` : `${done} uploaded · ${failed} not uploaded`;
 }
 
-// Drop PDFs on the zone or pick them with the button. Files go up one after another; each one's
-// result, or the reason it was refused, is listed under the zone. When the job can't take CVs the
+// The optional name and email for a file that is about to be uploaded. Blank means the CV's own are used.
+function DetailFields({
+	item,
+	onEdit,
+}: {
+	item: UploadItem;
+	onEdit: (change: { name?: string; email?: string }) => void;
+}) {
+	const nameId = useId();
+	const emailId = useId();
+	const errorId = useId();
+	return (
+		<div className="mt-1 grid w-full gap-2 sm:grid-cols-2">
+			<div>
+				<label htmlFor={nameId} className="font-mono text-[12px] text-ink-muted">
+					Name<span className="sr-only"> for {item.fileName}</span>
+				</label>
+				<input
+					id={nameId}
+					className="field mt-1"
+					type="text"
+					autoComplete="off"
+					maxLength={APPLICANT_NAME_MAX}
+					placeholder="Read from the CV"
+					value={item.name}
+					onChange={(event) => onEdit({ name: event.target.value })}
+				/>
+			</div>
+			<div>
+				<label htmlFor={emailId} className="font-mono text-[12px] text-ink-muted">
+					Email<span className="sr-only"> for {item.fileName}</span>
+				</label>
+				<input
+					id={emailId}
+					className="field mt-1"
+					type="email"
+					autoComplete="off"
+					placeholder="Read from the CV"
+					value={item.email}
+					aria-invalid={item.detailError ? true : undefined}
+					aria-describedby={item.detailError ? errorId : undefined}
+					onChange={(event) => onEdit({ email: event.target.value })}
+				/>
+			</div>
+			{item.detailError && (
+				<p id={errorId} role="alert" className="text-[13px] text-gap-ink sm:col-span-2">
+					✕ {item.detailError}
+				</p>
+			)}
+		</div>
+	);
+}
+
+// Drop PDFs on the zone or pick them with the button. They are listed under the zone, each with optional name and
+// email fields, until "Upload" sends them; each one's result, or the reason it was refused, then takes their place. When the job can't take CVs the
 // `note` says why and takes the place of the chooser, but the results of the last batch stay.
 export function UploadZone({
-	uploads: { items, upload, remove, retry, clear },
+	uploads: { items, choose, edit, upload, remove, retry, clear },
 	note,
 	noteAction,
 	slotsLeft,
@@ -66,6 +122,10 @@ export function UploadZone({
 	limit: number;
 }) {
 	const [dragging, setDragging] = useState(false);
+	// Off: chosen files go up at once. On: they wait for a name and email, then "Upload". Turning it off keeps the
+	// files already waiting where they are (nothing uploads by surprise); their button stays until they are sent.
+	const [withDetails, setWithDetails] = useState(false);
+	const detailsId = useId();
 	const coarse = useCoarsePointer();
 	const inputId = useId();
 	const helpId = useId();
@@ -82,7 +142,13 @@ export function UploadZone({
 	const busy = items.some(({ state }) => state === "waiting" || state === "uploading");
 	const summary = summarise(items);
 	const takeFiles = (files: FileList | null) => {
-		if (files) void upload([...files], slotsLeft, limit);
+		if (files) choose([...files], slotsLeft, limit, withDetails);
+	};
+	const staged = items.filter(({ state }) => state === "staged").length;
+	// The button goes away once the files are on their way, so focus moves on to the chooser.
+	const startUpload = () => {
+		upload();
+		(inputRef.current ?? noteRef.current)?.focus();
 	};
 	// The button that was pressed goes away with its row, so focus moves to the next thing that can take it.
 	const removeFile = (key: number) => {
@@ -139,6 +205,18 @@ export function UploadZone({
 							event.target.value = "";
 						}}
 					/>
+					<div className="flex items-center gap-2">
+						<input
+							id={detailsId}
+							type="checkbox"
+							checked={withDetails}
+							onChange={(event) => setWithDetails(event.target.checked)}
+							className="size-5 accent-ink"
+						/>
+						<label htmlFor={detailsId} className="text-[14px] text-ink-2">
+							Add a name or email to each CV
+						</label>
+					</div>
 					<label
 						htmlFor={inputId}
 						className={`btn ghost peer-focus-visible:outline-3 peer-focus-visible:outline-offset-3 peer-focus-visible:outline-ink ${busy ? "pointer-events-none opacity-70" : ""}`}
@@ -173,7 +251,7 @@ export function UploadZone({
 								<span className="min-w-0 text-ink [overflow-wrap:anywhere]">{item.fileName}</span>
 								<UploadState item={item} />
 								{/* Only a file that hasn't started can be taken out, and only one that dropped on the way can be sent again. */}
-								{item.state === "waiting" && (
+								{(item.state === "staged" || item.state === "waiting") && (
 									<button
 										type="button"
 										className={ROW_ACTION}
@@ -193,9 +271,15 @@ export function UploadZone({
 										Retry upload
 									</button>
 								)}
+								{item.state === "staged" && <DetailFields item={item} onEdit={(change) => edit(item.key, change)} />}
 							</li>
 						))}
 					</ul>
+					{staged > 0 && (
+						<button type="button" className="btn mt-3" onClick={startUpload}>
+							{staged === 1 ? "Upload 1 CV" : `Upload ${staged} CVs`}
+						</button>
+					)}
 					{!busy && (
 						<button
 							type="button"
