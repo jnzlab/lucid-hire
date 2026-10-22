@@ -29,6 +29,7 @@ vi.mock("@clerk/react", () => ({
 	}),
 	RedirectToSignIn: ({ redirectUrl }: { redirectUrl?: string }) => <p data-redirect-url={redirectUrl}>Redirecting to sign in</p>,
 	UserButton: Object.assign(() => null, { MenuItems: () => null, Link: () => null }),
+	UserProfile: () => null,
 	Show: () => null,
 	SignIn: () => null,
 	SignUp: () => null,
@@ -1363,6 +1364,73 @@ describe("page states and focus", () => {
 		expect(await screen.findByText("Job closed")).toBeTruthy();
 		expect(close.textContent).toBe("Reopen job");
 		expect(close.getAttribute("aria-disabled")).toBe("false");
+	});
+});
+
+describe("choosing a plan before signing up", () => {
+	beforeEach(() => {
+		// The landing page reads media queries and watches scrolling; jsdom has neither.
+		vi.stubGlobal("matchMedia", (query: string) => ({
+			matches: false,
+			media: query,
+			addEventListener() {},
+			removeEventListener() {},
+			addListener() {},
+			removeListener() {},
+		}));
+		for (const name of ["IntersectionObserver", "ResizeObserver"]) {
+			vi.stubGlobal(
+				name,
+				class {
+					observe() {}
+					unobserve() {}
+					disconnect() {}
+				},
+			);
+		}
+	});
+	afterEach(() => sessionStorage.clear());
+
+	it("sends the pricing buttons to sign-up with the plan, and Free without one", async () => {
+		session.signedIn = false;
+		renderAt("/");
+		const href = async (name: string) => (await screen.findByRole("link", { name })).getAttribute("href");
+
+		expect(await href("Choose Pro")).toBe("/sign-up?plan=pro");
+		expect(await href("Choose Max")).toBe("/sign-up?plan=max");
+		expect(await href("Start free")).toBe("/sign-up");
+	});
+
+	it("sends signed-in visitors from a pricing button to the plan cards", async () => {
+		renderAt("/");
+		expect((await screen.findByRole("link", { name: "Choose Max" })).getAttribute("href")).toBe("/dashboard/settings?upgrade=max");
+		expect(screen.getByRole("link", { name: "Start free" }).getAttribute("href")).toBe("/dashboard");
+	});
+
+	it("keeps the plan through sign-up and onboarding, then highlights it without asking for payment", async () => {
+		session.signedIn = true;
+		renderAt("/sign-up?plan=pro");
+		await waitFor(() => expect(sessionStorage.getItem("lucidhire:picked-plan")).toBe("pro"));
+		cleanup();
+
+		const router = renderAt("/onboarding");
+		fireEvent.change(await screen.findByLabelText("Company name"), { target: { value: "Sprite Labs" } });
+		fireEvent.click(screen.getByRole("button", { name: /Continue to your dashboard/ }));
+
+		const card = await screen.findByRole("listitem", { name: "Pro plan" }, { timeout: 5000 });
+		expect(router.state.location.pathname).toBe("/dashboard/settings");
+		expect(card.textContent).toContain("You picked Pro");
+		expect(within(card).getByRole("button", { name: "Upgrade to Pro" })).toBeTruthy();
+		expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining("/billing/checkout"), expect.anything());
+		expect(sessionStorage.getItem("lucidhire:picked-plan")).toBeNull();
+	});
+
+	it("goes to the jobs as before when no plan was picked", async () => {
+		const router = renderAt("/onboarding");
+		fireEvent.change(await screen.findByLabelText("Company name"), { target: { value: "Sprite Labs" } });
+		fireEvent.click(screen.getByRole("button", { name: /Continue to your dashboard/ }));
+		expect(await screen.findByRole("heading", { name: "No jobs yet" })).toBeTruthy();
+		expect(router.state.location.pathname).toBe("/dashboard");
 	});
 });
 

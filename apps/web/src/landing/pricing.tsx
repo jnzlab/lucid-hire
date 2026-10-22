@@ -84,7 +84,7 @@ export function Pricing() {
 										</li>
 									))}
 								</ul>
-								<SignUpCta className={plan.key === "pro" ? "btn" : "btn ghost"}>{plan.cta}</SignUpCta>
+								<SignUpCta plan={plan.key} className={plan.key === "pro" ? "btn" : "btn ghost"}>{plan.cta}</SignUpCta>
 							</article>
 						);
 					})}
