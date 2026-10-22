@@ -1,14 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiDelete, apiGet, apiPatch, apiPost } from "./api.ts";
+import { apiDelete, apiDeleteJson, apiGet, apiGetBlob, apiPatch, apiPost, apiPutFile } from "./api.ts";
 import { useSession } from "./session.ts";
 
 export type JobStatus = "draft" | "open" | "closed";
 // `cvCount` is the CVs ever uploaded to the job. Deleting a candidate doesn't lower it.
 export type JobSummary = {
 	id: string;
+	// The public page is /jobs/<slug>.
+	slug: string;
 	title: string;
 	status: JobStatus;
 	cvCount: number;
+	hasCover: boolean;
 	createdAt: string;
 	updatedAt: string;
 };
@@ -91,4 +94,35 @@ export function useEnhanceDescription() {
 		mutationFn: async (input: { title?: string; description: string }) =>
 			(await apiPost<{ description: string }>("/jobs/enhance", input, { token: await token() })).description,
 	});
+}
+
+export const COVER_MAX_BYTES = 2 * 1024 * 1024;
+export const COVER_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
+// The same checks the API makes, in the same words.
+export function checkCover(file: File): string | null {
+	if (!COVER_TYPES.includes(file.type)) return "Upload a JPEG, PNG or WebP image";
+	if (file.size === 0) return "That file is empty";
+	if (file.size > COVER_MAX_BYTES) return "The cover image must be 2 MB or smaller";
+	return null;
+}
+
+// The job's own cover, fetched with the session so it works for drafts too. `version` changes with every save.
+export function useCoverImage(id: string, hasCover: boolean, version: string) {
+	const { userId, token } = useSession();
+	return useQuery({
+		queryKey: ["job-cover", userId, id, version],
+		enabled: hasCover,
+		queryFn: async ({ signal }) => URL.createObjectURL(await apiGetBlob(`/jobs/${id}/cover`, { token: await token(), signal })),
+		staleTime: Number.POSITIVE_INFINITY,
+		gcTime: 60_000,
+	});
+}
+
+export function useSetCover(id: string) {
+	return useSaveJob((file: File, token) => apiPutFile<{ job: Job }>(`/jobs/${id}/cover`, file, { token }));
+}
+
+export function useRemoveCover(id: string) {
+	return useSaveJob((_: void, token) => apiDeleteJson<{ job: Job }>(`/jobs/${id}/cover`, { token }));
 }

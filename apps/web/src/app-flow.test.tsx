@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createBrowserHistory, createMemoryHistory } from "@tanstack/react-router";
-import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
-import { type Mock, type MockInstance, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, configure, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { type Mock, type MockInstance, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	CANDIDATE_POLL_MS,
 	CV_MAX_BYTES,
@@ -11,6 +11,9 @@ import {
 	useDecideCandidate,
 } from "./lib/candidates.ts";
 import { createAppRouter } from "./router.ts";
+
+// Pages load code-split chunks, which can take a while when several test runs share a machine.
+configure({ asyncUtilTimeout: 5000 });
 
 // Clerk is replaced by a session we control; the API by an in-memory fake of /me, /orgs, /jobs and the
 // candidates under each job.
@@ -37,6 +40,7 @@ type FakeJob = {
 	description: string;
 	status: string;
 	cvCount?: number;
+	hasCover?: boolean;
 	createdAt: string;
 	updatedAt: string;
 };
@@ -50,7 +54,7 @@ const notFound = () => Response.json({ error: { message: "That job doesn't exist
 const apiError = (status: number, code: string, message: string) =>
 	Response.json({ error: { code, message } }, { status });
 // What the API sends for a job: the CV count is always there.
-const withCount = (job: FakeJob) => ({ ...job, cvCount: job.cvCount ?? 0 });
+const withCount = (job: FakeJob) => ({ ...job, slug: `${job.id}-slug`, hasCover: job.hasCover ?? false, cvCount: job.cvCount ?? 0 });
 
 // The jobs API, enough of it for the pages: list, create, read, edit, delete and the AI rewrite.
 function fakeJobs(path: string, method: string, body: Record<string, string>): Response {
@@ -84,6 +88,11 @@ function fakeJobs(path: string, method: string, body: Record<string, string>): R
 		return Response.json({ description: `What you need:\n- ${body.description}` });
 	}
 	if (!job) return notFound();
+	if (path.endsWith("/cover")) {
+		if (method === "GET") return new Response(new Blob(["png"], { type: "image/png" }));
+		job.hasCover = method === "PUT";
+		return Response.json({ job: withCount(job) });
+	}
 	if (method === "GET") return Response.json({ job: withCount(job) });
 	if (method === "PATCH") {
 		Object.assign(job, body, { updatedAt: new Date("2026-10-23T09:00:00Z").toISOString() });
@@ -205,6 +214,9 @@ function fakeCandidate(fields: Partial<FakeCandidate> & { id: string }): FakeCan
 		...fields,
 	};
 }
+
+// The Markdown renderer is loaded on demand; loading it once up front keeps the first test from racing the import.
+beforeAll(() => import("./components/markdown.tsx"), 60_000);
 
 beforeEach(() => {
 	session.signedIn = true;
@@ -370,6 +382,59 @@ describe("jobs", () => {
 		org = { id: "org_1", name: "Sprite Labs", role: "admin" };
 	});
 
+	it("shows the candidate view beside the form, live, with Compose and Preview tabs", async () => {
+		renderAt("/dashboard/jobs/new");
+		const title = await screen.findByLabelText("Job title");
+		expect(screen.getByRole("heading", { level: 2, name: "Candidate view" })).toBeTruthy();
+		expect(screen.getByText("Your description appears here as you type. Markdown works.")).toBeTruthy();
+
+		fireEvent.change(title, { target: { value: "Preview role" } });
+		fireEvent.change(screen.getByLabelText("Description"), { target: { value: "## Duties\n\nShip **fast**." } });
+		const view = screen.getByRole("heading", { level: 2, name: "Candidate view" }).closest("section")!;
+		expect(within(view).getByText("Preview role")).toBeTruthy();
+		expect(await within(view).findByRole("heading", { level: 2, name: "Duties" })).toBeTruthy();
+		expect(within(view).getByText("fast").tagName).toBe("STRONG");
+
+		const compose = screen.getByRole("tab", { name: "Compose" });
+		const preview = screen.getByRole("tab", { name: "Preview" });
+		expect(compose.getAttribute("aria-selected")).toBe("true");
+		fireEvent.click(preview);
+		expect(preview.getAttribute("aria-selected")).toBe("true");
+		expect(compose.getAttribute("aria-selected")).toBe("false");
+		// The typed text is still there when switching back.
+		fireEvent.click(compose);
+		expect((screen.getByLabelText("Job title") as HTMLInputElement).value).toBe("Preview role");
+	});
+
+	it("adds, replaces and removes a cover image on the edit page", async () => {
+		jobs = [{ id: "job_1", title: "Cover role", description: "Text", status: "open", createdAt: "2026-10-20T10:00:00Z", updatedAt: "2026-10-20T10:00:00Z" }];
+		Object.assign(URL, { createObjectURL: () => "blob:cover-1", revokeObjectURL: () => {} });
+		renderAt("/dashboard/jobs/job_1/edit");
+		expect(await screen.findByRole("heading", { level: 2, name: "Cover image" })).toBeTruthy();
+		const input = document.querySelector('input[accept^="image/"]') as HTMLInputElement;
+		expect(screen.queryByRole("button", { name: "Remove image" })).toBeNull();
+
+		fireEvent.change(input, { target: { files: [new File(["x"], "cover.gif", { type: "image/gif" })] } });
+		expect((await screen.findByRole("alert")).textContent).toContain("Upload a JPEG, PNG or WebP image");
+		fireEvent.change(input, { target: { files: [new File([new Uint8Array(2 * 1024 * 1024 + 1)], "big.png", { type: "image/png" })] } });
+		expect((await screen.findByRole("alert")).textContent).toContain("The cover image must be 2 MB or smaller");
+
+		const png = new File(["x"], "cover.png", { type: "image/png" });
+		fireEvent.change(input, { target: { files: [png] } });
+		expect(await screen.findByText("Cover image saved")).toBeTruthy();
+		const put = fetchMock.mock.calls.find(([, init]) => init?.method === "PUT")!;
+		expect(put[0]).toMatch(/\/jobs\/job_1\/cover$/);
+		expect(put[1]?.body).toBe(png);
+		expect(new Headers(put[1]?.headers).get("Content-Type")).toBe("image/png");
+		expect(await screen.findByRole("img", { name: "Current cover" })).toBeTruthy();
+		expect(screen.getByText("Replace image")).toBeTruthy();
+
+		fireEvent.click(screen.getByRole("button", { name: "Remove image" }));
+		expect(await screen.findByText("Cover image removed")).toBeTruthy();
+		expect(screen.queryByRole("img", { name: "Current cover" })).toBeNull();
+		expect(screen.getByText("Choose an image")).toBeTruthy();
+	});
+
 	it("posts a first job from the empty state and opens it", async () => {
 		const router = renderAt("/dashboard");
 
@@ -388,7 +453,7 @@ describe("jobs", () => {
 		expect(await screen.findByRole("heading", { level: 1, name: "Sprite test role" })).toBeTruthy();
 		expect(router.state.location.pathname).toBe("/dashboard/jobs/job_1");
 		expect(screen.getAllByText("Open").length).toBeGreaterThan(0);
-		expect(screen.getByText("Swift, SwiftUI, 5 years.")).toBeTruthy();
+		expect(await screen.findByText("Swift, SwiftUI, 5 years.")).toBeTruthy();
 		expect(fetchMock).toHaveBeenCalledWith(
 			"http://localhost:8787/jobs",
 			expect.objectContaining({

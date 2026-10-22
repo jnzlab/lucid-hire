@@ -4,3 +4,6 @@ CLERK_SECRET_KEY=sk_test_...
 
 # Gemini API key (Google AI Studio). The live Worker has its own copy as a secret.
 GOOGLE_GENERATIVE_AI_API_KEY=...
+
+# Cloudflare's always-pass Turnstile test secret, matching the test site key the web app uses in dev.
+TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA

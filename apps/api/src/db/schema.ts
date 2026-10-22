@@ -49,6 +49,12 @@ export const jobs = sqliteTable(
 		title: text("title").notNull(),
 		description: text("description").notNull(),
 		status: text("status", { enum: JOB_STATUSES }).notNull().default("draft"),
+		// The public address: `/jobs/<slug>`. Set once when the job is created and never changed by edits, so shared
+		// links keep working. Nullable only because SQLite can't add a unique NOT NULL column; the migration
+		// backfills old rows and createJob always sets it.
+		slug: text("slug"),
+		// R2 key of the optional cover image in the CVS bucket, or null.
+		coverKey: text("cover_key"),
 		// CVs uploaded so far, including deleted ones: each upload spends a Gemini call, so deleting one
 		// doesn't give its slot back. Bumped by a single guarded UPDATE, which is what enforces the limit.
 		cvCount: integer("cv_count").notNull().default(0),
@@ -60,11 +66,14 @@ export const jobs = sqliteTable(
 			.$onUpdate(() => new Date()),
 	},
 	// The dashboard list is always "this company's jobs, newest first".
-	(t) => [index("jobs_org_created_idx").on(t.orgId, t.createdAt)],
+	(t) => [index("jobs_org_created_idx").on(t.orgId, t.createdAt), uniqueIndex("jobs_slug_unique").on(t.slug)],
 );
 
 export const CANDIDATE_STATUSES = ["queued", "scoring", "scored", "failed"] as const;
 export type CandidateStatus = (typeof CANDIDATE_STATUSES)[number];
+
+export const CANDIDATE_SOURCES = ["upload", "apply"] as const;
+export type CandidateSource = (typeof CANDIDATE_SOURCES)[number];
 
 export const CANDIDATE_DECISIONS = ["undecided", "shortlisted", "rejected"] as const;
 export type Decision = (typeof CANDIDATE_DECISIONS)[number];
@@ -103,6 +112,10 @@ export const candidates = sqliteTable(
 		summary: text("summary"),
 		score: integer("score"),
 		requirements: text("requirements", { mode: "json" }).$type<Requirement[]>(),
+		// Where the CV came from, and the applicant's email when they applied through the public page. Null (never
+		// an empty string) when unknown, so the unique index below only ever compares real addresses.
+		source: text("source", { enum: CANDIDATE_SOURCES }).notNull().default("upload"),
+		email: text("email"),
 		createdBy: text("created_by").notNull(),
 		createdAt: createdAt(),
 		updatedAt: integer("updated_at", { mode: "timestamp_ms" })
@@ -116,7 +129,14 @@ export const candidates = sqliteTable(
 		decidedBy: text("decided_by"),
 	},
 	// The ranked list is "this job's candidates by score"; the org index backs company-wide cleanup.
-	(t) => [index("candidates_job_score_idx").on(t.jobId, t.score), index("candidates_org_idx").on(t.orgId)],
+	(t) => [
+		index("candidates_job_score_idx").on(t.jobId, t.score),
+		index("candidates_org_idx").on(t.orgId),
+		// One application per email and job. Stored lower case, so the comparison is case-insensitive.
+		uniqueIndex("candidates_job_email_unique")
+			.on(t.jobId, t.email)
+			.where(sql`${t.email} is not null`),
+	],
 );
 
 // One row per Gemini call, failed ones included, so each company's AI spend is visible. Written after

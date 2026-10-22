@@ -17,3 +17,20 @@ export function sitemapResponse(urls: readonly string[] = STATIC_SITEMAP_URLS): 
 		headers: { "Content-Type": "application/xml; charset=utf-8", "Cache-Control": "public, max-age=3600" },
 	});
 }
+
+const API_TIMEOUT_MS = 2000;
+
+// The fixed pages plus every open job's public page, read from the API. If the API is slow or down, the fixed
+// pages still go out, so crawlers never get an error.
+export async function sitemapWithJobs(apiOrigin: string): Promise<Response> {
+	try {
+		const res = await fetch(`${apiOrigin}/public/sitemap`, { signal: AbortSignal.timeout(API_TIMEOUT_MS) });
+		if (res.ok) {
+			const { jobs } = (await res.json()) as { jobs: { slug: string }[] };
+			return sitemapResponse([...STATIC_SITEMAP_URLS, ...jobs.map((job) => `${SITE_ORIGIN}/jobs/${job.slug}`)]);
+		}
+	} catch {
+		// Fall back to the fixed pages below.
+	}
+	return sitemapResponse();
+}

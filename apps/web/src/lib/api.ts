@@ -92,6 +92,11 @@ export function apiPatch<T>(path: string, body: unknown, options: ApiRequestOpti
 	return request<T>("PATCH", path, body, options);
 }
 
+// A DELETE whose answer has a body, such as the job without its cover.
+export function apiDeleteJson<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+	return request<T>("DELETE", path, undefined, options);
+}
+
 export function apiDelete(path: string, options: ApiRequestOptions = {}): Promise<void> {
 	return request<void>("DELETE", path, undefined, options);
 }
@@ -102,4 +107,28 @@ export async function apiUploadPdf<T>(path: string, file: File, { token, signal 
 	const headers: Record<string, string> = { "Content-Type": "application/pdf" };
 	if (token) headers.Authorization = `Bearer ${token}`;
 	return parse<T>(await send(`${API_URL}${path}`, { method: "POST", headers, body: file, signal }));
+}
+
+// Sends an application: the PDF is the raw body (so the API can stream it into storage) and everything else rides in
+// headers. No session: applicants don't have an account.
+export async function apiApply(
+	path: string,
+	file: File,
+	{ email, captchaToken }: { email: string; captchaToken: string },
+	{ signal }: ApiRequestOptions = {},
+): Promise<{ ok: true }> {
+	const headers = {
+		"Content-Type": "application/pdf",
+		"X-Applicant-Email": email,
+		"X-Turnstile-Token": captchaToken,
+		"X-File-Name": encodeURIComponent(file.name),
+	};
+	return parse(await send(`${API_URL}${path}`, { method: "POST", headers, body: file, signal }));
+}
+
+// Sends an image (or any file) as the raw body of a PUT, with the file's own type.
+export async function apiPutFile<T>(path: string, file: File, { token, signal }: ApiRequestOptions = {}): Promise<T> {
+	const headers: Record<string, string> = { "Content-Type": file.type };
+	if (token) headers.Authorization = `Bearer ${token}`;
+	return parse<T>(await send(`${API_URL}${path}`, { method: "PUT", headers, body: file, signal }));
 }

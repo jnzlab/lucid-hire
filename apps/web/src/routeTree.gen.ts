@@ -16,6 +16,7 @@ import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as SignOutRouteImport } from './routes/sign-out'
 import { Route as TermsRouteImport } from './routes/terms'
 import { Route as DashboardIndexRouteImport } from './routes/dashboard/index'
+import { Route as JobsSlugRouteImport } from './routes/jobs.$slug'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as DashboardJobsNewRouteImport } from './routes/dashboard/jobs.new'
@@ -58,6 +59,11 @@ const DashboardIndexRoute = DashboardIndexRouteImport.update({
   path: '/',
   getParentRoute: () => DashboardRouteRoute,
 } as any)
+const JobsSlugRoute = JobsSlugRouteImport.update({
+  id: '/jobs/$slug',
+  path: '/jobs/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SignInSplatRoute = SignInSplatRouteImport.update({
   id: '/sign-in/$',
   path: '/sign-in/$',
@@ -97,6 +103,7 @@ export interface FileRoutesByFullPath {
   '/privacy': typeof PrivacyRoute
   '/sign-out': typeof SignOutRoute
   '/terms': typeof TermsRoute
+  '/jobs/$slug': typeof JobsSlugRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/dashboard/': typeof DashboardIndexRoute
@@ -111,6 +118,7 @@ export interface FileRoutesByTo {
   '/privacy': typeof PrivacyRoute
   '/sign-out': typeof SignOutRoute
   '/terms': typeof TermsRoute
+  '/jobs/$slug': typeof JobsSlugRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/dashboard': typeof DashboardIndexRoute
@@ -127,6 +135,7 @@ export interface FileRoutesById {
   '/privacy': typeof PrivacyRoute
   '/sign-out': typeof SignOutRoute
   '/terms': typeof TermsRoute
+  '/jobs/$slug': typeof JobsSlugRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/dashboard/': typeof DashboardIndexRoute
@@ -144,6 +153,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-out'
     | '/terms'
+    | '/jobs/$slug'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/dashboard/'
@@ -158,6 +168,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-out'
     | '/terms'
+    | '/jobs/$slug'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/dashboard'
@@ -173,6 +184,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/sign-out'
     | '/terms'
+    | '/jobs/$slug'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/dashboard/'
@@ -189,6 +201,7 @@ export interface RootRouteChildren {
   PrivacyRoute: typeof PrivacyRoute
   SignOutRoute: typeof SignOutRoute
   TermsRoute: typeof TermsRoute
+  JobsSlugRoute: typeof JobsSlugRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
 }
@@ -243,6 +256,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/dashboard/'
       preLoaderRoute: typeof DashboardIndexRouteImport
       parentRoute: typeof DashboardRouteRoute
+    }
+    '/jobs/$slug': {
+      id: '/jobs/$slug'
+      path: '/jobs/$slug'
+      fullPath: '/jobs/$slug'
+      preLoaderRoute: typeof JobsSlugRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/sign-in/$': {
       id: '/sign-in/$'
@@ -317,6 +337,7 @@ const rootRouteChildren: RootRouteChildren = {
   PrivacyRoute: PrivacyRoute,
   SignOutRoute: SignOutRoute,
   TermsRoute: TermsRoute,
+  JobsSlugRoute: JobsSlugRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
 }

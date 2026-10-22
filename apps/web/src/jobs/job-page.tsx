@@ -1,6 +1,7 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { CandidatesSection } from "../candidates/candidates-section.tsx";
+import { Markdown } from "../components/markdown-lazy.tsx";
 import { ConfirmDialog } from "../components/confirm-dialog.tsx";
 import { ArrowRight } from "../components/icons.tsx";
 import { useOrg } from "../dashboard/org.ts";
@@ -9,6 +10,7 @@ import { useCandidates } from "../lib/candidates.ts";
 import { formatDate } from "../lib/format.ts";
 import { type Job, type JobStatus, useDeleteJob, useJob, useUpdateJob } from "../lib/jobs.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
+import { PublicLink } from "./share-panel.tsx";
 import { BackToJobs, JobStatusTag, PageHeading, SectionError, SectionLoading } from "./job-ui.tsx";
 
 export function JobPage({ jobId }: { jobId: string }) {
@@ -122,13 +124,13 @@ function JobDetails({ job }: { job: Job }) {
 				</p>
 			)}
 
+			<PublicLink job={job} />
+
 			<CandidatesSection job={job} />
 
 			<article aria-label="Job description" className="desk mt-10 rounded-2xl p-[clamp(16px,4vw,40px)]">
 				<div className="mx-auto max-w-[760px] rounded-sheet bg-sheet p-[clamp(20px,4vw,48px)] shadow-sheet">
-					<p className="text-[16px] leading-[1.6] whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">
-						{job.description}
-					</p>
+					<Markdown>{job.description}</Markdown>
 				</div>
 			</article>
 
