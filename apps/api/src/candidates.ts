@@ -31,6 +31,8 @@ export type CandidateSummary = {
 	error: string | null;
 	canRetry: boolean;
 	createdAt: Date;
+	// Changes with every status change, so the page can tell how long the current run has taken.
+	updatedAt: Date;
 	scoredAt: Date | null;
 };
 export type Candidate = CandidateSummary & {
@@ -88,6 +90,7 @@ function toSummary(row: SummaryRow): CandidateSummary {
 		error: row.error,
 		canRetry: isRetryable(row.status, row.updatedAt) && row.runs < MAX_SCORING_RUNS,
 		createdAt: row.createdAt,
+		updatedAt: row.updatedAt,
 		scoredAt: row.scoredAt,
 	};
 }

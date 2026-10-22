@@ -538,9 +538,10 @@ describe("POST /jobs/:jobId/candidates/:id/retry", () => {
 
 		const res = await send("user_member", "POST", `/jobs/${jobId}/candidates/${stuckScoring}/retry`);
 		expect(res.status).toBe(202);
-		expect(await res.json()).toMatchObject({
-			candidate: { id: stuckScoring, status: "queued", error: null, canRetry: false },
-		});
+		const { candidate } = (await res.json()) as { candidate: CandidateJson & { updatedAt: string } };
+		expect(candidate).toMatchObject({ id: stuckScoring, status: "queued", error: null, canRetry: false });
+		// The page times "taking longer than usual" from updatedAt, so a retry restarts that clock.
+		expect(Date.now() - Date.parse(candidate.updatedAt)).toBeLessThan(60_000);
 		expect(creates).toEqual([{ id: `${stuckScoring}-2`, params: { candidateId: stuckScoring } }]);
 
 		// The retry made the row fresh again, so a second click does nothing.
