@@ -131,6 +131,30 @@
   .field[aria-invalid="true"]{border-color:var(--gap-ink)}
   .field::placeholder{color:var(--ink-faint)}
 
+  /* Rendered Markdown (job descriptions): body text in ink-2, headings in the display face, all from tokens. */
+  .prose-lh{font-size:16px;line-height:1.65;color:var(--ink-2);overflow-wrap:anywhere}
+  .prose-lh > :first-child{margin-top:0}
+  .prose-lh > :last-child{margin-bottom:0}
+  .prose-lh :where(h1,h2,h3,h4){color:var(--ink);font-family:var(--font-display);font-weight:800;font-stretch:108%;line-height:1.2;letter-spacing:-.01em;margin:1.6em 0 .5em}
+  .prose-lh h1{font-size:26px}.prose-lh h2{font-size:21px}.prose-lh h3{font-size:18px}.prose-lh h4{font-size:16px}
+  .prose-lh :where(p,ul,ol,blockquote,pre,table){margin:0 0 1em}
+  .prose-lh :where(ul,ol){padding-left:1.4em}
+  .prose-lh ul{list-style:disc}.prose-lh ol{list-style:decimal}
+  .prose-lh li{margin:.25em 0}
+  .prose-lh li.task-list-item{list-style:none;margin-left:-1.4em}
+  .prose-lh input[type="checkbox"]{margin-right:.5em;accent-color:var(--ink)}
+  .prose-lh a{color:var(--ink);font-weight:600;text-decoration:underline;text-underline-offset:.18em}
+  .prose-lh a:hover{background:var(--marker);color:var(--on-marker)}
+  .prose-lh strong{color:var(--ink);font-weight:700}
+  .prose-lh blockquote{border-left:3px solid var(--line);padding-left:1em;color:var(--ink-muted)}
+  .prose-lh code{font-family:var(--font-mono);font-size:.9em;background:var(--paper-2);border-radius:4px;padding:.1em .35em}
+  .prose-lh pre{background:var(--paper-2);border-radius:8px;padding:12px 14px;overflow-x:auto}
+  .prose-lh pre code{background:none;padding:0}
+  .prose-lh hr{border:0;border-top:1px solid var(--line);margin:1.6em 0}
+  .prose-lh table{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse;font-size:15px}
+  .prose-lh :where(th,td){border:1px solid var(--line);padding:6px 10px;text-align:left}
+  .prose-lh th{background:var(--paper-2);color:var(--ink);font-weight:700}
+
   /* Ranked list (design system §3, §4): the first row sits on the wobbly marker stroke, and its score is
      ringed in ink. Text on the stroke is always on-marker. Both draw in once and rest finished. */
   .rank-band{position:relative;isolation:isolate;color:var(--on-marker)}

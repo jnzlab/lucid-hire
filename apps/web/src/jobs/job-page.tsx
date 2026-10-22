@@ -1,6 +1,7 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { CandidatesSection } from "../candidates/candidates-section.tsx";
+import { Markdown } from "../components/markdown-lazy.tsx";
 import { ConfirmDialog } from "../components/confirm-dialog.tsx";
 import { ArrowRight } from "../components/icons.tsx";
 import { useOrg } from "../dashboard/org.ts";
@@ -126,9 +127,7 @@ function JobDetails({ job }: { job: Job }) {
 
 			<article aria-label="Job description" className="desk mt-10 rounded-2xl p-[clamp(16px,4vw,40px)]">
 				<div className="mx-auto max-w-[760px] rounded-sheet bg-sheet p-[clamp(20px,4vw,48px)] shadow-sheet">
-					<p className="text-[16px] leading-[1.6] whitespace-pre-wrap text-ink-2 [overflow-wrap:anywhere]">
-						{job.description}
-					</p>
+					<Markdown>{job.description}</Markdown>
 				</div>
 			</article>
 

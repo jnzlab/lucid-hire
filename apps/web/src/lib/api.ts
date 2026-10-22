@@ -103,3 +103,20 @@ export async function apiUploadPdf<T>(path: string, file: File, { token, signal 
 	if (token) headers.Authorization = `Bearer ${token}`;
 	return parse<T>(await send(`${API_URL}${path}`, { method: "POST", headers, body: file, signal }));
 }
+
+// Sends an application: the PDF is the raw body (so the API can stream it into storage) and everything else rides in
+// headers. No session: applicants don't have an account.
+export async function apiApply(
+	path: string,
+	file: File,
+	{ email, captchaToken }: { email: string; captchaToken: string },
+	{ signal }: ApiRequestOptions = {},
+): Promise<{ ok: true }> {
+	const headers = {
+		"Content-Type": "application/pdf",
+		"X-Applicant-Email": email,
+		"X-Turnstile-Token": captchaToken,
+		"X-File-Name": encodeURIComponent(file.name),
+	};
+	return parse(await send(`${API_URL}${path}`, { method: "POST", headers, body: file, signal }));
+}
