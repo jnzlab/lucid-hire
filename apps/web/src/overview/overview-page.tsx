@@ -1,11 +1,20 @@
+import type { UseQueryResult } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { ArrowRight } from "../components/icons.tsx";
 import { ScoreRing } from "../components/score-ring.tsx";
 import { useOrg } from "../dashboard/org.ts";
-import { PageHeading, SectionError, SectionLoading } from "../jobs/job-ui.tsx";
+import { PageHeading, SectionLoading } from "../jobs/job-ui.tsx";
 import { formatNumber, formatRelative } from "../lib/format.ts";
-import { type ActivityEvent, type Overview, useOverview } from "../lib/overview.ts";
+import {
+	type ActivityEvent,
+	type OverviewKpis,
+	useOverviewActivity,
+	useOverviewAiMix,
+	useOverviewFunnel,
+	useOverviewKpis,
+	useOverviewVelocity,
+} from "../lib/overview.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
 import { useNow } from "../lib/use-now.ts";
 import { AiMix, CardEmpty, Funnel, VelocityChart } from "./charts.tsx";
@@ -13,7 +22,6 @@ import { AiMix, CardEmpty, Funnel, VelocityChart } from "./charts.tsx";
 export function OverviewPage() {
 	useDocumentTitle("Overview · LucidHire");
 	const org = useOrg();
-	const overview = useOverview();
 
 	return (
 		<div className="wrap py-[clamp(32px,5vw,64px)]">
@@ -26,49 +34,37 @@ export function OverviewPage() {
 					</Link>
 				}
 			/>
-			<div className="mt-8">
-				{overview.isPending ? (
-					<SectionLoading label="Loading your overview" />
-				) : overview.isError ? (
-					<SectionError
-						title="We couldn't load your overview"
-						message={overview.error.message}
-						action={
-							<button type="button" className="btn" onClick={() => void overview.refetch()}>
-								Try again
-							</button>
-						}
-					/>
-				) : (
-					<OverviewCards overview={overview.data} />
-				)}
+			<div className="mt-8 flex flex-col gap-6">
+				<KpiRow />
+				<div className="grid gap-6 min-[1000px]:grid-cols-2">
+					<VelocityCard />
+					<div className="flex flex-col gap-6">
+						<FunnelCard />
+						<AiMixCard />
+					</div>
+				</div>
+				<ActivityCard />
 			</div>
 		</div>
 	);
 }
 
-function OverviewCards({ overview }: { overview: Overview }) {
-	return (
-		<div className="flex flex-col gap-6">
-			<KpiRow kpis={overview.kpis} />
-			<div className="grid gap-6 min-[1000px]:grid-cols-2">
-				<Card id="velocity-h" title="Pipeline velocity">
-					<VelocityChart velocity={overview.velocity} />
-				</Card>
-				<div className="flex flex-col gap-6">
-					<Card id="funnel-h" title="90-day funnel">
-						<Funnel funnel={overview.funnel} />
-					</Card>
-					<Card id="mix-h" title="AI output mix">
-						<AiMix mix={overview.aiMix} />
-					</Card>
-				</div>
+// What a card shows until its numbers arrive, or if they can't. Each card has its own, so the others carry on.
+function CardState<T>({ query, what, children }: { query: UseQueryResult<T>; what: string; children: (data: T) => ReactNode }) {
+	if (query.isPending) return <SectionLoading label={`Loading ${what}`} />;
+	if (query.isError) {
+		return (
+			<div role="alert" className="flex flex-col items-start gap-3">
+				<p className="text-[15px] text-ink-2">
+					<span className="font-[650] text-gap-ink">✕ We couldn't load {what}.</span> {query.error.message}
+				</p>
+				<button type="button" className="btn" onClick={() => void query.refetch()}>
+					Try again
+				</button>
 			</div>
-			<Card id="activity-h" title="Recent activity">
-				<Activity events={overview.activity} />
-			</Card>
-		</div>
-	);
+		);
+	}
+	return children(query.data);
 }
 
 function Card({ id, title, children }: { id: string; title: string; children: ReactNode }) {
@@ -82,6 +78,50 @@ function Card({ id, title, children }: { id: string; title: string; children: Re
 	);
 }
 
+function VelocityCard() {
+	const velocity = useOverviewVelocity();
+	return (
+		<Card id="velocity-h" title="Pipeline velocity">
+			<CardState query={velocity} what="pipeline velocity">
+				{(data) => <VelocityChart velocity={data} />}
+			</CardState>
+		</Card>
+	);
+}
+
+function FunnelCard() {
+	const funnel = useOverviewFunnel();
+	return (
+		<Card id="funnel-h" title="90-day funnel">
+			<CardState query={funnel} what="the funnel">
+				{(data) => <Funnel funnel={data} />}
+			</CardState>
+		</Card>
+	);
+}
+
+function AiMixCard() {
+	const mix = useOverviewAiMix();
+	return (
+		<Card id="mix-h" title="AI output mix">
+			<CardState query={mix} what="the AI output mix">
+				{(data) => <AiMix mix={data} />}
+			</CardState>
+		</Card>
+	);
+}
+
+function ActivityCard() {
+	const activity = useOverviewActivity();
+	return (
+		<Card id="activity-h" title="Recent activity">
+			<CardState query={activity} what="recent activity">
+				{(data) => <Activity events={data.events} />}
+			</CardState>
+		</Card>
+	);
+}
+
 // "+3 vs last month", in words as well as a sign, so it never depends on colour.
 function change(delta: number, noun: string) {
 	if (delta === 0) return `No change vs ${noun}`;
@@ -92,7 +132,7 @@ function hoursText(hours: number) {
 	return hours < 48 ? `${hours.toFixed(1)} h` : `${(hours / 24).toFixed(1)} days`;
 }
 
-function shortlistChange({ hours, previousHours }: Overview["kpis"]["avgTimeToShortlist"]) {
+function shortlistChange({ hours, previousHours }: OverviewKpis["avgTimeToShortlist"]) {
 	if (hours === null) return "Shortlist a CV to see this";
 	if (previousHours === null) return "No shortlists in the 30 days before";
 	const diff = hours - previousHours;
@@ -105,68 +145,77 @@ const kpiLabel = "font-mono text-[11px] tracking-[.08em] text-ink-muted uppercas
 const kpiValue = "mt-2 font-display text-[40px] leading-none font-[800] tracking-[-0.03em] tabular-nums [font-stretch:108%]";
 const kpiNote = "mt-2 text-[13.5px] text-ink-2";
 
-function KpiRow({ kpis }: { kpis: Overview["kpis"] }) {
-	const { activeRoles, cvsScreened, avgTimeToShortlist, topMatch } = kpis;
+function KpiRow() {
+	const kpis = useOverviewKpis();
 	return (
 		<section aria-label="Key numbers">
-			<dl className="grid gap-4 min-[560px]:grid-cols-2 min-[1000px]:grid-cols-4">
-				<div className={kpiCard}>
-					<dt className={kpiLabel}>Active roles</dt>
-					<dd className={kpiValue}>{formatNumber(activeRoles.value)}</dd>
-					<dd className={kpiNote}>
-						{activeRoles.value === 0 && activeRoles.change === 0
-							? "No open jobs. Open one to take CVs."
-							: `${change(activeRoles.change, "last month")} opened`}
-					</dd>
-				</div>
-				<div className={kpiCard}>
-					<dt className={kpiLabel}>CVs screened</dt>
-					<dd className={kpiValue}>{formatNumber(cvsScreened.value)}</dd>
-					<dd className={kpiNote}>
-						{cvsScreened.value === 0
-							? "Scored CVs are counted here."
-							: change(cvsScreened.thisMonth - cvsScreened.lastMonth, "last month")}
-					</dd>
-				</div>
-				<div className={kpiCard}>
-					<dt className={kpiLabel}>Avg. time to shortlist</dt>
-					<dd className={kpiValue}>{avgTimeToShortlist.hours === null ? "—" : hoursText(avgTimeToShortlist.hours)}</dd>
-					<dd className={kpiNote}>{shortlistChange(avgTimeToShortlist)}</dd>
-				</div>
-				<div className={kpiCard}>
-					<dt className={kpiLabel}>Top match</dt>
-					{topMatch ? (
-						<>
-							<dd className="mt-3 text-[40px]">
-								<ScoreRing score={topMatch.score} className="text-[40px]" />
-							</dd>
-							<dd className={kpiNote}>
-								<Link
-									to="/dashboard/jobs/$jobId/candidates/$candidateId"
-									params={{ jobId: topMatch.jobId, candidateId: topMatch.candidateId }}
-									className="font-[650] underline underline-offset-[.18em] [overflow-wrap:anywhere]"
-								>
-									{topMatch.candidateName}
-								</Link>
-								<span className="text-ink-muted"> for </span>
-								<Link
-									to="/dashboard/jobs/$jobId"
-									params={{ jobId: topMatch.jobId }}
-									className="underline underline-offset-[.18em] [overflow-wrap:anywhere]"
-								>
-									{topMatch.jobTitle}
-								</Link>
-							</dd>
-						</>
-					) : (
-						<>
-							<dd className={kpiValue}>—</dd>
-							<dd className={kpiNote}>The best scored CV shows here.</dd>
-						</>
-					)}
-				</div>
-			</dl>
+			<CardState query={kpis} what="your key numbers">
+				{(data) => <KpiCards kpis={data} />}
+			</CardState>
 		</section>
+	);
+}
+
+function KpiCards({ kpis }: { kpis: OverviewKpis }) {
+	const { activeRoles, cvsScreened, avgTimeToShortlist, topMatch } = kpis;
+	return (
+		<dl className="grid gap-4 min-[560px]:grid-cols-2 min-[1000px]:grid-cols-4">
+			<div className={kpiCard}>
+				<dt className={kpiLabel}>Active roles</dt>
+				<dd className={kpiValue}>{formatNumber(activeRoles.value)}</dd>
+				<dd className={kpiNote}>
+					{activeRoles.value === 0 && activeRoles.change === 0
+						? "No open jobs. Open one to take CVs."
+						: `${change(activeRoles.change, "last month")} opened`}
+				</dd>
+			</div>
+			<div className={kpiCard}>
+				<dt className={kpiLabel}>CVs screened</dt>
+				<dd className={kpiValue}>{formatNumber(cvsScreened.value)}</dd>
+				<dd className={kpiNote}>
+					{cvsScreened.value === 0
+						? "Scored CVs are counted here."
+						: change(cvsScreened.thisMonth - cvsScreened.lastMonth, "last month")}
+				</dd>
+			</div>
+			<div className={kpiCard}>
+				<dt className={kpiLabel}>Avg. time to shortlist</dt>
+				<dd className={kpiValue}>{avgTimeToShortlist.hours === null ? "—" : hoursText(avgTimeToShortlist.hours)}</dd>
+				<dd className={kpiNote}>{shortlistChange(avgTimeToShortlist)}</dd>
+			</div>
+			<div className={kpiCard}>
+				<dt className={kpiLabel}>Top match</dt>
+				{topMatch ? (
+					<>
+						<dd className="mt-3 text-[40px]">
+							<ScoreRing score={topMatch.score} className="text-[40px]" />
+						</dd>
+						<dd className={kpiNote}>
+							<Link
+								to="/dashboard/jobs/$jobId/candidates/$candidateId"
+								params={{ jobId: topMatch.jobId, candidateId: topMatch.candidateId }}
+								className="font-[650] underline underline-offset-[.18em] [overflow-wrap:anywhere]"
+							>
+								{topMatch.candidateName}
+							</Link>
+							<span className="text-ink-muted"> for </span>
+							<Link
+								to="/dashboard/jobs/$jobId"
+								params={{ jobId: topMatch.jobId }}
+								className="underline underline-offset-[.18em] [overflow-wrap:anywhere]"
+							>
+								{topMatch.jobTitle}
+							</Link>
+						</dd>
+					</>
+				) : (
+					<>
+						<dd className={kpiValue}>—</dd>
+						<dd className={kpiNote}>The best scored CV shows here.</dd>
+					</>
+				)}
+			</div>
+		</dl>
 	);
 }
 

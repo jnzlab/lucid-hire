@@ -1,6 +1,6 @@
 import { useId } from "react";
 import { formatDayMonth, formatNumber } from "../lib/format.ts";
-import type { FunnelCounts, Overview } from "../lib/overview.ts";
+import type { FunnelCounts, OverviewAiMix, OverviewVelocity } from "../lib/overview.ts";
 
 const percent = (part: number, whole: number) => (whole === 0 ? 0 : Math.round((part / whole) * 100));
 
@@ -38,7 +38,7 @@ const PLOT = { left: 36, right: 6, top: 14, bottom: 44 };
 
 // CVs uploaded per day for the last 10 UTC days. The busiest day is the one value to notice, so it is marked
 // yellow with an ink outline; every bar has a title, and the table underneath is the same data for screen readers.
-export function VelocityChart({ velocity }: { velocity: Overview["velocity"] }) {
+export function VelocityChart({ velocity }: { velocity: OverviewVelocity }) {
 	const captionId = useId();
 	const { days, totals } = velocity;
 	const max = Math.max(...days.map((day) => day.uploaded));
@@ -168,7 +168,7 @@ export function Funnel({ funnel }: { funnel: FunnelCounts }) {
 }
 
 // One stacked bar and a labelled count per kind of AI output. The counts, not the colours, carry the meaning.
-export function AiMix({ mix }: { mix: Overview["aiMix"] }) {
+export function AiMix({ mix }: { mix: OverviewAiMix }) {
 	const rows = [
 		{ label: "CV scoring", value: mix.scoring, swatch: "bg-ink" },
 		{ label: "Description rewrites", value: mix.descriptionRewrites, swatch: "bg-ink-faint" },
