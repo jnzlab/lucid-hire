@@ -4,7 +4,7 @@ import { type DescriptionEnhancer, GEMINI_TEXT_MODEL } from "./ai.ts";
 import { createApp } from "./app.ts";
 import type { SessionVerifier } from "./auth.ts";
 import { type Db, getDb } from "./db/client.ts";
-import { aiUsage, members } from "./db/schema.ts";
+import { aiUsage, candidates, jobs, members } from "./db/schema.ts";
 import { createOrgForUser } from "./orgs.ts";
 import { createTestD1 } from "./test/d1.ts";
 
@@ -223,5 +223,146 @@ describe("POST /jobs/enhance", () => {
 		const res = await call("user_admin", "POST", "/jobs/enhance", { description: "" });
 		expect(res.status).toBe(400);
 		expect(enhanceCalls).toBe(0);
+	});
+});
+
+describe("GET /jobs search, filter, sort and pages", () => {
+	type Item = { id: string; title: string; status: string; cvCount: number; scoredCount: number };
+	type List = { jobs: Item[]; total: number; page: number; pageSize: number };
+	let orgId: string;
+	let ids: Record<string, string>;
+
+	async function list(query = "", user = "user_lister") {
+		const res = await call(user, "GET", `/jobs${query}`);
+		expect(res.status).toBe(200);
+		return (await res.json()) as List;
+	}
+	const titles = (result: List) => result.jobs.map((job) => job.title);
+
+	// Created in this order, one minute apart: Alpha, Bravo, charlie (lower case on purpose), Delta.
+	beforeAll(async () => {
+		orgId = (await createOrgForUser(db, "user_lister", "Lister Co")).org.id;
+		const rows = [
+			{ key: "alpha", title: "Alpha Engineer", status: "open", description: "Rust and Go services", cvCount: 3 },
+			{ key: "bravo", title: "Bravo Designer", status: "draft", description: `${"x ".repeat(120)}Figma wizardry` },
+			{ key: "charlie", title: "charlie analyst", status: "closed", description: "100% SQL_fluent", cvCount: 8 },
+			{ key: "delta", title: "Delta Manager", status: "open", description: "People leadership", cvCount: 1 },
+		];
+		ids = {};
+		for (const [index, row] of rows.entries()) {
+			const id = crypto.randomUUID();
+			ids[row.key] = id;
+			await db.insert(jobs).values({
+				id,
+				orgId,
+				title: row.title,
+				description: row.description,
+				status: row.status as "open",
+				cvCount: row.cvCount ?? 0,
+				createdBy: "user_lister",
+				createdAt: new Date(Date.UTC(2026, 9, 1, 10, index)),
+			});
+		}
+		const cv = (jobId: string, n: number, status: "scored" | "queued" | "failed") =>
+			db.insert(candidates).values({
+				id: crypto.randomUUID(),
+				orgId,
+				jobId,
+				fileKey: `k${jobId}${n}`,
+				fileName: "cv.pdf",
+				fileSize: 1,
+				status,
+				createdBy: "user_lister",
+			});
+		await cv(ids.alpha, 1, "scored");
+		await cv(ids.alpha, 2, "scored");
+		await cv(ids.alpha, 3, "queued");
+		await cv(ids.charlie, 1, "failed");
+		// Another company's scored CV on the same job id shape must never be counted here.
+		await createAs("user_acme", { title: "Alpha Engineer", description: "Acme's own" });
+	});
+
+	it("lists newest first with the total, page and page size", async () => {
+		const result = await list();
+		expect(titles(result)).toEqual(["Delta Manager", "charlie analyst", "Bravo Designer", "Alpha Engineer"]);
+		expect(result).toMatchObject({ total: 4, page: 1, pageSize: 20 });
+	});
+
+	it("counts CVs and scored CVs for each job", async () => {
+		const byTitle = Object.fromEntries((await list()).jobs.map((job) => [job.title, job]));
+		expect(byTitle["Alpha Engineer"]).toMatchObject({ cvCount: 3, scoredCount: 2 });
+		expect(byTitle["charlie analyst"]).toMatchObject({ cvCount: 8, scoredCount: 0 });
+		expect(byTitle["Bravo Designer"]).toMatchObject({ cvCount: 0, scoredCount: 0 });
+	});
+
+	it("searches the title and the whole description, ignoring case", async () => {
+		expect(titles(await list("?q=ENGINEER"))).toEqual(["Alpha Engineer"]);
+		expect(titles(await list("?q=rust%20and%20go"))).toEqual(["Alpha Engineer"]);
+		// This text sits past the first 180 characters of the description.
+		const deep = await list("?q=figma%20wizardry");
+		expect(titles(deep)).toEqual(["Bravo Designer"]);
+		expect(deep.total).toBe(1);
+	});
+
+	it("takes % and _ in a search literally, and a blank search as no search", async () => {
+		expect(titles(await list("?q=100%25"))).toEqual(["charlie analyst"]);
+		expect(titles(await list("?q=sql_fluent"))).toEqual(["charlie analyst"]);
+		expect(await list("?q=%25")).toMatchObject({ total: 1 });
+		expect((await list("?q=%25%25%25")).total).toBe(0);
+		expect((await list("?q=%20%20")).total).toBe(4);
+		expect(await list("?q=nothing-like-this")).toMatchObject({ jobs: [], total: 0 });
+	});
+
+	it("filters by status", async () => {
+		expect(titles(await list("?status=open"))).toEqual(["Delta Manager", "Alpha Engineer"]);
+		expect(titles(await list("?status=draft"))).toEqual(["Bravo Designer"]);
+		expect(titles(await list("?status=closed"))).toEqual(["charlie analyst"]);
+		expect((await list("?status=all")).total).toBe(4);
+		expect(await list("?status=open&q=manager")).toMatchObject({ total: 1 });
+	});
+
+	it("sorts newest, oldest, by title ignoring case, and by most CVs", async () => {
+		expect(titles(await list("?sort=oldest"))).toEqual(["Alpha Engineer", "Bravo Designer", "charlie analyst", "Delta Manager"]);
+		expect(titles(await list("?sort=title"))).toEqual(["Alpha Engineer", "Bravo Designer", "charlie analyst", "Delta Manager"]);
+		expect(titles(await list("?sort=candidates"))).toEqual(["charlie analyst", "Alpha Engineer", "Delta Manager", "Bravo Designer"]);
+		expect(titles(await list("?sort=newest"))).toEqual(["Delta Manager", "charlie analyst", "Bravo Designer", "Alpha Engineer"]);
+	});
+
+	it("pages 20 at a time without repeating or skipping a job", async () => {
+		for (let i = 0; i < 22; i++) {
+			await db.insert(jobs).values({
+				id: crypto.randomUUID(),
+				orgId,
+				title: `Paged role ${String(i).padStart(2, "0")}`,
+				description: "paging",
+				createdBy: "user_lister",
+				createdAt: new Date(Date.UTC(2026, 9, 2, 10, 0, 0)),
+			});
+		}
+		const first = await list("?q=paging");
+		const second = await list("?q=paging&page=2");
+		const third = await list("?q=paging&page=3");
+		expect(first).toMatchObject({ total: 22, page: 1, pageSize: 20 });
+		expect(first.jobs).toHaveLength(20);
+		expect(second).toMatchObject({ total: 22, page: 2 });
+		expect(second.jobs).toHaveLength(2);
+		expect(third).toMatchObject({ jobs: [], total: 22, page: 3 });
+		const all = [...first.jobs, ...second.jobs].map((job) => job.id);
+		expect(new Set(all).size).toBe(22);
+	});
+
+	it("never shows another company's jobs, in the list or the total", async () => {
+		const acme = await list("?q=alpha", "user_acme");
+		expect(acme).toMatchObject({ total: 1 });
+		expect(acme.jobs[0]).toMatchObject({ cvCount: 0, scoredCount: 0 });
+		expect((await list("?q=acme")).total).toBe(0);
+	});
+
+	it("rejects a query it can't read, in the usual error shape", async () => {
+		for (const query of ["?sort=random", "?status=archived", "?page=0", "?page=abc", "?page=1.5", `?q=${"a".repeat(101)}`]) {
+			const res = await call("user_lister", "GET", `/jobs${query}`);
+			expect(res.status, query).toBe(400);
+			expect(await res.json()).toMatchObject({ error: { code: "invalid_input" } });
+		}
 	});
 });

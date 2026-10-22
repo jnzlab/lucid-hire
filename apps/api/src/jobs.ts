@@ -1,7 +1,7 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "./db/client.ts";
-import { JOB_STATUSES, type JobStatus, jobs } from "./db/schema.ts";
+import { JOB_STATUSES, type JobStatus, candidates, jobs } from "./db/schema.ts";
 
 export const JOB_TITLE_MIN = 2;
 export const JOB_TITLE_MAX = 120;
@@ -36,6 +36,23 @@ export const updateJobInput = z
 
 export const enhanceInput = z.object({ title: title.optional(), description });
 
+export const JOBS_PAGE_SIZE = 20;
+export const JOB_SEARCH_MAX = 100;
+export const JOB_SORTS = ["newest", "oldest", "title", "candidates"] as const;
+
+// The jobs list's filters, from the query string. A blank search means no search.
+export const listJobsQuery = z.object({
+	q: z
+		.string()
+		.transform((value) => value.trim().replace(/\s+/g, " "))
+		.pipe(z.string().max(JOB_SEARCH_MAX, { error: `Search for ${JOB_SEARCH_MAX} characters or fewer` }))
+		.default(""),
+	status: z.enum(["all", ...JOB_STATUSES]).default("all"),
+	sort: z.enum(JOB_SORTS).default("newest"),
+	page: z.coerce.number({ error: "Page must be a number" }).int({ error: "Page must be a whole number" }).min(1, { error: "Page starts at 1" }).default(1),
+});
+export type ListJobsQuery = z.output<typeof listJobsQuery>;
+
 export type JobSummary = {
 	id: string;
 	// The public address is `/jobs/<slug>`.
@@ -48,6 +65,8 @@ export type JobSummary = {
 	updatedAt: Date;
 };
 export type Job = JobSummary & { description: string };
+// What the list adds: how many of the job's CVs have been read and scored.
+export type JobListItem = JobSummary & { scoredCount: number };
 
 const summaryColumns = {
 	id: jobs.id,
@@ -92,8 +111,50 @@ export function newSlug(title: string): string {
 // Every query is scoped to the company, so one company can never read or change another's jobs.
 export const inOrg = (orgId: string, id: string) => and(eq(jobs.id, id), eq(jobs.orgId, orgId));
 
-export function listJobs(db: Db, orgId: string): Promise<JobSummary[]> {
-	return db.select(summaryColumns).from(jobs).where(eq(jobs.orgId, orgId)).orderBy(desc(jobs.createdAt));
+// `like` pattern for "contains", with the user's own % and _ taken literally.
+const containing = (text: string) => `%${text.replace(/[\\%_]/g, "\\$&")}%`;
+
+// One page of the company's jobs, filtered and sorted, with the total that match. The scored count comes from a
+// single grouped subquery rather than a query per job. SQLite's `like` ignores case for plain letters.
+export async function listJobs(
+	db: Db,
+	orgId: string,
+	{ q, status, sort, page }: ListJobsQuery,
+): Promise<{ jobs: JobListItem[]; total: number }> {
+	const search = q ? containing(q) : null;
+	const filter = and(
+		eq(jobs.orgId, orgId),
+		status === "all" ? undefined : eq(jobs.status, status),
+		search
+			? sql`(${jobs.title} like ${search} escape '\\' or ${jobs.description} like ${search} escape '\\')`
+			: undefined,
+	);
+	const scored = db
+		.select({ jobId: candidates.jobId, n: count().as("scored_n") })
+		.from(candidates)
+		.where(and(eq(candidates.orgId, orgId), eq(candidates.status, "scored")))
+		.groupBy(candidates.jobId)
+		.as("scored");
+	// The id breaks ties, so a page never repeats or skips a job.
+	const order = {
+		newest: [desc(jobs.createdAt), desc(jobs.id)],
+		oldest: [asc(jobs.createdAt), asc(jobs.id)],
+		title: [sql`${jobs.title} collate nocase asc`, desc(jobs.createdAt), desc(jobs.id)],
+		candidates: [desc(jobs.cvCount), desc(jobs.createdAt), desc(jobs.id)],
+	}[sort];
+
+	const [rows, [totals]] = await db.batch([
+		db
+			.select({ ...summaryColumns, scoredCount: sql<number>`coalesce(${scored.n}, 0)`.as("scored_count") })
+			.from(jobs)
+			.leftJoin(scored, eq(scored.jobId, jobs.id))
+			.where(filter)
+			.orderBy(...order)
+			.limit(JOBS_PAGE_SIZE)
+			.offset((page - 1) * JOBS_PAGE_SIZE),
+		db.select({ total: count() }).from(jobs).where(filter),
+	]);
+	return { jobs: rows.map((row) => ({ ...row, scoredCount: Number(row.scoredCount) })), total: totals.total };
 }
 
 export async function getJob(db: Db, orgId: string, id: string): Promise<Job | null> {

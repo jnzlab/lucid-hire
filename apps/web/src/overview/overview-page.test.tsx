@@ -59,7 +59,7 @@ beforeEach(() => {
 		vi.fn(async (url: string) => {
 			const path = new URL(url).pathname;
 			if (path === "/me") return Response.json({ userId: "user_1", org: { id: "org_1", name: "Sprite Labs", role: "admin" } });
-			if (path === "/jobs") return Response.json({ jobs: [] });
+			if (path === "/jobs") return Response.json({ jobs: [], total: 0, page: 1, pageSize: 20 });
 			if (path === "/overview") {
 				calls += 1;
 				return overview === "fail"

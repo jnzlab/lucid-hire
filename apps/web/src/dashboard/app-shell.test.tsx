@@ -18,6 +18,7 @@ const job = (id: string, title: string, status: string) => ({
 	title,
 	status,
 	cvCount: 0,
+	scoredCount: 0,
 	createdAt: "2026-10-22T12:00:00Z",
 	updatedAt: "2026-10-22T12:00:00Z",
 });
@@ -32,9 +33,13 @@ beforeEach(() => {
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async (url: string) => {
-			const path = new URL(url).pathname;
+			const { pathname: path, searchParams } = new URL(url);
 			if (path === "/me") return Response.json({ userId: "user_1", org: { id: "org_1", name: "Sprite Labs", role } });
-			if (path === "/jobs") return Response.json({ jobs });
+			if (path === "/jobs") {
+				const status = searchParams.get("status");
+				const shown = jobs.filter((j) => !status || j.status === status);
+				return Response.json({ jobs: shown, total: shown.length, page: 1, pageSize: 20 });
+			}
 			return Response.json({ error: { message: "not found" } }, { status: 404 });
 		}),
 	);

@@ -310,7 +310,7 @@ export function useUploadCvs(jobId: string) {
 		running.current = false;
 		void queryClient.invalidateQueries({ queryKey: key, exact: true });
 		// The job's own CV count, and its status if the API found it closed.
-		void queryClient.invalidateQueries({ queryKey: jobsKey(userId), exact: true });
+		void queryClient.invalidateQueries({ queryKey: jobsKey(userId) });
 		void queryClient.invalidateQueries({ queryKey: jobKey(userId, jobId), exact: true });
 	};
 
