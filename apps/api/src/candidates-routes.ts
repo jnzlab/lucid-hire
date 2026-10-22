@@ -14,7 +14,7 @@ import {
 	getCandidate,
 	getCvCount,
 	getCvFile,
-	listCandidates,
+	listCandidatesJson,
 	listForExport,
 	markStartFailed,
 	parseApplicantName,
@@ -79,9 +79,11 @@ export function candidateRoutes() {
 		const cvCount = await getCvCount(db, c.get("org").id, jobId);
 		if (cvCount === null) return c.json(jobNotFound, 404);
 
-		const candidates = await listCandidates(db, c.get("org").id, jobId);
+		const candidates = await listCandidatesJson(db, c.get("org").id, jobId);
 		const { cvsPerJob } = await getEffectivePlan(db, c.get("org").id);
-		return c.json({ candidates, cvCount, cvLimit: cvsPerJob }, 200, { "Cache-Control": "no-store" });
+		// The list arrives as JSON already, so it is passed through rather than parsed and written out again.
+		const body = `{"candidates":${candidates},"cvCount":${cvCount},"cvLimit":${JSON.stringify(cvsPerJob)}}`;
+		return c.body(body, 200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
 	});
 
 	// The job's candidates as a spreadsheet, for any member of the company. Registered before "/:id" so the path is
