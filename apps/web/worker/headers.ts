@@ -10,13 +10,13 @@ export const SECURITY_HEADERS: Record<string, string> = {
 const IMMUTABLE = "public, max-age=31536000, immutable";
 
 // Copies the response with the security headers on it. File names under /assets/ carry a content hash, so a
-// successful response there is cached for a year unless the asset server already said how long. The body is
-// passed through untouched, which keeps the Worker's CPU time out of it.
+// successful response there is cached for a year, replacing the asset server's default of revalidating every
+// time. The body is passed through untouched, which keeps the Worker's CPU time out of it.
 export function withSecurityHeaders(request: Request, response: Response): Response {
 	const secured = new Response(response.body, response);
 	for (const [name, value] of Object.entries(SECURITY_HEADERS)) secured.headers.set(name, value);
 
-	if (response.ok && new URL(request.url).pathname.startsWith("/assets/") && !secured.headers.has("Cache-Control")) {
+	if (response.ok && new URL(request.url).pathname.startsWith("/assets/")) {
 		secured.headers.set("Cache-Control", IMMUTABLE);
 	}
 	return secured;

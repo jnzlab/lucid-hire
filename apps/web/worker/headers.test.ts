@@ -32,15 +32,15 @@ describe("withSecurityHeaders", () => {
 		expect(res.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
 	});
 
-	it("keeps a cache policy the asset server set, and leaves other paths and errors alone", () => {
-		const kept = withSecurityHeaders(
+	it("replaces the asset server's revalidate policy on hashed assets, and leaves other paths and errors alone", () => {
+		const replaced = withSecurityHeaders(
 			at("/assets/a.js"),
-			new Response("js", { headers: { "Cache-Control": "public, max-age=60" } }),
+			new Response("js", { headers: { "Cache-Control": "public, max-age=0, must-revalidate" } }),
 		);
 		const page = withSecurityHeaders(at("/privacy"), new Response("page"));
 		const missing = withSecurityHeaders(at("/assets/gone.js"), new Response("no", { status: 404 }));
 
-		expect(kept.headers.get("cache-control")).toBe("public, max-age=60");
+		expect(replaced.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
 		expect(page.headers.get("cache-control")).toBeNull();
 		expect(missing.headers.get("cache-control")).toBeNull();
 	});
