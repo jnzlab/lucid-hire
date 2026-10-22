@@ -162,7 +162,7 @@ below.
 
 | Use | Model | Rule |
 |---|---|---|
-| All text generation, structured (`generateObject` with Zod) and plain | **`gemini-3.8-flash`** | The **only** text model in the app. Declare it in one constant (`GEMINI_TEXT_MODEL`) and record it in usage rows. Never use `-preview` or `-latest` names. |
+| All text generation, structured (`generateObject` with Zod) and plain | **`gemini-3.5-flash-lite`** (was `gemini-3.8-flash`, see below) | The **only** text model in the app. Declare it in one constant (`GEMINI_TEXT_MODEL`) and record it in usage rows. Never use `-preview` or `-latest` names. |
 | All embeddings | **`gemini-embedding-2`** | Takes up to 8,192 input tokens. The Vectorize index dimension MUST match the `outputDimensionality` we send. Settle the number (768, as legacy, unless the model rejects it) before creating the index, and never mix vectors from different models in one index. |
 
 Legacy used `gemini-3-flash-preview` and `gemini-embedding-001` (768
@@ -187,6 +187,42 @@ credit is used up (HTTP 402), so the owner made a new key and chose to
 - Request-facing AI calls are capped per company by the `AI_RATE_LIMIT`
   binding (10 a minute), and every call, failed ones included, writes an
   `ai_usage` row after the response (`waitUntil`).
+- **Switched to `gemini-3.5-flash-lite` (owner, 2026-10-22, ~15:30 UTC).**
+  The free tier allows only **20 `gemini-3.8-flash` requests a day per
+  project** (HTTP 429, metric `generate_content_free_tier_requests`). We
+  used them up by mid-morning, and the reset comes after the deadline. Each
+  model has its own free quota. The owner chose to stay free and switch the
+  text model. On the sample CVs it scored Grace Turner 90 and Amelia Nguyen
+  30 with verbatim evidence, in about 13 s per CV, and a rewrite took 9 s.
+  Free-tier limits per project, read from AI Studio by the owner on
+  2026-10-22: `gemini-3.5-flash-lite` 15 RPM, 250K TPM, **500 RPD**;
+  `gemini-3.8-flash` 5 RPM, 20 RPD; `gemini-embedding-2` 100 RPM, 1K RPD.
+  Ten CVs uploaded at once can pass 15 RPM, so the scorer treats 429 as
+  retryable and lets the Workflow's backoff absorb it. Keep Gemini calls in
+  tests few: about 3 per gate run.
+
+**Layer 4 decisions (owner, 2026-10-22):** CV upload, scoring and the ranked
+list.
+- Uploads stream through the API Worker into R2. No presigned URLs, no extra
+  keys.
+- One Gemini call per CV. No embeddings or Vectorize in this layer.
+- A Workflow per CV, with retries and exponential backoff, because Gemini
+  often answers 503 or 429. The scorer turns off the SDK's quick retries
+  (`maxRetries: 0`), so a failing CV doesn't burn the daily quota.
+- The ranked list polls every 3 s while anything is scoring. A Durable Object
+  live push is deferred.
+- 10 CVs per job, as an atomic D1 counter. Deleting a candidate does not free
+  the slot, because each upload already spent a Gemini call.
+- Candidate delete is admin-only and also removes the R2 file. Deleting a job
+  removes its CV files.
+- Up to 3 scoring runs per CV (the first plus two retries). This fixes legacy
+  U3 part 1 (unlimited retries).
+- No privacy notice for now (owner's choice), even though free-tier Gemini
+  content may be used by Google.
+- Sample CVs are fictional and live in `fixtures/cvs`.
+- The score is computed from the requirements, not by the model.
+- The PDF goes through the Gemini Files API, because base64-encoding a 5 MB
+  PDF in JS could exceed the 10 ms CPU limit.
 
 **Cloudflare tooling: use the `cf` CLI, not wrangler.**
 - The `cf` CLI (v1.0.0-beta) is installed globally and already
@@ -860,6 +896,14 @@ Agents draft these when asked. **They never post them.**
         Workflows, Queues, Vectorize, D1 and Durable Objects with
         `cf docs search` before designing around them, and record them
         here.
+      - Workflows Free limits (checked 2026-10-22 at
+        https://developers.cloudflare.com/workflows/reference/limits/):
+        10 ms CPU per step with unlimited wall clock, a 1 MiB step result,
+        1,024 steps per Workflow, 100 concurrent instances per account, 50
+        subrequests per instance, 3 days of retention for completed instance
+        state, and 100,000 executions a day shared with Workers.
+      - R2 free tier: 10 GB-month of storage, 1M Class A and 10M Class B
+        operations a month.
       - Durable Objects on Free must be SQLite-backed.
 - [x] Clerk (2026-10-22): the live app uses the **production instance**,
       local development the **development instance** (§8). Both belong to
