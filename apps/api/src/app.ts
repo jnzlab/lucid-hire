@@ -7,6 +7,8 @@ import { ALLOWED_ORIGINS } from "./config.ts";
 import { getDb } from "./db/client.ts";
 import { type QuestionWriter, writeQuestionsWithGemini } from "./interview-questions.ts";
 import { jobRoutes } from "./jobs-routes.ts";
+import { type CaptchaVerifier, verifyTurnstile } from "./public.ts";
+import { publicRoutes } from "./public-routes.ts";
 import { ORG_NAME_MAX, ORG_NAME_MIN, createOrgForUser, findOrgForUser, normalizeOrgName } from "./orgs.ts";
 import type { AppEnv } from "./types.ts";
 
@@ -17,12 +19,14 @@ type AppOptions = {
 	verifySession?: SessionVerifier;
 	enhanceDescription?: DescriptionEnhancer;
 	writeQuestions?: QuestionWriter;
+	verifyCaptcha?: CaptchaVerifier;
 };
 
 export function createApp({
 	verifySession = verifyClerkSession,
 	enhanceDescription = enhanceWithGemini,
 	writeQuestions = writeQuestionsWithGemini,
+	verifyCaptcha = verifyTurnstile,
 }: AppOptions = {}) {
 	const app = new Hono<AppEnv>();
 
@@ -43,7 +47,7 @@ export function createApp({
 		cors({
 			origin: ALLOWED_ORIGINS,
 			allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-			allowHeaders: ["Authorization", "Content-Type"],
+			allowHeaders: ["Authorization", "Content-Type", "X-Applicant-Email", "X-Turnstile-Token", "X-File-Name"],
 			exposeHeaders: [REQUEST_ID_HEADER],
 			maxAge: 600,
 		}),
@@ -85,6 +89,9 @@ export function createApp({
 	});
 
 	app.route("/jobs", jobRoutes({ auth, enhance: enhanceDescription, writeQuestions }));
+
+	// Unauthenticated: the public job page, its cover image, the apply form and the sitemap.
+	app.route("/public", publicRoutes({ verifyCaptcha }));
 
 	app.notFound((c) =>
 		c.json(

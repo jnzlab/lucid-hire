@@ -209,6 +209,9 @@ type NewCandidate = {
 	fileName: string;
 	fileSize: number;
 	createdBy: string;
+	// Set for applications from the public page; recruiter uploads leave both out.
+	source?: "upload" | "apply";
+	email?: string;
 };
 
 export async function createCandidate(db: Db, input: NewCandidate): Promise<Candidate> {

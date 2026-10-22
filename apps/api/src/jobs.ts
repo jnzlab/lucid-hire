@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "./db/client.ts";
 import { JOB_STATUSES, type JobStatus, jobs } from "./db/schema.ts";
@@ -36,18 +36,58 @@ export const updateJobInput = z
 
 export const enhanceInput = z.object({ title: title.optional(), description });
 
-export type JobSummary = { id: string; title: string; status: JobStatus; cvCount: number; createdAt: Date; updatedAt: Date };
+export type JobSummary = {
+	id: string;
+	// The public address is `/jobs/<slug>`.
+	slug: string;
+	title: string;
+	status: JobStatus;
+	cvCount: number;
+	hasCover: boolean;
+	createdAt: Date;
+	updatedAt: Date;
+};
 export type Job = JobSummary & { description: string };
 
 const summaryColumns = {
 	id: jobs.id,
+	// Never null: createJob sets it and the migration backfilled the old rows.
+	slug: sql<string>`${jobs.slug}`,
 	title: jobs.title,
 	status: jobs.status,
 	cvCount: jobs.cvCount,
+	hasCover: sql<boolean>`${jobs.coverKey} is not null`.mapWith(Boolean),
 	createdAt: jobs.createdAt,
 	updatedAt: jobs.updatedAt,
 };
 const jobColumns = { ...summaryColumns, description: jobs.description };
+
+const SLUG_BASE_MAX = 60;
+const SLUG_SUFFIX_LENGTH = 8;
+const SLUG_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+// A title as lower-case ASCII words joined by hyphens, at most 60 characters and cut at a hyphen. A title with no
+// letters or digits at all (legacy bug: it crashed on long titles, and had no fallback) becomes "job".
+export function slugify(title: string): string {
+	const words = title
+		.normalize("NFKD")
+		.replace(/[\u0300-\u036f]/g, "")
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "");
+	if (!words) return "job";
+	if (words.length <= SLUG_BASE_MAX) return words;
+	const cut = words.slice(0, SLUG_BASE_MAX + 1);
+	const at = cut.lastIndexOf("-");
+	return (at > 0 ? cut.slice(0, at) : cut.slice(0, SLUG_BASE_MAX)).replace(/-+$/, "");
+}
+
+// The slug a new job gets: its title, then 8 random characters so two jobs with one title never collide.
+export function newSlug(title: string): string {
+	const bytes = crypto.getRandomValues(new Uint8Array(SLUG_SUFFIX_LENGTH));
+	const suffix = Array.from(bytes, (byte) => SLUG_ALPHABET[byte % SLUG_ALPHABET.length]).join("");
+	return `${slugify(title)}-${suffix}`;
+}
 
 // Every query is scoped to the company, so one company can never read or change another's jobs.
 export const inOrg = (orgId: string, id: string) => and(eq(jobs.id, id), eq(jobs.orgId, orgId));
@@ -69,7 +109,7 @@ export async function createJob(
 ): Promise<Job> {
 	const [job] = await db
 		.insert(jobs)
-		.values({ id: crypto.randomUUID(), orgId, createdBy: userId, ...input })
+		.values({ id: crypto.randomUUID(), orgId, createdBy: userId, slug: newSlug(input.title), ...input })
 		.returning(jobColumns);
 	return job;
 }
