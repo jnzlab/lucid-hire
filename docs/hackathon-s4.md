@@ -276,8 +276,11 @@ is the PR itself."**
   the suite covers. **A missing README means disqualification.** No
   secrets in the repo.
 - **Web applications only.**
-- **Eligibility:** follow @TestSprite on X, and be a member of the Discord
-  with a badge next to your name. Posts made only on X don't count. Entrants
+- **Eligibility:** follow TestSprite on X, and be a member of the Discord
+  with a badge next to your name. TestSprite's X account is **@Test_Sprite**
+  (verified, linked from testsprite.com); `@TestSprite` is an unrelated
+  account. The badge is the Discord **TEST** server tag that staff and
+  entrants display. Posts made only on X don't count. Entrants
   must be 18+, and nobody in a comprehensively sanctioned region can be
   paid.
 - Only posts in **`#hackathon-s4-submissions`** (a forum channel) count.
@@ -365,20 +368,29 @@ against it.
    check run for `lucidhire-app` completing (§7).
 5. Set the **Target URL pattern**. Placeholders: `{pr}`, `{branch}`,
    `{branch-slug}`, `{sha}`, `{short-sha}`. Ours is the fixed live URL
-   `https://lucidhire.io` (§7). **(unverified)** Check that the portal
-   accepts a pattern with no placeholders.
+   `https://lucidhire.io` (§7). Verified on PR #1: the portal accepts a
+   pattern with no placeholders.
 6. **Send Test Event** on a PR → confirm a run queues → **Create Trigger**.
 7. Turn on **Block PR until tests pass**. Leave "Include draft PRs" off.
 
-**Results:** for PR triggers, a `testsprite-dev` comment shows
-"Test Run In Progress" and is updated in place with the report. For push
-triggers, a `TestSprite` check appears on the commit.
+**Results (seen on PR #1):** the `testsprite` bot comments on the PR and
+updates the comment in place with the report. The result is a **commit
+status** (not a check run) with the context **`TestSprite V3`**, so query
+`commits/<sha>/status` to read it.
 
-**Holding the merge:** the docs only describe the toggle. After the first
-real run, look at the PR's checks and statuses, find the one TestSprite
-posts, and add it as a **required status check** in a branch protection
-rule (or ruleset) on `main`. **(unverified)** That is how "can hold the
-merge" is satisfied. Screenshot it for the write-up.
+**Our triggers:**
+- **Pull Request:** fires when the `Workers Builds: lucidhire-app` check
+  completes. Target `https://lucidhire.io`, merge gate on, drafts off.
+- **Push to `main`:** fires on the same Workers Builds check after
+  `Deploy main`, and tests the project's default environment
+  (`https://lucidhire.io`). It re-runs the suite against production after
+  every merge.
+
+**Holding the merge (done 2026-10-22):** the trigger's merge gate makes
+`TestSprite V3` fail when a test fails. Branch protection on `main`
+requires both `Workers Builds: lucidhire-app` and `TestSprite V3`, each
+pinned to the app that posts it. Admins can bypass in an emergency.
+Screenshot it for the write-up.
 
 **Retention:** trigger activity is kept for 30 days.
 
@@ -802,11 +814,13 @@ Agents draft these when asked. **They never post them.**
       `#hackathon-s4-submissions` "Submission Requirements" post. They're
       in §3a and §11. There is no channel called `#hackathon-info`; the
       website's reference means the rules channel.
-- [ ] Owner eligibility: follows @TestSprite on X, and has the Discord
-      badge or role next to the name.
-- [ ] Whether the TestSprite PR trigger accepts a fixed target URL (§5.5)
-- [ ] The exact status check name TestSprite posts, to add to branch
-      protection (§5)
+- [x] Owner eligibility (2026-10-22): follows @Test_Sprite on X, and
+      shows the TestSprite **TEST** server tag on Discord (§3a). The
+      owner's Discord username is **`jnzlab`**; use it wherever a form or
+      template asks for one (§11).
+- [x] The TestSprite PR trigger accepts a fixed target URL (§5.5).
+- [x] The status check is `TestSprite V3`, a commit status; it is
+      required by branch protection on `main` (§5).
 
 ---
 
