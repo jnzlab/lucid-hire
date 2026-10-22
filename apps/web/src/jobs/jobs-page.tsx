@@ -23,7 +23,7 @@ export function JobsPage() {
 
 	const newJob = (
 		<Link to="/dashboard/jobs/new" className="btn">
-			New job <ArrowRight />
+			Post a job <ArrowRight />
 		</Link>
 	);
 

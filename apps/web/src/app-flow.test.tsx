@@ -352,6 +352,33 @@ describe("jobs", () => {
 		expect(await screen.findByRole("link", { name: /Sprite test role/ })).toBeTruthy();
 	});
 
+	it("offers Post a job on the list once there are jobs, and Post your first job before", async () => {
+		jobs = [];
+		renderAt("/dashboard");
+		expect(await screen.findByRole("link", { name: /Post your first job/ })).toBeTruthy();
+		expect(screen.queryByRole("link", { name: /Post a job/ })).toBeNull();
+		cleanup();
+
+		jobs = [
+			{
+				id: "job_5",
+				title: "Product Designer",
+				description: "Figma",
+				status: "open",
+				createdAt: "2026-10-22T12:00:00Z",
+				updatedAt: "2026-10-22T12:00:00Z",
+			},
+		];
+		const router = renderAt("/dashboard");
+		const post = await screen.findByRole("link", { name: /Post a job/ });
+		expect(screen.queryByRole("link", { name: /New job/ })).toBeNull();
+		expect(screen.queryByRole("link", { name: /Post your first job/ })).toBeNull();
+
+		fireEvent.click(post);
+		expect(await screen.findByRole("heading", { level: 1, name: "Post a job" })).toBeTruthy();
+		expect(router.state.location.pathname).toBe("/dashboard/jobs/new");
+	});
+
 	it("saves a draft, and rewrites rough notes with AI that the recruiter can undo", async () => {
 		renderAt("/dashboard/jobs/new");
 
