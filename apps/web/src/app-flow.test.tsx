@@ -376,6 +376,30 @@ describe("jobs", () => {
 		org = { id: "org_1", name: "Sprite Labs", role: "admin" };
 	});
 
+	it("shows the candidate view beside the form, live, with Compose and Preview tabs", async () => {
+		renderAt("/dashboard/jobs/new");
+		const title = await screen.findByLabelText("Job title");
+		expect(screen.getByRole("heading", { level: 2, name: "Candidate view" })).toBeTruthy();
+		expect(screen.getByText("Your description appears here as you type. Markdown works.")).toBeTruthy();
+
+		fireEvent.change(title, { target: { value: "Preview role" } });
+		fireEvent.change(screen.getByLabelText("Description"), { target: { value: "## Duties\n\nShip **fast**." } });
+		const view = screen.getByRole("heading", { level: 2, name: "Candidate view" }).closest("section")!;
+		expect(within(view).getByText("Preview role")).toBeTruthy();
+		expect(await within(view).findByRole("heading", { level: 2, name: "Duties" })).toBeTruthy();
+		expect(within(view).getByText("fast").tagName).toBe("STRONG");
+
+		const compose = screen.getByRole("tab", { name: "Compose" });
+		const preview = screen.getByRole("tab", { name: "Preview" });
+		expect(compose.getAttribute("aria-selected")).toBe("true");
+		fireEvent.click(preview);
+		expect(preview.getAttribute("aria-selected")).toBe("true");
+		expect(compose.getAttribute("aria-selected")).toBe("false");
+		// The typed text is still there when switching back.
+		fireEvent.click(compose);
+		expect((screen.getByLabelText("Job title") as HTMLInputElement).value).toBe("Preview role");
+	});
+
 	it("posts a first job from the empty state and opens it", async () => {
 		const router = renderAt("/dashboard");
 
