@@ -9,7 +9,8 @@ TestSprite check against a live deployment.
 
 - **Status:** the landing page, sign-in and sign-out, onboarding, jobs (with
   the AI description rewrite), CV scoring, shortlisting, interview questions,
-  and the privacy and terms pages are live. The rest of the legacy app's
+  the privacy and terms pages, and public job pages where candidates apply
+  with their CV are live. The rest of the legacy app's
   features are landing layer by layer.
 - **Live URL:** https://lucidhire.io (API: https://api.lucidhire.io)
 
@@ -70,6 +71,10 @@ on failure.
 | Unknown address shows the not-found page | A made-up address shows "This page does not exist" with a "Go home" link |
 | Signing out shows a confirmation | After signing in, /sign-out says "You're signed out" with "Sign in again" and "Go home" |
 | A dashboard link survives sign-in | A signed-out visit to /dashboard/jobs/new goes through sign-in and comes back to the "Post a job" form, not the jobs list (legacy always landed on the dashboard) |
+| Applicant applies to an open job through its public link | A recruiter opens "Sprite apply role", follows its public link, applies as applicant.sprite@example.com with grace-turner.pdf past the Turnstile check, and sees "Your CV has been received". Deletes its job afterwards |
+| A closed job's public page says applications are closed | After "Close job", the public page of "Sprite closed role" shows "Closed role" and "Applications closed" with no form. Deletes its job afterwards |
+| Unknown job link shows a friendly page | /jobs/no-such-job-00000000 shows "This job isn't available" |
+| Recruiter shares an open job's public link | "Sprite share role" shows its https://lucidhire.io/jobs/… link and a Share menu with Email, X, LinkedIn, WhatsApp, Facebook and "Copy caption". Deletes its job afterwards |
 
 The recruiter test account's credentials live only in the TestSprite
 environment, never in this repo.
