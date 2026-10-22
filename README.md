@@ -7,10 +7,10 @@ This repo is the rebuild of LucidHire on Cloudflare for TestSprite Hackathon
 Season 4. Every layer lands through a pull request that is gated by a
 TestSprite check against a live deployment.
 
-- **Status:** the landing page, sign-in, onboarding, jobs (with the AI
-  description rewrite), CV scoring, shortlisting and interview questions are
-  live. Next comes polish. Billing and
-  the public apply portal are out of scope.
+- **Status:** the landing page, sign-in and sign-out, onboarding, jobs (with
+  the AI description rewrite), CV scoring, shortlisting, interview questions,
+  and the privacy and terms pages are live. The rest of the legacy app's
+  features are landing layer by layer.
 - **Live URL:** https://lucidhire.io (API: https://api.lucidhire.io)
 
 ## How scoring works
@@ -65,6 +65,11 @@ on failure.
 | Jobs take PDF CVs only while open | A draft job explains it can't take CVs; once opened, a .txt file is refused with "Upload a PDF file" and no slot is used. Deletes its job afterwards |
 | Recruiter gets interview questions for a candidate | Uploads grace-turner.pdf to "Sprite questions role", opens her once scored, clicks "Write questions", and sees at least 5 numbered questions with "Copy all" and "Write new questions". Deletes its job afterwards |
 | Recruiter shortlists a candidate and filters the list | Uploads kenji-tanaka.pdf to "Sprite shortlist role", marks Kenji "Shortlisted" with a saved note, sees the badge in the list, and filters to "Shortlisted 1". Deletes its job afterwards |
+| Privacy policy opens from the landing footer | "Privacy" in the footer opens "Privacy policy", last updated 22 October 2026, naming Cloudflare, Clerk, Gemini, Polar and privacy@lucidhire.io |
+| Terms page lists the plans and their limits | /terms shows "Terms of service" with Free ($0), Pro ($10 a month) and Max ($30 a month) and their CV and job limits |
+| Unknown address shows the not-found page | A made-up address shows "This page does not exist" with a "Go home" link |
+| Signing out shows a confirmation | After signing in, /sign-out says "You're signed out" with "Sign in again" and "Go home" |
+| A dashboard link survives sign-in | A signed-out visit to /dashboard/jobs/new goes through sign-in and comes back to the "Post a job" form, not the jobs list (legacy always landed on the dashboard) |
 
 The recruiter test account's credentials live only in the TestSprite
 environment, never in this repo.
