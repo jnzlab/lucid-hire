@@ -92,6 +92,7 @@ export async function saveScore(db: Db, candidateId: string, { result, usage }: 
 			headline: result.headline || null,
 			summary: result.summary,
 			requirements: result.requirements,
+			profile: result.profile,
 			score: computeScore(result.requirements),
 			scoredAt: new Date(),
 		})

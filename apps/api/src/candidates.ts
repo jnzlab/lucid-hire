@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { Db } from "./db/client.ts";
 import {
 	CANDIDATE_DECISIONS,
+	type CandidateProfile,
 	type CandidateStatus,
 	type Decision,
 	type Requirement,
@@ -52,6 +53,8 @@ export type CandidateSummary = {
 export type Candidate = CandidateSummary & {
 	summary: string | null;
 	requirements: Requirement[] | null;
+	// What the CV states about the candidate. Null for a CV that hasn't been read.
+	profile: CandidateProfile | null;
 	fileSize: number;
 	note: string | null;
 	// When the decision last changed. Null while it is undecided.
@@ -76,6 +79,7 @@ const summaryColumns = {
 const candidateColumns = {
 	...summaryColumns,
 	summary: candidates.summary,
+	profile: candidates.profile,
 	fileSize: candidates.fileSize,
 	note: candidates.note,
 	decidedAt: candidates.decidedAt,
@@ -124,6 +128,7 @@ const toCandidate = (row: CandidateRow): Candidate => ({
 	...toSummary(row),
 	summary: row.summary,
 	requirements: row.requirements,
+	profile: row.profile,
 	fileSize: row.fileSize,
 	note: row.note,
 	decidedAt: row.decidedAt,

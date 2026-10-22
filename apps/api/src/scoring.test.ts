@@ -46,6 +46,15 @@ const score: CvScore = {
 		{ label: "Figma", requirement: "Figma", importance: "nice", met: true, evidence: "Handed off designs in Figma" },
 		{ label: "Kotlin", requirement: "Kotlin", importance: "nice", met: false, evidence: "" },
 	],
+	profile: {
+		email: "ada@example.com",
+		location: "London, UK",
+		links: [{ label: "GitHub", url: "https://github.com/ada" }],
+		skills: ["Swift", "SwiftUI"],
+		experience: [{ title: "Senior iOS Engineer", company: "Analytical Engines" }],
+		education: [],
+		certifications: [],
+	},
 };
 
 const scorer: CvScorer = async (input) => {
@@ -285,6 +294,7 @@ describe("saveScore", () => {
 			summary: score.summary,
 			error: null,
 			requirements: score.requirements,
+			profile: score.profile,
 		});
 		expect(row.scoredAt).toBeInstanceOf(Date);
 

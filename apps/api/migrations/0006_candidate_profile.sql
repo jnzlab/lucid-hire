@@ -1,0 +1,1 @@
+ALTER TABLE `candidates` ADD `profile` text;

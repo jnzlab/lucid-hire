@@ -2,6 +2,8 @@ import { type GoogleLanguageModelOptions, createGoogle } from "@ai-sdk/google";
 import { AISDKError, APICallError, Output, RetryError, generateText } from "ai";
 import { z } from "zod";
 import { type AiResult, GEMINI_TEXT_MODEL } from "./ai.ts";
+import { cvProfileSchema, tidyProfile } from "./cv-profile.ts";
+import type { CandidateProfile } from "./db/schema.ts";
 
 // What Gemini returns for one CV. The score is computed from `requirements` (see computeScore), never asked of the
 // model.
@@ -23,8 +25,10 @@ export const cvScoreSchema = z.object({
 		)
 		.min(1)
 		.describe("1 to 12 requirements taken from the job description, must-haves first"),
+	profile: cvProfileSchema.describe("Facts the CV states about the candidate. Empty where the CV is silent"),
 });
-export type CvScore = z.infer<typeof cvScoreSchema>;
+// What we keep: the model's profile, cleaned by tidyProfile.
+export type CvScore = Omit<z.infer<typeof cvScoreSchema>, "profile"> & { profile: CandidateProfile };
 // The most requirements kept from a response. The schema leaves it to tidyCvScore, so an extra one doesn't cost the
 // whole response.
 const MAX_REQUIREMENTS = 12;
@@ -41,19 +45,23 @@ const SCORE_INSTRUCTIONS = [
 	"Then check the CV against each requirement. Be strict: a requirement is met only when the CV shows it.",
 	"The evidence for a met requirement is a verbatim quote from the CV, never a paraphrase.",
 	"Never invent evidence. A requirement the CV does not show is not met, even if the candidate probably has it.",
-	"If the file is not a CV or has no readable text, leave the name empty, mark every requirement as not met,",
-	"and say so in the summary.",
+	"Also fill in the profile with what the CV itself states: the candidate's own email and phone, location, links,",
+	"skills, work experience, education and certifications. Copy them as written. Never guess or invent a fact:",
+	"leave a field empty (an empty string or an empty list) when the CV does not state it.",
+	"If the file is not a CV or has no readable text, leave the name and the profile empty, mark every requirement as",
+	"not met, and say so in the summary.",
 	"Plain text only, with no markdown.",
 ].join("\n");
 
 // Models overshoot length hints now and then. Clip rather than reject, so one long quote doesn't cost the whole
 // response.
-export function tidyCvScore(score: CvScore): CvScore {
+export function tidyCvScore(score: Omit<CvScore, "profile"> & { profile?: unknown }): CvScore {
 	const clip = (text: string, max: number) => text.trim().slice(0, max);
 	return {
 		name: clip(score.name, 100),
 		headline: clip(score.headline, 80),
 		summary: clip(score.summary, 600),
+		profile: tidyProfile(score.profile),
 		requirements: score.requirements.slice(0, MAX_REQUIREMENTS).map((r) => {
 			// A requirement counts as met only with a quote that shows it.
 			const evidence = r.met ? clip(r.evidence, 200) : "";
@@ -131,7 +139,7 @@ export const scoreCvWithGemini = async (
 				},
 			],
 			output: Output.object({ schema: cvScoreSchema }),
-			maxOutputTokens: 4096,
+			maxOutputTokens: 8192,
 			// The Workflow step retries with a longer backoff; quick SDK retries would only spend the daily quota.
 			maxRetries: 0,
 			// Matching a CV to a job needs little reasoning, and a call normally takes 10 to 25 seconds. One still

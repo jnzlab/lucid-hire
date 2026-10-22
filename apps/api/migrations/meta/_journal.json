@@ -43,6 +43,13 @@
       "when": 1792695360542,
       "tag": "0005_public_apply",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1792698953937,
+      "tag": "0006_candidate_profile",
+      "breakpoints": true
     }
   ]
 }

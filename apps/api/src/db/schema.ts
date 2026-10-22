@@ -87,6 +87,19 @@ export type Requirement = {
 	evidence: string;
 };
 
+// What the CV itself says about the candidate, read in the same Gemini call as the score. Every field is
+// optional: whatever the CV doesn't state is left out, never guessed.
+export type CandidateProfile = {
+	email?: string;
+	phone?: string;
+	location?: string;
+	links: { label?: string; url: string }[];
+	skills: string[];
+	experience: { title: string; company?: string; start?: string; end?: string; summary?: string }[];
+	education: { qualification: string; institution?: string; year?: string }[];
+	certifications: string[];
+};
+
 // One uploaded CV for a job. The PDF lives in R2 under `file_key`; a Workflow scores it with Gemini and
 // fills in the rest. `runs` counts scoring runs started, which caps manual retries. The recruiters' call on
 // the CV is `decision` and `note`; `decided_at` and `decided_by` say who last changed the decision, and when.
@@ -116,6 +129,7 @@ export const candidates = sqliteTable(
 		// an empty string) when unknown, so the unique index below only ever compares real addresses.
 		source: text("source", { enum: CANDIDATE_SOURCES }).notNull().default("upload"),
 		email: text("email"),
+		profile: text("profile", { mode: "json" }).$type<CandidateProfile>(),
 		createdBy: text("created_by").notNull(),
 		createdAt: createdAt(),
 		updatedAt: integer("updated_at", { mode: "timestamp_ms" })
