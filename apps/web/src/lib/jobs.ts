@@ -6,9 +6,12 @@ export type JobStatus = "draft" | "open" | "closed";
 // `cvCount` is the CVs ever uploaded to the job. Deleting a candidate doesn't lower it.
 export type JobSummary = {
 	id: string;
+	// The public page is /jobs/<slug>.
+	slug: string;
 	title: string;
 	status: JobStatus;
 	cvCount: number;
+	hasCover: boolean;
 	createdAt: string;
 	updatedAt: string;
 };

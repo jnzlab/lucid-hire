@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createBrowserHistory, createMemoryHistory } from "@tanstack/react-router";
-import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, configure, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { type Mock, type MockInstance, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	CANDIDATE_POLL_MS,
@@ -11,6 +11,9 @@ import {
 	useDecideCandidate,
 } from "./lib/candidates.ts";
 import { createAppRouter } from "./router.ts";
+
+// Pages load code-split chunks, which can take a while when several test runs share a machine.
+configure({ asyncUtilTimeout: 5000 });
 
 // Clerk is replaced by a session we control; the API by an in-memory fake of /me, /orgs, /jobs and the
 // candidates under each job.
@@ -50,7 +53,7 @@ const notFound = () => Response.json({ error: { message: "That job doesn't exist
 const apiError = (status: number, code: string, message: string) =>
 	Response.json({ error: { code, message } }, { status });
 // What the API sends for a job: the CV count is always there.
-const withCount = (job: FakeJob) => ({ ...job, cvCount: job.cvCount ?? 0 });
+const withCount = (job: FakeJob) => ({ ...job, slug: `${job.id}-slug`, hasCover: false, cvCount: job.cvCount ?? 0 });
 
 // The jobs API, enough of it for the pages: list, create, read, edit, delete and the AI rewrite.
 function fakeJobs(path: string, method: string, body: Record<string, string>): Response {

@@ -1,8 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, configure, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { type Mock, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAppRouter } from "../router.ts";
+
+// Pages load code-split chunks, which can take a while when several test runs share a machine.
+configure({ asyncUtilTimeout: 5000 });
 
 vi.mock("@clerk/react", () => ({
 	useAuth: () => ({ isLoaded: true, isSignedIn: false, userId: null, getToken: async () => null }),

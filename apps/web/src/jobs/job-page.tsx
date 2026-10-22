@@ -10,6 +10,7 @@ import { useCandidates } from "../lib/candidates.ts";
 import { formatDate } from "../lib/format.ts";
 import { type Job, type JobStatus, useDeleteJob, useJob, useUpdateJob } from "../lib/jobs.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
+import { PublicLink } from "./share-panel.tsx";
 import { BackToJobs, JobStatusTag, PageHeading, SectionError, SectionLoading } from "./job-ui.tsx";
 
 export function JobPage({ jobId }: { jobId: string }) {
@@ -122,6 +123,8 @@ function JobDetails({ job }: { job: Job }) {
 					✕ {update.error.message}
 				</p>
 			)}
+
+			<PublicLink job={job} />
 
 			<CandidatesSection job={job} />
 
