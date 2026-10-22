@@ -91,7 +91,7 @@ describe("access", () => {
 describe("POST /jobs", () => {
 	it("saves a draft by default, with the title tidied", async () => {
 		const job = await createAs("user_admin", { title: "  Senior   iOS Engineer ", description: "Swift, SwiftUI" });
-		expect(job).toMatchObject({ title: "Senior iOS Engineer", status: "draft" });
+		expect(job).toMatchObject({ title: "Senior iOS Engineer", status: "draft", cvCount: 0 });
 	});
 
 	it("can open the job straight away, but not create it closed", async () => {

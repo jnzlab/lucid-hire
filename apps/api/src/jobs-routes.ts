@@ -3,6 +3,8 @@ import { Hono, type MiddlewareHandler } from "hono";
 import type { z } from "zod";
 import { type DescriptionEnhancer, recordAiUsage } from "./ai.ts";
 import { requireOrg } from "./auth.ts";
+import { candidateRoutes } from "./candidates-routes.ts";
+import { deleteCvFiles, listFileKeys } from "./candidates.ts";
 import { getDb } from "./db/client.ts";
 import {
 	createJob,
@@ -99,9 +101,17 @@ export function jobRoutes({ auth, enhance }: JobRouteOptions) {
 		if (org.role !== "admin") {
 			return c.json({ error: { code: "forbidden", message: "Only admins can delete jobs" } }, 403);
 		}
-		const deleted = await deleteJob(getDb(c.env.DB), org.id, c.req.param("id"));
-		return deleted ? c.body(null, 204) : c.json(notFound, 404);
+		const db = getDb(c.env.DB);
+		const id = c.req.param("id");
+		// The candidate rows go with the job, so their R2 keys are collected first.
+		const fileKeys = await listFileKeys(db, org.id, id);
+		const deleted = await deleteJob(db, org.id, id);
+		if (!deleted) return c.json(notFound, 404);
+		c.executionCtx.waitUntil(deleteCvFiles(c.env.CVS, fileKeys));
+		return c.body(null, 204);
 	});
+
+	routes.route("/", candidateRoutes());
 
 	return routes;
 }

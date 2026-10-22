@@ -36,20 +36,21 @@ export const updateJobInput = z
 
 export const enhanceInput = z.object({ title: title.optional(), description });
 
-export type JobSummary = { id: string; title: string; status: JobStatus; createdAt: Date; updatedAt: Date };
+export type JobSummary = { id: string; title: string; status: JobStatus; cvCount: number; createdAt: Date; updatedAt: Date };
 export type Job = JobSummary & { description: string };
 
 const summaryColumns = {
 	id: jobs.id,
 	title: jobs.title,
 	status: jobs.status,
+	cvCount: jobs.cvCount,
 	createdAt: jobs.createdAt,
 	updatedAt: jobs.updatedAt,
 };
 const jobColumns = { ...summaryColumns, description: jobs.description };
 
 // Every query is scoped to the company, so one company can never read or change another's jobs.
-const inOrg = (orgId: string, id: string) => and(eq(jobs.id, id), eq(jobs.orgId, orgId));
+export const inOrg = (orgId: string, id: string) => and(eq(jobs.id, id), eq(jobs.orgId, orgId));
 
 export function listJobs(db: Db, orgId: string): Promise<JobSummary[]> {
 	return db.select(summaryColumns).from(jobs).where(eq(jobs.orgId, orgId)).orderBy(desc(jobs.createdAt));
