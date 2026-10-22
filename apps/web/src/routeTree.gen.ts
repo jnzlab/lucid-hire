@@ -10,17 +10,21 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as DashboardRouteRouteImport } from './routes/dashboard/route'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
+import { Route as DashboardIndexRouteImport } from './routes/dashboard/index'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
+import { Route as DashboardJobsNewRouteImport } from './routes/dashboard/jobs.new'
+import { Route as DashboardJobsJobIdIndexRouteImport } from './routes/dashboard/jobs.$jobId.index'
+import { Route as DashboardJobsJobIdEditRouteImport } from './routes/dashboard/jobs.$jobId.edit'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const DashboardRoute = DashboardRouteImport.update({
+const DashboardRouteRoute = DashboardRouteRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
   getParentRoute: () => rootRouteImport,
@@ -29,6 +33,11 @@ const OnboardingRoute = OnboardingRouteImport.update({
   id: '/onboarding',
   path: '/onboarding',
   getParentRoute: () => rootRouteImport,
+} as any)
+const DashboardIndexRoute = DashboardIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => DashboardRouteRoute,
 } as any)
 const SignInSplatRoute = SignInSplatRouteImport.update({
   id: '/sign-in/$',
@@ -40,34 +49,77 @@ const SignUpSplatRoute = SignUpSplatRouteImport.update({
   path: '/sign-up/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DashboardJobsNewRoute = DashboardJobsNewRouteImport.update({
+  id: '/jobs/new',
+  path: '/jobs/new',
+  getParentRoute: () => DashboardRouteRoute,
+} as any)
+const DashboardJobsJobIdIndexRoute = DashboardJobsJobIdIndexRouteImport.update({
+  id: '/jobs/$jobId/',
+  path: '/jobs/$jobId/',
+  getParentRoute: () => DashboardRouteRoute,
+} as any)
+const DashboardJobsJobIdEditRoute = DashboardJobsJobIdEditRouteImport.update({
+  id: '/jobs/$jobId/edit',
+  path: '/jobs/$jobId/edit',
+  getParentRoute: () => DashboardRouteRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/dashboard': typeof DashboardRoute
+  '/dashboard': typeof DashboardRouteRouteWithChildren
   '/onboarding': typeof OnboardingRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
+  '/dashboard/': typeof DashboardIndexRoute
+  '/dashboard/jobs/new': typeof DashboardJobsNewRoute
+  '/dashboard/jobs/$jobId/edit': typeof DashboardJobsJobIdEditRoute
+  '/dashboard/jobs/$jobId/': typeof DashboardJobsJobIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/dashboard': typeof DashboardRoute
   '/onboarding': typeof OnboardingRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
+  '/dashboard': typeof DashboardIndexRoute
+  '/dashboard/jobs/new': typeof DashboardJobsNewRoute
+  '/dashboard/jobs/$jobId/edit': typeof DashboardJobsJobIdEditRoute
+  '/dashboard/jobs/$jobId': typeof DashboardJobsJobIdIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/dashboard': typeof DashboardRoute
+  '/dashboard': typeof DashboardRouteRouteWithChildren
   '/onboarding': typeof OnboardingRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
+  '/dashboard/': typeof DashboardIndexRoute
+  '/dashboard/jobs/new': typeof DashboardJobsNewRoute
+  '/dashboard/jobs/$jobId/edit': typeof DashboardJobsJobIdEditRoute
+  '/dashboard/jobs/$jobId/': typeof DashboardJobsJobIdIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/dashboard' | '/onboarding' | '/sign-in/$' | '/sign-up/$'
+  fullPaths:
+    | '/'
+    | '/dashboard'
+    | '/onboarding'
+    | '/sign-in/$'
+    | '/sign-up/$'
+    | '/dashboard/'
+    | '/dashboard/jobs/new'
+    | '/dashboard/jobs/$jobId/edit'
+    | '/dashboard/jobs/$jobId/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/dashboard' | '/onboarding' | '/sign-in/$' | '/sign-up/$'
+  to:
+    | '/'
+    | '/onboarding'
+    | '/sign-in/$'
+    | '/sign-up/$'
+    | '/dashboard'
+    | '/dashboard/jobs/new'
+    | '/dashboard/jobs/$jobId/edit'
+    | '/dashboard/jobs/$jobId'
   id:
     | '__root__'
     | '/'
@@ -75,11 +127,15 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/sign-in/$'
     | '/sign-up/$'
+    | '/dashboard/'
+    | '/dashboard/jobs/new'
+    | '/dashboard/jobs/$jobId/edit'
+    | '/dashboard/jobs/$jobId/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  DashboardRoute: typeof DashboardRoute
+  DashboardRouteRoute: typeof DashboardRouteRouteWithChildren
   OnboardingRoute: typeof OnboardingRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
@@ -98,7 +154,7 @@ declare module '@tanstack/react-router' {
       id: '/dashboard'
       path: '/dashboard'
       fullPath: '/dashboard'
-      preLoaderRoute: typeof DashboardRouteImport
+      preLoaderRoute: typeof DashboardRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/onboarding': {
@@ -107,6 +163,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/onboarding'
       preLoaderRoute: typeof OnboardingRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/dashboard/': {
+      id: '/dashboard/'
+      path: '/'
+      fullPath: '/dashboard/'
+      preLoaderRoute: typeof DashboardIndexRouteImport
+      parentRoute: typeof DashboardRouteRoute
     }
     '/sign-in/$': {
       id: '/sign-in/$'
@@ -122,12 +185,51 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignUpSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/dashboard/jobs/new': {
+      id: '/dashboard/jobs/new'
+      path: '/jobs/new'
+      fullPath: '/dashboard/jobs/new'
+      preLoaderRoute: typeof DashboardJobsNewRouteImport
+      parentRoute: typeof DashboardRouteRoute
+    }
+    '/dashboard/jobs/$jobId/': {
+      id: '/dashboard/jobs/$jobId/'
+      path: '/jobs/$jobId'
+      fullPath: '/dashboard/jobs/$jobId/'
+      preLoaderRoute: typeof DashboardJobsJobIdIndexRouteImport
+      parentRoute: typeof DashboardRouteRoute
+    }
+    '/dashboard/jobs/$jobId/edit': {
+      id: '/dashboard/jobs/$jobId/edit'
+      path: '/jobs/$jobId/edit'
+      fullPath: '/dashboard/jobs/$jobId/edit'
+      preLoaderRoute: typeof DashboardJobsJobIdEditRouteImport
+      parentRoute: typeof DashboardRouteRoute
+    }
   }
 }
 
+interface DashboardRouteRouteChildren {
+  DashboardIndexRoute: typeof DashboardIndexRoute
+  DashboardJobsNewRoute: typeof DashboardJobsNewRoute
+  DashboardJobsJobIdEditRoute: typeof DashboardJobsJobIdEditRoute
+  DashboardJobsJobIdIndexRoute: typeof DashboardJobsJobIdIndexRoute
+}
+
+const DashboardRouteRouteChildren: DashboardRouteRouteChildren = {
+  DashboardIndexRoute: DashboardIndexRoute,
+  DashboardJobsNewRoute: DashboardJobsNewRoute,
+  DashboardJobsJobIdEditRoute: DashboardJobsJobIdEditRoute,
+  DashboardJobsJobIdIndexRoute: DashboardJobsJobIdIndexRoute,
+}
+
+const DashboardRouteRouteWithChildren = DashboardRouteRoute._addFileChildren(
+  DashboardRouteRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  DashboardRoute: DashboardRoute,
+  DashboardRouteRoute: DashboardRouteRouteWithChildren,
   OnboardingRoute: OnboardingRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,

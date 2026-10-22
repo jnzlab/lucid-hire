@@ -112,6 +112,9 @@
   .btn .arr{transition:transform .3s --theme(--ease-out)}
   .btn:hover .arr{transform:translateX(4px)}
   .btn:disabled{cursor:progress;background-size:0% 100%;color:var(--fg);opacity:.7}
+  /* Destructive (design system §4, derived): the secondary button in gap-ink; pink fills in on hover. */
+  .btn.danger{--bg:transparent;--fg:var(--gap-ink);border-color:var(--gap-ink);background-image:linear-gradient(var(--gap-soft),var(--gap-soft))}
+  .btn.danger:hover{color:var(--gap-ink)}
 
   /* Desk (design system §3): the grey stage with a 22px dot grid that sheets sit on. */
   .desk{background:radial-gradient(rgba(20,20,20,.12) 1px,transparent 1.3px) 0 0/22px 22px var(--desk)}
