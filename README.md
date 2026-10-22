@@ -88,6 +88,8 @@ on failure.
 | Pricing button carries the picked plan to sign-up | "Choose Pro" on the landing pricing opens /sign-up?plan=pro |
 | Admin creates a team invite link | The Team section lists the signed-in admin as "You" and "Create invite link" shows an /invite/ link, which the test then revokes |
 | New job page shows the monthly job allowance | The new job page says "Unlimited jobs on your plan" |
+| Recruiter copies a job's public link from the jobs list | The row menu of an open job says "Copied" after "Copy public link". Deletes its job afterwards |
+| Sidebar shows the company's plan | The "Max" badge beside "Sprite Labs" opens Settings at "Plan & usage" |
 
 The recruiter test account's credentials live only in the TestSprite
 environment, never in this repo.
