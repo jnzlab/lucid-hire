@@ -23,7 +23,7 @@ vi.mock("@clerk/react", () => ({
 		userId: session.signedIn ? "user_1" : null,
 		getToken: async () => (session.signedIn ? "session-token" : null),
 	}),
-	RedirectToSignIn: () => <p>Redirecting to sign in</p>,
+	RedirectToSignIn: ({ redirectUrl }: { redirectUrl?: string }) => <p data-redirect-url={redirectUrl}>Redirecting to sign in</p>,
 	UserButton: () => null,
 	Show: () => null,
 	SignIn: () => null,
@@ -289,6 +289,55 @@ describe("signing in for the first time", () => {
 				headers: expect.objectContaining({ Authorization: "Bearer session-token" }),
 			}),
 		);
+	});
+});
+
+describe("deep links", () => {
+	it("send a signed-out visitor to sign in with the page they asked for as the way back", async () => {
+		session.signedIn = false;
+
+		renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+
+		const redirect = await screen.findByText("Redirecting to sign in");
+		expect(redirect.getAttribute("data-redirect-url")).toBe(
+			`${window.location.origin}/dashboard/jobs/job_1/candidates/cand_grace`,
+		);
+	});
+
+	it("take a brand-new recruiter through onboarding and then to the page they asked for", async () => {
+		jobs = [
+			{
+				id: "job_1",
+				title: "Deep link role",
+				description: "Swift, SwiftUI, 5 years.",
+				status: "open",
+				createdAt: "2026-10-20T09:00:00Z",
+				updatedAt: "2026-10-20T09:00:00Z",
+			},
+		];
+		const router = renderAt("/dashboard/jobs/job_1");
+
+		const input = await screen.findByLabelText("Company name");
+		expect(router.state.location.pathname).toBe("/onboarding");
+expect(router.state.location.search).toEqual({ next: "/dashboard/jobs/job_1" });
+
+		fireEvent.change(input, { target: { value: "Sprite Labs" } });
+		fireEvent.click(screen.getByRole("button", { name: /Continue to your dashboard/ }));
+
+		expect(await screen.findByRole("heading", { level: 1, name: "Deep link role" })).toBeTruthy();
+		expect(router.state.location.pathname).toBe("/dashboard/jobs/job_1");
+	});
+
+	it("ignore a way back that is not a dashboard page", async () => {
+		const router = renderAt("/onboarding?next=https://evil.example/");
+
+		await screen.findByLabelText("Company name");
+		expect(router.state.location.search).toEqual({});
+		fireEvent.change(screen.getByLabelText("Company name"), { target: { value: "Sprite Labs" } });
+		fireEvent.click(screen.getByRole("button", { name: /Continue to your dashboard/ }));
+
+		expect(await screen.findByRole("heading", { name: "No jobs yet" })).toBeTruthy();
+		expect(router.state.location.pathname).toBe("/dashboard");
 	});
 });
 

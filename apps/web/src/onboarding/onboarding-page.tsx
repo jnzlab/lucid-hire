@@ -1,6 +1,6 @@
 import { UserButton, useAuth } from "@clerk/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Navigate } from "@tanstack/react-router";
+import { Navigate, getRouteApi } from "@tanstack/react-router";
 import { type FormEvent, useRef, useState } from "react";
 import { AuthLayout } from "../auth/auth-layout.tsx";
 import { RequireSession } from "../auth/require-session.tsx";
@@ -25,12 +25,15 @@ export function OnboardingPage() {
 	);
 }
 
-// Recruiters who already have a company skip straight to the dashboard.
+const route = getRouteApi("/onboarding");
+
+// Recruiters who already have a company skip straight to the page they came for, or the dashboard.
 function Onboarding() {
 	const me = useMe();
+	const { next } = route.useSearch();
 	if (me.isPending) return <PageLoading label="Loading your account" />;
 	if (me.isError) return <PageError message={me.error.message} onRetry={() => void me.refetch()} />;
-	if (me.data.org) return <Navigate to="/dashboard" replace />;
+	if (me.data.org) return next ? <Navigate to={next} replace /> : <Navigate to="/dashboard" replace />;
 
 	return (
 		<AuthLayout
