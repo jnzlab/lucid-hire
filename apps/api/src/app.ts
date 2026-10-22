@@ -10,6 +10,7 @@ import { billingRoutes } from "./billing-routes.ts";
 import { type UserDirectory, clerkDirectory } from "./clerk.ts";
 import { jobRoutes } from "./jobs-routes.ts";
 import { overviewRoutes } from "./overview-routes.ts";
+import { inviteRoutes, teamRoutes } from "./team-routes.ts";
 import { type PolarFetch, polarFetcher } from "./polar.ts";
 import { type CaptchaVerifier, verifyTurnstile } from "./public.ts";
 import { publicRoutes } from "./public-routes.ts";
@@ -102,6 +103,8 @@ export function createApp({
 
 	app.route("/webhooks", webhookRoutes({ polar }));
 	app.route("/billing", billingRoutes({ auth, polar, directory }));
+	app.route("/team", teamRoutes({ auth, directory }));
+	app.route("/invites", inviteRoutes({ auth }));
 	app.route("/jobs", jobRoutes({ auth, enhance: enhanceDescription, writeQuestions }));
 
 	app.route("/overview", overviewRoutes({ auth }));

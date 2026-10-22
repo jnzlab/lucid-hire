@@ -47,7 +47,7 @@ export async function createOrgForUser(
 	}
 }
 
-function isUniqueViolation(error: unknown): boolean {
+export function isUniqueViolation(error: unknown): boolean {
 	for (let e: unknown = error; e instanceof Error; e = e.cause) {
 		if (e.message.includes("UNIQUE constraint failed")) return true;
 	}
