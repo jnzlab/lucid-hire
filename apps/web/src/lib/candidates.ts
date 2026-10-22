@@ -71,6 +71,10 @@ export type CandidateSummary = {
 	summary: string | null;
 	// Whether a recruiter has written a note on this CV.
 	hasNote: boolean;
+	// A recruiter's upload, or the applicant through the job's public page.
+	source: "upload" | "apply";
+	// The address the applicant gave when applying, else the one on the CV.
+	email: string | null;
 	// Only the email: the rest of the profile is on the candidate page.
 	profile: { email?: string } | null;
 	error: string | null;
@@ -112,8 +116,8 @@ export function failureMessage({ error, canRetry }: Pick<CandidateSummary, "erro
 
 // The candidate's email, if we have one. Every screen and the CSV go through here, so there is one place to say
 // where it comes from.
-export const candidateEmail = (candidate: { profile?: { email?: string } | null }): string | null =>
-	candidate.profile?.email ?? null;
+export const candidateEmail = (candidate: { email?: string | null; profile?: { email?: string } | null }): string | null =>
+	candidate.email ?? candidate.profile?.email ?? null;
 
 // The name from the CV, or the file name until the CV has been read (or when it has no name on it).
 export const candidateName = ({ name, fileName }: Pick<CandidateSummary, "name" | "fileName">) =>

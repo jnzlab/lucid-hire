@@ -259,6 +259,8 @@ function fakeCandidate(fields: Partial<FakeCandidate> & { id: string }): FakeCan
 	return {
 		jobId: "job_1",
 		fileName: `${fields.id}.pdf`,
+		source: "upload",
+		email: null,
 		status: "scored",
 		decision: "undecided",
 		name: null,
@@ -2278,6 +2280,15 @@ describe("candidates", () => {
 			expect(open).toHaveBeenCalledTimes(2);
 			expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1);
 			expect(candidates[0].decidedAt).toBe(decided);
+		});
+
+		it("writes to the address an applicant gave, and says they applied through the job page", async () => {
+			candidates = [grace({ profile, source: "apply", email: "grace.applied@example.com" })];
+			renderAt("/dashboard/jobs/job_1/candidates/cand_grace");
+
+			expect(await screen.findByRole("link", { name: "grace.applied@example.com" })).toBeTruthy();
+			expect(screen.queryByRole("link", { name: "grace@example.com" })).toBeNull();
+			expect(screen.getByText("Applied through the job page")).toBeTruthy();
 		});
 
 		it("has no Onboard for a CV that is not scored yet", async () => {

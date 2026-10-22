@@ -471,6 +471,30 @@ describe("GET /jobs/:jobId/candidates", () => {
 		expect(((await unranked.json()) as { candidate: CandidateJson }).candidate).toMatchObject({ rank: null, rankedCount: 0 });
 	});
 
+	it("prefers the address an applicant gave over the one on their CV, everywhere", async () => {
+		const jobId = await createJob();
+		const cvProfile = { email: "cv@example.com", links: [], skills: [], experience: [], education: [], certifications: [] };
+		const applied = await seed(jobId, { status: "scored", score: 70, scoredAt: new Date(), source: "apply", email: "applied@example.com", profile: cvProfile });
+		const uploaded = await seed(jobId, { status: "scored", score: 60, scoredAt: new Date(), profile: cvProfile });
+
+		const { candidates: list } = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates`)).json()) as {
+			candidates: (CandidateJson & { email: string | null; source: string })[];
+		};
+		expect(list.find((c) => c.id === applied)).toMatchObject({ source: "apply", email: "applied@example.com" });
+		expect(list.find((c) => c.id === uploaded)).toMatchObject({ source: "upload", email: "cv@example.com" });
+
+		const detail = await send("user_admin", "GET", `/jobs/${jobId}/candidates/${applied}`);
+		expect(((await detail.json()) as { candidate: unknown }).candidate).toMatchObject({
+			email: "applied@example.com",
+			profile: { email: "cv@example.com" },
+		});
+
+		const csv = await (await send("user_admin", "GET", `/jobs/${jobId}/candidates/export.csv`)).text();
+		expect(csv).toContain("applied@example.com");
+		expect(csv.split("\r\n")[1]).toContain("applied@example.com");
+		expect(csv.split("\r\n")[2]).toContain("cv@example.com");
+	});
+
 	it("gives the list what it searches and shows: summary, email, every requirement and whether there is a note", async () => {
 		const jobId = await createJob();
 		const full = await seed(jobId, {

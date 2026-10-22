@@ -99,7 +99,8 @@ function StillReading({ candidate, retry }: { candidate: Candidate; retry: React
 	);
 }
 
-// The email from the CV, or a note that there is none, and "Onboard" when there is one to write to.
+// The applicant's email (or the one on the CV), or a note that there is none, and "Onboard" when there is one to
+// write to.
 function Contact({ candidate, jobId, jobTitle }: { candidate: Candidate; jobId: string; jobTitle: string | undefined }) {
 	const org = useOrg();
 	const decide = useDecideCandidate(jobId, candidate.id);
@@ -130,6 +131,9 @@ function Contact({ candidate, jobId, jobTitle }: { candidate: Candidate; jobId: 
 				<button type="button" className="btn ghost" onClick={onboard}>
 					Onboard
 				</button>
+			)}
+			{candidate.source === "apply" && (
+				<span className="rounded-full bg-paper px-2.5 py-0.5 font-mono text-[12px] text-ink-2">Applied through the job page</span>
 			)}
 			<p aria-live="polite" className="font-mono text-[12.5px] text-ink-muted empty:hidden">
 				{opened && "Gmail draft opened. Marked as shortlisted."}

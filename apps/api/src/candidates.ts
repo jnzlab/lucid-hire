@@ -52,7 +52,11 @@ export type CandidateSummary = {
 	summary: string | null;
 	// Whether a recruiter has written a note. The note itself stays on the candidate.
 	hasNote: boolean;
-	// Just the email from the CV, which the list shows and searches; the rest of the profile is on the candidate.
+	// Where the CV came from: a recruiter's upload, or the applicant through the job's public page.
+	source: "upload" | "apply";
+	// The address the applicant gave when applying, else the one on the CV. The list shows and searches it.
+	email: string | null;
+	// Just the email from the CV; the rest of the profile is on the candidate.
 	profile: { email?: string } | null;
 	error: string | null;
 	canRetry: boolean;
@@ -84,7 +88,9 @@ const summaryColumns = {
 	requirements: candidates.requirements,
 	summary: candidates.summary,
 	hasNote: sql<number>`${candidates.note} is not null`,
-	email: sql<string | null>`json_extract(${candidates.profile}, '$.email')`,
+	source: candidates.source,
+	email: sql<string | null>`coalesce(${candidates.email}, json_extract(${candidates.profile}, '$.email'))`,
+	cvEmail: sql<string | null>`json_extract(${candidates.profile}, '$.email')`,
 	runs: candidates.runs,
 	error: candidates.error,
 	createdAt: candidates.createdAt,
@@ -100,9 +106,10 @@ const candidateColumns = {
 };
 
 // What the select returns: the table's columns, plus the two computed ones.
-type SummaryRow = Pick<typeof candidates.$inferSelect, Exclude<keyof typeof summaryColumns, "hasNote" | "email">> & {
+type SummaryRow = Pick<typeof candidates.$inferSelect, Exclude<keyof typeof summaryColumns, "hasNote" | "email" | "cvEmail">> & {
 	hasNote: number;
 	email: string | null;
+	cvEmail: string | null;
 };
 type CandidateRow = SummaryRow & Pick<typeof candidates.$inferSelect, "profile" | "fileSize" | "note" | "decidedAt">;
 
@@ -138,7 +145,9 @@ function toSummary(row: SummaryRow, rank: number | null = null): CandidateSummar
 		checks: requirements.map(({ label, met, importance }) => ({ label, met, importance })),
 		summary: row.summary,
 		hasNote: Boolean(row.hasNote),
-		profile: row.email ? { email: row.email } : null,
+		source: row.source,
+		email: row.email,
+		profile: row.cvEmail ? { email: row.cvEmail } : null,
 		error: row.error,
 		canRetry: isRetryable(row.status, row.updatedAt) && row.runs < MAX_SCORING_RUNS,
 		createdAt: row.createdAt,
@@ -222,7 +231,7 @@ export async function listForExport(
 	orgId: string,
 	jobId: string,
 	decision: Decision | "all",
-): Promise<(Candidate & { email: string | null; phone: string | null })[]> {
+): Promise<(Candidate & { phone: string | null })[]> {
 	const rows = await db
 		.select(candidateColumns)
 		.from(candidates)
@@ -234,7 +243,6 @@ export async function listForExport(
 		.filter(({ row }) => decision === "all" || row.decision === decision)
 		.map(({ row, place }) => ({
 			...toCandidate(row, place, rank),
-			email: row.profile?.email ?? null,
 			phone: row.profile?.phone ?? null,
 		}));
 }

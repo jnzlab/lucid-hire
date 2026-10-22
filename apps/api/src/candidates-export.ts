@@ -43,7 +43,7 @@ const label = (decision: string) => decision.charAt(0).toUpperCase() + decision.
 const iso = (date: Date | null) => (date ? date.toISOString() : "");
 
 // The rows of the file: CRLF between records, a BOM first so Excel reads the UTF-8 and a trailing line break.
-export function buildCsv(rows: (Candidate & { email: string | null; phone: string | null })[]): string {
+export function buildCsv(rows: (Candidate & { phone: string | null })[]): string {
 	const lines = rows.map((c) => {
 		const requirements = c.requirements ?? [];
 		return [

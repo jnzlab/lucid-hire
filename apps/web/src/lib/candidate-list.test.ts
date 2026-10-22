@@ -19,6 +19,8 @@ function candidate(fields: Partial<CandidateSummary> & { id: string }): Candidat
 		checks: [],
 		summary: null,
 		hasNote: false,
+		source: "upload",
+		email: null,
 		profile: null,
 		error: null,
 		canRetry: false,
