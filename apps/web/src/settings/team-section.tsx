@@ -84,7 +84,17 @@ function InviteBox() {
 	const invites = useInvites(true);
 	const revoke = useRevokeInvite();
 	const [copied, setCopied] = useState<"copied" | "failed" | null>(null);
+	const [revoked, setRevoked] = useState(false);
 	const created = create.data;
+
+	// A revoked link is dead, so the one just created stops being offered for copying when it is revoked.
+	const revokeInvite = (id: string) =>
+		revoke.mutate(id, {
+			onSuccess: () => {
+				setRevoked(true);
+				if (id === created?.id) create.reset();
+			},
+		});
 
 	const copy = async () => {
 		if (!created) return;
@@ -110,6 +120,7 @@ function InviteBox() {
 					onClick={() => {
 						if (create.isPending) return;
 						setCopied(null);
+						setRevoked(false);
 						create.mutate();
 					}}
 				>
@@ -143,12 +154,16 @@ function InviteBox() {
 				</div>
 			)}
 
+			<p role="status" className={`font-mono text-[12.5px] text-ink-muted ${revoked ? "mt-3" : ""}`}>
+				{revoked ? "Invite revoked. Its link no longer works." : ""}
+			</p>
+
 			{invites.data && invites.data.length > 0 && (
 				<div className="mt-5">
 					<h4 className="text-[14px] font-semibold">Pending invites</h4>
 					<ul className="mt-1">
 						{invites.data.map((invite) => (
-							<PendingRow key={invite.id} invite={invite} busy={revoke.isPending && revoke.variables === invite.id} onRevoke={() => revoke.mutate(invite.id)} />
+							<PendingRow key={invite.id} invite={invite} busy={revoke.isPending && revoke.variables === invite.id} onRevoke={() => revokeInvite(invite.id)} />
 						))}
 					</ul>
 					{revoke.isError && (

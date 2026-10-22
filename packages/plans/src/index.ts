@@ -14,12 +14,17 @@ export type PlanConfig = {
 	jobsPerMonth: number | null;
 	aiPerHour: number;
 	queueLabel: string;
+	// How many seconds earlier than it arrived a CV counts in the reading queue; the paid plans jump ahead.
+	queueHeadStartSec: number;
 };
 
+// CVs of one company read at the same time, on every plan.
+export const COMPANY_SCORING_CAP = 5;
+
 export const PLANS: Record<PlanKey, PlanConfig> = {
-	free: { key: "free", name: "Free", priceUsd: 0, cvsPerJob: 10, jobsPerMonth: 10, aiPerHour: 30, queueLabel: "Standard reading queue" },
-	pro: { key: "pro", name: "Pro", priceUsd: 10, cvsPerJob: 100, jobsPerMonth: 20, aiPerHour: 150, queueLabel: "Priority in the reading queue" },
-	max: { key: "max", name: "Max", priceUsd: 30, cvsPerJob: 1000, jobsPerMonth: null, aiPerHour: 600, queueLabel: "First in the reading queue" },
+	free: { key: "free", name: "Free", priceUsd: 0, cvsPerJob: 10, jobsPerMonth: 10, aiPerHour: 30, queueLabel: "Standard reading queue", queueHeadStartSec: 0 },
+	pro: { key: "pro", name: "Pro", priceUsd: 10, cvsPerJob: 100, jobsPerMonth: 20, aiPerHour: 150, queueLabel: "Priority in the reading queue", queueHeadStartSec: 300 },
+	max: { key: "max", name: "Max", priceUsd: 30, cvsPerJob: 1000, jobsPerMonth: null, aiPerHour: 600, queueLabel: "First in the reading queue", queueHeadStartSec: 1800 },
 };
 
 export const PAID_PLAN_KEYS = ["pro", "max"] as const;

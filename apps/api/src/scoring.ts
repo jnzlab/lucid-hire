@@ -1,6 +1,8 @@
 import { eq, sql } from "drizzle-orm";
+import { COMPANY_SCORING_CAP, PLANS } from "@lucid-hire/plans";
 import { recordAiUsage } from "./ai.ts";
-import { computeScore } from "./candidates.ts";
+import { STALE_SCORING_MS, computeScore } from "./candidates.ts";
+import { GLOBAL_SCORING_CAP } from "./config.ts";
 import { type CvScore, type CvScorer, isUnreadableFileError } from "./cv-scorer.ts";
 import type { Db } from "./db/client.ts";
 import { candidates, jobs } from "./db/schema.ts";
@@ -11,9 +13,13 @@ import { candidates, jobs } from "./db/schema.ts";
 export const CV_SCORE_OPERATION = "cv_score";
 export const UNREADABLE_MESSAGE = "We couldn't read this file as a CV.";
 export const SCORING_FAILED_MESSAGE = "Scoring failed. Try again.";
+export const QUEUE_FULL_MESSAGE = "The reading queue is full. Try again in a few minutes.";
 
 // A failure that retrying can't fix. The Workflow turns it into a NonRetryableError.
 export class PermanentScoringError extends Error {}
+
+// No slot came free within the wait limit. Retrying later usually works.
+export class QueueTimeoutError extends Error {}
 
 // What the "score" step returns to the Workflow: small JSON, well under the 1 MiB step limit.
 export type ScoreStepOutput = {
@@ -21,14 +27,57 @@ export type ScoreStepOutput = {
 	usage: { inputTokens: number | null; outputTokens: number | null };
 };
 
-// False when the candidate was deleted before its run started, so the Workflow can stop quietly.
-export async function markScoring(db: Db, candidateId: string): Promise<boolean> {
-	const updated = await db
-		.update(candidates)
-		.set({ status: "scoring" })
-		.where(eq(candidates.id, candidateId))
-		.returning({ id: candidates.id });
+// How long a waiting CV vouches for its place in the queue: a waiter that hasn't refreshed `updated_at` this
+// recently is a dead Workflow, and must not hold anyone up.
+export const WAITER_LIVE_MS = 60 * 1000;
+
+// Begins a CV's run: its place in the queue is the time now, minus the head start of its company's plan. Each run
+// is a new Workflow instance, so a retry gets a fresh place. False when the candidate was deleted.
+export async function enterQueue(db: Db, candidateId: string, now: number = Date.now()): Promise<boolean> {
+	const headStartMs = sql`(SELECT CASE (CASE WHEN o.subscription_status IN ('active', 'trialing', 'past_due')
+			AND o.current_period_end > ${now} THEN o.plan ELSE 'free' END)
+		WHEN 'max' THEN ${PLANS.max.queueHeadStartSec * 1000} WHEN 'pro' THEN ${PLANS.pro.queueHeadStartSec * 1000}
+		ELSE ${PLANS.free.queueHeadStartSec * 1000} END FROM organizations o WHERE o.id = candidates.org_id)`;
+	const updated = await db.all<{ id: string }>(sql`UPDATE candidates
+		SET queue_priority_at = ${now} - COALESCE(${headStartMs}, 0), updated_at = ${now}
+		WHERE id = ${candidateId} AND status IN ('queued', 'scoring')
+		RETURNING id`);
 	return updated.length > 0;
+}
+
+export type SlotResult = "started" | "waiting" | "gone";
+
+// Takes a reading slot in ONE guarded UPDATE (queued -> scoring), so two Workflows can't both take the last one:
+// the company has fewer than COMPANY_SCORING_CAP CVs scoring, fewer than GLOBAL_SCORING_CAP overall, and no other
+// live waiter is ahead of this CV while its own company still has room. Scoring rows that went stale are dead
+// Workflows and hold no slot. A CV that has to wait gets a heartbeat instead, so the stale rule never fails it.
+export async function takeSlot(db: Db, candidateId: string, now: number = Date.now()): Promise<SlotResult> {
+	const staleBefore = now - STALE_SCORING_MS;
+	const liveAfter = now - WAITER_LIVE_MS;
+	const priority = (alias: string) => sql.raw(`COALESCE(${alias}.queue_priority_at, ${alias}.created_at)`);
+	const reading = (alias: string) => sql`${sql.raw(alias)}.status = 'scoring' AND ${sql.raw(alias)}.updated_at > ${staleBefore}`;
+
+	// "Scoring" counts exclude this CV: a retried step finds it already scoring and must not count itself.
+	const started = await db.all<{ id: string }>(sql`UPDATE candidates
+		SET status = 'scoring', updated_at = ${now}
+		WHERE id = ${candidateId} AND status IN ('queued', 'scoring')
+		AND (SELECT count(*) FROM candidates s WHERE s.org_id = candidates.org_id AND s.id != candidates.id
+			AND ${reading("s")}) < ${COMPANY_SCORING_CAP}
+		AND (SELECT count(*) FROM candidates s WHERE s.id != candidates.id AND ${reading("s")}) < ${GLOBAL_SCORING_CAP}
+		AND NOT EXISTS (
+			SELECT 1 FROM candidates w
+			WHERE w.status = 'queued' AND w.id != candidates.id AND w.updated_at > ${liveAfter}
+			AND (${priority("w")} < ${priority("candidates")}
+				OR (${priority("w")} = ${priority("candidates")} AND w.id < candidates.id))
+			AND (SELECT count(*) FROM candidates s WHERE s.org_id = w.org_id AND ${reading("s")}) < ${COMPANY_SCORING_CAP}
+		)
+		RETURNING id`);
+	if (started.length > 0) return "started";
+
+	const waiting = await db.all<{ id: string }>(sql`UPDATE candidates SET updated_at = ${now}
+		WHERE id = ${candidateId} AND status = 'queued'
+		RETURNING id`);
+	return waiting.length > 0 ? "waiting" : "gone";
 }
 
 export async function scoreCandidate(
@@ -118,6 +167,7 @@ export async function saveScore(db: Db, candidateId: string, { result, usage }: 
 export function failureMessage(error: unknown): string {
 	const permanent =
 		error instanceof PermanentScoringError || (error instanceof Error && error.name === "NonRetryableError");
+	if (error instanceof QueueTimeoutError) return QUEUE_FULL_MESSAGE;
 	return permanent ? UNREADABLE_MESSAGE : SCORING_FAILED_MESSAGE;
 }
 

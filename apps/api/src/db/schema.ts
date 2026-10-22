@@ -161,6 +161,9 @@ export const candidates = sqliteTable(
 			.default(sql`(unixepoch('subsec') * 1000)`)
 			.$onUpdate(() => new Date()),
 		scoredAt: integer("scored_at", { mode: "timestamp_ms" }),
+		// Where this CV stands in the reading queue (ms; earlier goes first): when its run began, minus its plan's
+		// head start. Null until a run begins, and for old rows, which then count by `created_at`.
+		queuePriorityAt: integer("queue_priority_at", { mode: "timestamp_ms" }),
 		decision: text("decision", { enum: CANDIDATE_DECISIONS }).notNull().default("undecided"),
 		note: text("note"),
 		decidedAt: integer("decided_at", { mode: "timestamp_ms" }),
@@ -170,6 +173,8 @@ export const candidates = sqliteTable(
 	(t) => [
 		index("candidates_job_score_idx").on(t.jobId, t.score),
 		index("candidates_org_idx").on(t.orgId),
+		// The reading queue counts and orders the few CVs that are queued or scoring.
+		index("candidates_status_updated_idx").on(t.status, t.updatedAt),
 		// One application per email and job. Stored lower case, so the comparison is case-insensitive.
 		uniqueIndex("candidates_job_email_unique")
 			.on(t.jobId, t.email)

@@ -99,8 +99,9 @@ function newToken(): string {
 export async function createInvite(db: Db, orgId: string, userId: string, now: number = Date.now()) {
 	const token = newToken();
 	const expiresAt = new Date(now + INVITE_DAYS * 86_400_000);
-	await db.insert(invites).values({ tokenHash: await hashToken(token), orgId, createdBy: userId, expiresAt });
-	return { token, expiresAt };
+	const id = await hashToken(token);
+	await db.insert(invites).values({ tokenHash: id, orgId, createdBy: userId, expiresAt });
+	return { id, token, expiresAt };
 }
 
 export type PendingInvite = { id: string; createdAt: Date; expiresAt: Date; createdBy: string };

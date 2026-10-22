@@ -11,7 +11,7 @@ import {
 } from "./cv-scorer.ts";
 import { GEMINI_TEXT_MODEL } from "./ai.ts";
 import { type Db, getDb } from "./db/client.ts";
-import { aiUsage, candidates, jobs, usageCounters } from "./db/schema.ts";
+import { aiUsage, candidates, jobs, organizations, usageCounters } from "./db/schema.ts";
 import { createOrgForUser } from "./orgs.ts";
 import {
 	PermanentScoringError,
@@ -19,7 +19,11 @@ import {
 	UNREADABLE_MESSAGE,
 	failureMessage,
 	markFailed,
-	markScoring,
+	QUEUE_FULL_MESSAGE,
+	QueueTimeoutError,
+	WAITER_LIVE_MS,
+	enterQueue,
+	takeSlot,
 	saveScore,
 	scoreCandidate,
 } from "./scoring.ts";
@@ -211,12 +215,150 @@ describe("isUnreadableFileError", () => {
 	});
 });
 
-describe("markScoring", () => {
-	it("sets the status to scoring, and says so when the candidate is gone", async () => {
+// A queued CV of any company, with the queue columns set directly.
+async function seedQueued(
+	org: string,
+	{ priorityAt = Date.now(), updatedAt = new Date(), status = "queued" as "queued" | "scoring" } = {},
+) {
+	const id = crypto.randomUUID();
+	await db.insert(candidates).values({
+		id,
+		orgId: org,
+		jobId: org === orgId ? jobId : `job-${org}`,
+		fileKey: `${org}/${id}.pdf`,
+		fileName: "cv.pdf",
+		fileSize: 1,
+		createdBy: "user_admin",
+		status,
+		queuePriorityAt: new Date(priorityAt),
+		updatedAt,
+	});
+	return id;
+}
+
+describe("the reading queue", () => {
+	let otherOrg: string;
+	let thirdOrg: string;
+
+	beforeAll(async () => {
+		otherOrg = (await createOrgForUser(db, "user_other", "Other")).org.id;
+		thirdOrg = (await createOrgForUser(db, "user_third", "Third")).org.id;
+		for (const org of [otherOrg, thirdOrg]) {
+			await db.insert(jobs).values({
+				id: `job-${org}`,
+				orgId: org,
+				createdBy: "user_admin",
+				title: "Role",
+				description: "A role description that is long enough",
+				status: "open",
+			});
+		}
+	});
+
+	// Every test begins with an empty queue.
+	beforeEach(async () => {
+		await db.delete(candidates);
+	});
+
+	it("takes a slot (queued to scoring), and says so when the candidate is gone", async () => {
 		const id = await seedCandidate();
-		expect(await markScoring(db, id)).toBe(true);
+		expect(await takeSlot(db, id)).toBe("started");
 		expect((await rowOf(id)).status).toBe("scoring");
-		expect(await markScoring(db, "deleted")).toBe(false);
+		// A retried step finds the CV already scoring and still succeeds.
+		expect(await takeSlot(db, id)).toBe("started");
+		expect(await takeSlot(db, "deleted")).toBe("gone");
+	});
+
+	it("lets a company read five CVs at a time and holds the sixth", async () => {
+		for (let i = 0; i < 5; i++) await seedQueued(orgId, { status: "scoring" });
+		const sixth = await seedQueued(orgId);
+		const other = await seedQueued(otherOrg);
+
+		expect(await takeSlot(db, sixth)).toBe("waiting");
+		expect((await rowOf(sixth)).status).toBe("queued");
+		// Another company is not held up by it.
+		expect(await takeSlot(db, other)).toBe("started");
+	});
+
+	it("frees a slot when a CV is scored or failed", async () => {
+		const running = await Promise.all(Array.from({ length: 5 }, () => seedQueued(orgId, { status: "scoring" })));
+		const waiting = await seedQueued(orgId);
+		expect(await takeSlot(db, waiting)).toBe("waiting");
+
+		await markFailed(db, running[0], "x");
+		expect(await takeSlot(db, waiting)).toBe("started");
+	});
+
+	it("holds back everyone once ten CVs are being read across companies", async () => {
+		for (let i = 0; i < 5; i++) await seedQueued(orgId, { status: "scoring" });
+		for (let i = 0; i < 5; i++) await seedQueued(otherOrg, { status: "scoring" });
+		const third = await seedQueued(thirdOrg);
+		expect(await takeSlot(db, third)).toBe("waiting");
+	});
+
+	it("serves the better place first when slots are scarce", async () => {
+		// Nine reading, one slot left, and two waiters from different companies.
+		for (let i = 0; i < 5; i++) await seedQueued(orgId, { status: "scoring" });
+		for (let i = 0; i < 4; i++) await seedQueued(otherOrg, { status: "scoring" });
+		const now = Date.now();
+		const early = await seedQueued(otherOrg, { priorityAt: now - 300_000 });
+		const late = await seedQueued(thirdOrg, { priorityAt: now });
+
+		expect(await takeSlot(db, late)).toBe("waiting");
+		expect(await takeSlot(db, early)).toBe("started");
+	});
+
+	it("does not let a better waiter whose own company is full block others", async () => {
+		for (let i = 0; i < 5; i++) await seedQueued(orgId, { status: "scoring" });
+		const now = Date.now();
+		await seedQueued(orgId, { priorityAt: now - 600_000 });
+		const other = await seedQueued(otherOrg, { priorityAt: now });
+		expect(await takeSlot(db, other)).toBe("started");
+	});
+
+	it("ignores a waiter that stopped refreshing, and a scoring row that went stale", async () => {
+		const now = Date.now();
+		await seedQueued(otherOrg, { priorityAt: now - 600_000, updatedAt: new Date(now - WAITER_LIVE_MS - 5_000) });
+		for (let i = 0; i < 5; i++) await seedQueued(orgId, { status: "scoring", updatedAt: new Date(now - 21 * 60_000) });
+		const id = await seedQueued(orgId, { priorityAt: now });
+		expect(await takeSlot(db, id)).toBe("started");
+	});
+
+	it("breaks a tie by id, so two equal waiters never both wait or both go", async () => {
+		for (let i = 0; i < 5; i++) await seedQueued(orgId, { status: "scoring" });
+		for (let i = 0; i < 4; i++) await seedQueued(otherOrg, { status: "scoring" });
+		const at = Date.now();
+		const ids = [await seedQueued(otherOrg, { priorityAt: at }), await seedQueued(thirdOrg, { priorityAt: at })].sort();
+		expect(await takeSlot(db, ids[1])).toBe("waiting");
+		expect(await takeSlot(db, ids[0])).toBe("started");
+	});
+
+	it("refreshes updated_at while a CV waits, so the stale rule leaves it alone", async () => {
+		for (let i = 0; i < 5; i++) await seedQueued(orgId, { status: "scoring" });
+		const old = new Date(Date.now() - 19 * 60_000);
+		const id = await seedQueued(orgId, { updatedAt: old });
+		expect(await takeSlot(db, id)).toBe("waiting");
+		expect((await rowOf(id)).updatedAt.getTime()).toBeGreaterThan(old.getTime() + 60_000);
+	});
+
+	it("puts a CV ahead by its plan's head start", async () => {
+		const [free, pro, max] = [orgId, otherOrg, thirdOrg];
+		await db.update(organizations).set({ plan: "pro", subscriptionStatus: "active", currentPeriodEnd: 1_900_000_000_000 }).where(eq(organizations.id, pro));
+		await db.update(organizations).set({ plan: "max", subscriptionStatus: "active", currentPeriodEnd: 1_900_000_000_000 }).where(eq(organizations.id, max));
+		const ids = [await seedQueued(free), await seedQueued(pro), await seedQueued(max)];
+		const now = 1_800_000_000_000;
+		for (const id of ids) expect(await enterQueue(db, id, now)).toBe(true);
+		const at = await Promise.all(ids.map(async (id) => (await rowOf(id)).queuePriorityAt?.getTime()));
+		expect(at).toEqual([now, now - 300_000, now - 1_800_000]);
+		// An expired paid plan counts as Free.
+		await db.update(organizations).set({ currentPeriodEnd: now - 1 }).where(eq(organizations.id, max));
+		await enterQueue(db, ids[2], now);
+		expect((await rowOf(ids[2])).queuePriorityAt?.getTime()).toBe(now);
+		expect(await enterQueue(db, "deleted")).toBe(false);
+	});
+
+	it("names a full queue in the failure message", () => {
+		expect(failureMessage(new QueueTimeoutError("x"))).toBe(QUEUE_FULL_MESSAGE);
 	});
 });
 
@@ -282,7 +424,7 @@ describe("scoreCandidate", () => {
 describe("saveScore", () => {
 	it("stores the result with the score we computed, and records the usage", async () => {
 		const id = await seedCandidate();
-		await markScoring(db, id);
+		await takeSlot(db, id);
 		const mark = await usageMark();
 		await saveScore(db, id, { result: score, usage: { inputTokens: 1200, outputTokens: 340 } });
 

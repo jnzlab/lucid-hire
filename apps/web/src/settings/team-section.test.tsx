@@ -64,7 +64,7 @@ beforeEach(() => {
 		if (path === "/team/invites" && method === "GET") return Response.json({ invites });
 		if (path === "/team/invites" && method === "POST") {
 			invites.push({ id: "hash_1", createdAt: "2026-10-22T10:00:00.000Z", expiresAt: "2026-10-29T10:00:00.000Z", createdBy: "user_1" });
-			return Response.json({ url: "https://lucidhire.io/invite/tok_abc", expiresAt: "2026-10-29T10:00:00.000Z" }, { status: 201 });
+			return Response.json({ id: "hash_1", url: "https://lucidhire.io/invite/tok_abc", expiresAt: "2026-10-29T10:00:00.000Z" }, { status: 201 });
 		}
 		if (path.startsWith("/team/invites/") && method === "DELETE") {
 			invites = invites.filter((invite) => invite.id !== path.split("/")[3]);
@@ -190,6 +190,10 @@ describe("inviting a teammate", () => {
 		fireEvent.click(within(section).getByRole("button", { name: /Revoke the invite/ }));
 		await waitFor(() => expect(within(section).queryByText(/Link created/)).toBeNull());
 		expect(fetchMock).toHaveBeenCalledWith("http://localhost:8787/team/invites/hash_1", expect.objectContaining({ method: "DELETE" }));
+		// The revoked link is no longer offered, and the page says why.
+		expect(within(section).queryByLabelText("Invite link")).toBeNull();
+		expect(within(section).getByText("Invite revoked. Its link no longer works.")).toBeTruthy();
+		expect(within(section).getByRole("button", { name: "Create invite link" })).toBeTruthy();
 	});
 
 	it("says when the link can't be copied automatically", async () => {
