@@ -115,6 +115,16 @@ describe("verifyWebhook", () => {
 		expect(await verifyWebhook(SECRET, { id: "evt", timestamp: ts, signature: `v1,AAAA ${sig}` }, "{}", now)).toBe("ok");
 	});
 
+	it("accepts a Standard Webhooks whsec_ secret, keyed by its decoded bytes (the spec's own example)", async () => {
+		// From the Standard Webhooks specification; Polar issues secrets in this form for new endpoints.
+		const secret = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw";
+		const headers = { id: "msg_p5jXN8AQM9LWM0D4loKWxJek", timestamp: "1614265330", signature: "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=" };
+		const body = '{"test": 2432232314}';
+		expect(await verifyWebhook(secret, headers, body, 1614265330 * 1000)).toBe("ok");
+		expect(await verifyWebhook(secret, headers, '{"test": 1}', 1614265330 * 1000)).toBe("bad_signature");
+		expect(await verifyWebhook("whsec_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", headers, body, 1614265330 * 1000)).toBe("bad_signature");
+	});
+
 	it("rejects a wrong secret, a changed body, missing headers and garbage", async () => {
 		const sig = await signWebhook(SECRET, "evt", Number(ts), "{}");
 		expect(await verifyWebhook("other", { id: "evt", timestamp: ts, signature: sig }, "{}", now)).toBe("bad_signature");
