@@ -33,6 +33,8 @@ vi.mock("@clerk/react", () => ({
 	Show: () => null,
 	SignIn: () => null,
 	SignUp: () => null,
+	ClerkLoading: () => null,
+	ClerkFailed: () => null,
 }));
 
 type Org = { id: string; name: string; role: "admin" | "member" };
@@ -407,6 +409,16 @@ describe("signing in for the first time", () => {
 			}),
 		);
 	});
+
+	it("shows the company name on a sample job page as it is typed, on the second sign-up step", async () => {
+		renderAt("/onboarding");
+		const input = await screen.findByLabelText("Company name");
+		expect(screen.getByRole("list", { name: "Sign-up, step 2 of 2" })).toBeTruthy();
+		expect(screen.getByRole("img", { name: /^A sample job page: your company is hiring/ })).toBeTruthy();
+
+		fireEvent.change(input, { target: { value: "  Sprite   Labs " } });
+		expect(screen.getByRole("img", { name: /^A sample job page: Sprite Labs is hiring/ })).toBeTruthy();
+	});
 });
 
 describe("deep links", () => {
@@ -479,6 +491,16 @@ describe("signed-out visitors", () => {
 		renderAt("/onboarding");
 		expect(await screen.findByText("Redirecting to sign in")).toBeTruthy();
 		expect(fetchMock).not.toHaveBeenCalled();
+	});
+	// jsdom has no matchMedia, so the stages start finished, as they do with reduced motion.
+	it("see the sample shortlist on sign-in as it ends, with the new application in second place", async () => {
+		session.signedIn = false;
+		renderAt("/sign-in");
+
+		const stage = await screen.findByRole("img", { name: /^A sample shortlist for a Senior iOS Engineer job/ });
+		expect(stage.getAttribute("aria-label")).toContain("Sophia Carter applied while you were away, scored 81 and moved up to second");
+		expect(within(stage).getByText("Sophia Carter moves up to 2nd")).toBeTruthy();
+		expect(screen.getByRole("heading", { level: 1, name: "Welcome back. Your shortlist is waiting." })).toBeTruthy();
 	});
 });
 
@@ -1481,6 +1503,21 @@ describe("choosing a plan before signing up", () => {
 		renderAt("/");
 		expect((await screen.findByRole("link", { name: "Choose Max" })).getAttribute("href")).toBe("/dashboard/settings?upgrade=max");
 		expect(screen.getByRole("link", { name: "Start free" }).getAttribute("href")).toBe("/dashboard");
+	});
+
+	it("says on sign-up which plan was picked, also on Clerk's later steps, and nothing when none was", async () => {
+		session.signedIn = false;
+		renderAt("/sign-up");
+		expect(await screen.findByRole("list", { name: "Sign-up, step 1 of 2" })).toBeTruthy();
+		expect(screen.queryByText(/You picked/)).toBeNull();
+		cleanup();
+
+		renderAt("/sign-up?plan=pro");
+		expect((await screen.findByText(/You picked/)).textContent).toBe("You picked Pro · $10 a month, paid only when you upgrade");
+		cleanup();
+
+		renderAt("/sign-up/verify-email-address");
+		expect((await screen.findByText(/You picked/)).textContent).toContain("Pro");
 	});
 
 	it("keeps the plan through sign-up and onboarding, then highlights it without asking for payment", async () => {

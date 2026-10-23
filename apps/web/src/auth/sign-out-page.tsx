@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
 import { AuthLayout } from "./auth-layout.tsx";
+import { ShortlistStage } from "./stages.tsx";
 
 type Status = "checking" | "working" | "done" | "already" | "failed";
 
@@ -51,12 +52,13 @@ export function SignOutPage() {
 				</>
 			}
 			lede="Your jobs and shortlists are saved, and they are here when you sign in again."
+			stage={<ShortlistStage live={false} />}
 		>
 			<section
 				aria-labelledby="signout-h"
-				className="w-full max-w-[440px] rounded-xl bg-sheet p-6 shadow-card min-[561px]:p-8"
+				className="w-full max-w-[400px]"
 			>
-				<h2 id="signout-h" className="text-[19px] leading-[1.2] font-[800] tracking-[-0.01em] [font-stretch:108%]">
+				<h2 id="signout-h" className="font-display text-[28px] leading-[1.1] font-[800] tracking-[-0.03em] [font-stretch:112%]">
 					{status === "failed" ? "We couldn't sign you out" : "Sign out"}
 				</h2>
 				<div role="status" aria-live="polite" className="mt-4 text-[15px] text-ink-2">

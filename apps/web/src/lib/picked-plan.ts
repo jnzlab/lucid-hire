@@ -12,6 +12,16 @@ export function rememberPickedPlan(plan: PaidPlanKey) {
 	}
 }
 
+// Reads the picked plan and keeps it, for showing it before onboarding uses it.
+export function peekPickedPlan(): PaidPlanKey | undefined {
+	try {
+		const plan = sessionStorage.getItem(KEY);
+		return isPaidPlanKey(plan) ? plan : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 // Reads the picked plan and forgets it, so it is used once.
 export function takePickedPlan(): PaidPlanKey | undefined {
 	try {
