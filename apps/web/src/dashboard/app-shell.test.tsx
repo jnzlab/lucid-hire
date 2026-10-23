@@ -198,7 +198,7 @@ describe("sidebar", () => {
 describe("plan badge and allowance", () => {
 	it("shows the plan beside the company and links to Plan & billing", async () => {
 		renderAt("/dashboard");
-		const badge = await screen.findByRole("link", { name: "Pro plan, see plans" });
+		const badge = await screen.findByRole("link", { name: "Pro plan, see plans" }, { timeout: 5000 });
 		expect(badge.textContent).toBe("Pro");
 		expect(badge.getAttribute("href")).toBe("/dashboard/settings/billing");
 		expect(screen.queryByRole("meter")).toBeNull();

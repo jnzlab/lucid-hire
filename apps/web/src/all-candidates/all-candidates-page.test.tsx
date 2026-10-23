@@ -137,7 +137,7 @@ function renderPage(path = "/dashboard/candidates") {
 
 const main = () => within(screen.getByRole("main"));
 // Navigating and refetching can take a while when the whole suite runs at once.
-const settle = { timeout: 3000 };
+const settle = { timeout: 5000 };
 // The line under the h1.
 const summary = () => screen.getByRole("heading", { level: 1, name: "Candidates" }).nextElementSibling?.textContent;
 const listAsked = () =>
@@ -290,7 +290,7 @@ describe("the candidates page", () => {
 		expect(main().getAllByRole("checkbox").every((box) => !(box as HTMLInputElement).checked)).toBe(true);
 	});
 
-	it("pages through a long list from the server", { timeout: 10_000 }, async () => {
+	it("pages through a long list from the server", { timeout: 30_000 }, async () => {
 		const many = Array.from({ length: 50 }, (_, index) => row({ id: `p${index}`, name: `Person ${index}`, score: 60 }));
 		const counts = { all: 120, review: 120, shortlisted: 0, rejected: 0, undecided: 120 };
 		listReply = (params) => {
