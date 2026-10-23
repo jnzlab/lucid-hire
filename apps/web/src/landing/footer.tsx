@@ -14,7 +14,7 @@ export function LandingFooter() {
 				</a>
 				<nav aria-label="Footer">
 					<a href="#story">The story</a>
-					<a href="#try">Try it</a>
+					<a href="#how">How it works</a>
 					<a href="#pricing">Pricing</a>
 					<a href="#faq">FAQ</a>
 					<Link to="/privacy">Privacy</Link>
