@@ -47,6 +47,12 @@ export async function createOrgForUser(
 	}
 }
 
+// Renames the company. Returns false when there is no such company.
+export async function renameOrg(db: Db, orgId: string, name: string): Promise<boolean> {
+	const renamed = await db.update(organizations).set({ name }).where(eq(organizations.id, orgId)).returning({ id: organizations.id });
+	return renamed.length > 0;
+}
+
 export function isUniqueViolation(error: unknown): boolean {
 	for (let e: unknown = error; e instanceof Error; e = e.cause) {
 		if (e.message.includes("UNIQUE constraint failed")) return true;

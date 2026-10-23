@@ -168,7 +168,7 @@ describe("POST /billing/checkout", () => {
 					external_customer_id: orgId,
 					customer_email: `${admin}@example.com`,
 					metadata: { org_id: orgId },
-					success_url: "https://lucidhire.io/dashboard/settings?checkout=success",
+					success_url: "https://lucidhire.io/dashboard/settings/billing?checkout=success",
 				},
 			},
 		]);
@@ -179,7 +179,7 @@ describe("POST /billing/checkout", () => {
 		polarReply = () => ({ status: 201, json: { url: "https://sandbox.polar.sh/checkout/abc" } });
 		await call(admin, "POST", "/billing/checkout", { plan: "pro" }, { origin: "http://localhost:5173" });
 		expect((polarCalls[0].body as { success_url: string }).success_url).toBe(
-			"http://localhost:5173/dashboard/settings?checkout=success",
+			"http://localhost:5173/dashboard/settings/billing?checkout=success",
 		);
 		await call(admin, "POST", "/billing/checkout", { plan: "pro" }, { origin: "https://evil.example" });
 		expect((polarCalls[1].body as { success_url: string }).success_url).toMatch(/^https:\/\/lucidhire\.io\//);

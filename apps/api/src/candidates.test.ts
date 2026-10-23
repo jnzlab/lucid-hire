@@ -337,7 +337,7 @@ describe("POST /jobs/:jobId/candidates", () => {
 		const res = await upload("user_admin", jobId, { fileName: "cv-11.pdf" });
 		expect(res.status).toBe(403);
 		expect(await res.json()).toEqual({
-			error: { code: "cv_limit", message: "This job has used its 10 free CVs", upgradeUrl: "/dashboard/settings#plan" },
+			error: { code: "cv_limit", message: "This job has used its 10 free CVs", upgradeUrl: "/dashboard/settings/billing" },
 		});
 		expect((await jobOf(jobId)).cvCount).toBe(10);
 		expect(creates).toHaveLength(10);

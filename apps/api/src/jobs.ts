@@ -1,7 +1,8 @@
-import { and, asc, count, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "./db/client.ts";
 import { JOB_STATUSES, type JobStatus, candidates, jobs } from "./db/schema.ts";
+import { countIf, isoOrNull, pipelineByJob, toCount } from "./pipeline.ts";
 import { limitSql } from "./plan-state.ts";
 import { monthPeriod, returnUnit, takeUnit } from "./usage.ts";
 
@@ -40,18 +41,28 @@ export const enhanceInput = z.object({ title: title.optional(), description });
 
 export const JOBS_PAGE_SIZE = 20;
 export const JOB_SEARCH_MAX = 100;
-export const JOB_SORTS = ["newest", "oldest", "title", "candidates"] as const;
+// `activity` is the latest CV first, `review` the most CVs waiting for a decision first.
+export const JOB_SORTS = ["newest", "oldest", "title", "candidates", "activity", "review"] as const;
 
-// The jobs list's filters, from the query string. A blank search means no search.
+// A search box's text from the query string: trimmed, inner whitespace collapsed, blank meaning no search.
+export const searchText = z
+	.string()
+	.transform((value) => value.trim().replace(/\s+/g, " "))
+	.pipe(z.string().max(JOB_SEARCH_MAX, { error: `Search for ${JOB_SEARCH_MAX} characters or fewer` }))
+	.default("");
+
+export const pageNumber = z.coerce
+	.number({ error: "Page must be a number" })
+	.int({ error: "Page must be a whole number" })
+	.min(1, { error: "Page starts at 1" })
+	.default(1);
+
+// The jobs list's filters, from the query string.
 export const listJobsQuery = z.object({
-	q: z
-		.string()
-		.transform((value) => value.trim().replace(/\s+/g, " "))
-		.pipe(z.string().max(JOB_SEARCH_MAX, { error: `Search for ${JOB_SEARCH_MAX} characters or fewer` }))
-		.default(""),
+	q: searchText,
 	status: z.enum(["all", ...JOB_STATUSES]).default("all"),
 	sort: z.enum(JOB_SORTS).default("newest"),
-	page: z.coerce.number({ error: "Page must be a number" }).int({ error: "Page must be a whole number" }).min(1, { error: "Page starts at 1" }).default(1),
+	page: pageNumber,
 });
 export type ListJobsQuery = z.output<typeof listJobsQuery>;
 
@@ -67,8 +78,22 @@ export type JobSummary = {
 	updatedAt: Date;
 };
 export type Job = JobSummary & { description: string };
-// What the list adds: how many of the job's CVs have been read and scored.
-export type JobListItem = JobSummary & { scoredCount: number };
+// What the list adds: the job's pipeline (counted as in pipeline.ts), its best scored CV and when its latest CV came in.
+export type JobListItem = JobSummary & {
+	scoredCount: number;
+	toReviewCount: number;
+	shortlistedCount: number;
+	rejectedCount: number;
+	readingCount: number;
+	failedCount: number;
+	// The best scored CV by the job's ranking, and its score.
+	topScore: number | null;
+	topCandidate: { id: string; name: string | null } | null;
+	// When the latest CV was uploaded (ISO), or null for a job without CVs.
+	lastCvAt: string | null;
+};
+// How many of the company's jobs match the search, by status, whatever the status filter.
+export type JobCounts = { all: number; open: number; draft: number; closed: number };
 
 const summaryColumns = {
 	id: jobs.id,
@@ -113,50 +138,99 @@ export function newSlug(title: string): string {
 // Every query is scoped to the company, so one company can never read or change another's jobs.
 export const inOrg = (orgId: string, id: string) => and(eq(jobs.id, id), eq(jobs.orgId, orgId));
 
-// `like` pattern for "contains", with the user's own % and _ taken literally.
-const containing = (text: string) => `%${text.replace(/[\\%_]/g, "\\$&")}%`;
+// `like` patterns for "contains" and "starts with", with the user's own % and _ taken literally.
+const escapeLike = (text: string) => text.replace(/[\\%_]/g, "\\$&");
+export const containing = (text: string) => `%${escapeLike(text)}%`;
+export const startingWith = (text: string) => `${escapeLike(text)}%`;
 
-// One page of the company's jobs, filtered and sorted, with the total that match. The scored count comes from a
-// single grouped subquery rather than a query per job. SQLite's `like` ignores case for plain letters.
+// The job's best scored CV by THE ranking (candidates.ts rankOrder), as JSON, from a subquery per row of the page. The
+// (job_id, score) index serves it, so a page of 20 jobs costs 20 index lookups, not a scan.
+const topCandidateJson = sql<string | null>`(select json_object('id', t.id, 'name', t.name, 'score', t.score)
+	from ${candidates} t where t.job_id = ${jobs.id} and t.status = 'scored' and t.score is not null
+	order by t.score desc, t.scored_at, t.created_at, t.id limit 1)`;
+
+// One page of the company's jobs, filtered and sorted, with the total that match and the per-status counts for the
+// search. The pipeline counts come from one grouped subquery rather than a query per job. SQLite's `like` ignores case
+// for plain letters.
 export async function listJobs(
 	db: Db,
 	orgId: string,
 	{ q, status, sort, page }: ListJobsQuery,
-): Promise<{ jobs: JobListItem[]; total: number }> {
+): Promise<{ jobs: JobListItem[]; total: number; counts: JobCounts }> {
 	const search = q ? containing(q) : null;
-	const filter = and(
+	const searched = and(
 		eq(jobs.orgId, orgId),
-		status === "all" ? undefined : eq(jobs.status, status),
 		search
 			? sql`(${jobs.title} like ${search} escape '\\' or ${jobs.description} like ${search} escape '\\')`
 			: undefined,
 	);
-	const scored = db
-		.select({ jobId: candidates.jobId, n: count().as("scored_n") })
-		.from(candidates)
-		.where(and(eq(candidates.orgId, orgId), eq(candidates.status, "scored")))
-		.groupBy(candidates.jobId)
-		.as("scored");
+	const filter = and(searched, status === "all" ? undefined : eq(jobs.status, status));
+	const pipeline = pipelineByJob(db, orgId);
+	const toReview = sql<number>`coalesce(${pipeline.toReview}, 0)`;
 	// The id breaks ties, so a page never repeats or skips a job.
 	const order = {
 		newest: [desc(jobs.createdAt), desc(jobs.id)],
 		oldest: [asc(jobs.createdAt), asc(jobs.id)],
 		title: [sql`${jobs.title} collate nocase asc`, desc(jobs.createdAt), desc(jobs.id)],
 		candidates: [desc(jobs.cvCount), desc(jobs.createdAt), desc(jobs.id)],
+		activity: [sql`${pipeline.lastCvAt} desc nulls last`, desc(jobs.createdAt), desc(jobs.id)],
+		review: [desc(toReview), desc(jobs.createdAt), desc(jobs.id)],
 	}[sort];
 
-	const [rows, [totals]] = await db.batch([
+	const [rows, [counted]] = await db.batch([
 		db
-			.select({ ...summaryColumns, scoredCount: sql<number>`coalesce(${scored.n}, 0)`.as("scored_count") })
+			.select({
+				...summaryColumns,
+				scoredCount: sql<number>`coalesce(${pipeline.scored}, 0)`.as("scored_count"),
+				toReviewCount: toReview.as("to_review_count"),
+				shortlistedCount: sql<number>`coalesce(${pipeline.shortlisted}, 0)`.as("shortlisted_count"),
+				rejectedCount: sql<number>`coalesce(${pipeline.rejected}, 0)`.as("rejected_count"),
+				readingCount: sql<number>`coalesce(${pipeline.reading}, 0)`.as("reading_count"),
+				failedCount: sql<number>`coalesce(${pipeline.failed}, 0)`.as("failed_count"),
+				lastCvAt: sql<number | null>`${pipeline.lastCvAt}`.as("last_cv_at"),
+				top: topCandidateJson.as("top_candidate"),
+			})
 			.from(jobs)
-			.leftJoin(scored, eq(scored.jobId, jobs.id))
+			.leftJoin(pipeline, eq(pipeline.jobId, jobs.id))
 			.where(filter)
 			.orderBy(...order)
 			.limit(JOBS_PAGE_SIZE)
 			.offset((page - 1) * JOBS_PAGE_SIZE),
-		db.select({ total: count() }).from(jobs).where(filter),
+		db
+			.select({
+				all: sql<number>`count(*)`.as("c_all"),
+				open: countIf("c_open", sql`${jobs.status} = 'open'`),
+				draft: countIf("c_draft", sql`${jobs.status} = 'draft'`),
+				closed: countIf("c_closed", sql`${jobs.status} = 'closed'`),
+			})
+			.from(jobs)
+			.where(searched),
 	]);
-	return { jobs: rows.map((row) => ({ ...row, scoredCount: Number(row.scoredCount) })), total: totals.total };
+	const counts: JobCounts = {
+		all: toCount(counted.all),
+		open: toCount(counted.open),
+		draft: toCount(counted.draft),
+		closed: toCount(counted.closed),
+	};
+	return {
+		jobs: rows.map(({ top, lastCvAt, ...row }) => {
+			const best = top ? (JSON.parse(top) as { id: string; name: string | null; score: number }) : null;
+			return {
+				...row,
+				scoredCount: toCount(row.scoredCount),
+				toReviewCount: toCount(row.toReviewCount),
+				shortlistedCount: toCount(row.shortlistedCount),
+				rejectedCount: toCount(row.rejectedCount),
+				readingCount: toCount(row.readingCount),
+				failedCount: toCount(row.failedCount),
+				topScore: best?.score ?? null,
+				topCandidate: best && { id: best.id, name: best.name },
+				lastCvAt: isoOrNull(lastCvAt),
+			};
+		}),
+		total: status === "all" ? counts.all : counts[status],
+		counts,
+	};
 }
 
 export async function getJob(db: Db, orgId: string, id: string): Promise<Job | null> {

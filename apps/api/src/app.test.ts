@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "./app.ts";
 import type { SessionVerifier } from "./auth.ts";
+import { getDb } from "./db/client.ts";
+import { members } from "./db/schema.ts";
+import { createOrgForUser, findOrgForUser } from "./orgs.ts";
 import { createTestD1 } from "./test/d1.ts";
 
 let env: Env;
@@ -149,6 +152,69 @@ describe("POST /orgs", () => {
 
 		const me = await app.request("/me", { headers: { authorization: "Bearer good-token" } }, env);
 		expect(await me.json()).toEqual({ userId: "user_123", org });
+	});
+});
+
+describe("PATCH /orgs/current", () => {
+	// Tokens are "t:<userId>" here, so an admin, a member and another company can each be signed in.
+	const asUser = createApp({
+		verifySession: async (token) => {
+			if (!token.startsWith("t:")) throw new Error("invalid token");
+			return { userId: token.slice(2) };
+		},
+	});
+	const rename = (user: string | null, body: unknown) =>
+		asUser.request(
+			"/orgs/current",
+			{
+				method: "PATCH",
+				headers: { ...(user ? { authorization: `Bearer t:${user}` } : {}), "content-type": "application/json" },
+				body: typeof body === "string" ? body : JSON.stringify(body),
+			},
+			env,
+		);
+	let orgId: string;
+
+	beforeAll(async () => {
+		const db = getDb(env.DB);
+		orgId = (await createOrgForUser(db, "user_rename_admin", "Sprite Labs")).org.id;
+		await db.insert(members).values({ orgId, userId: "user_rename_member", role: "member" });
+		await createOrgForUser(db, "user_rename_other", "Other Co");
+	});
+
+	it("lets an admin rename the company, tidied like onboarding, and /me reports the new name", async () => {
+		const res = await rename("user_rename_admin", { name: "  Sprite   Labs Ltd " });
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ org: { id: orgId, name: "Sprite Labs Ltd", role: "admin" } });
+
+		const me = await asUser.request("/me", { headers: { authorization: "Bearer t:user_rename_member" } }, env);
+		expect(await me.json()).toMatchObject({ org: { id: orgId, name: "Sprite Labs Ltd", role: "member" } });
+		// Only this company changed.
+		expect((await findOrgForUser(getDb(env.DB), "user_rename_other"))?.name).toBe("Other Co");
+	});
+
+	it("is for admins only, whatever the body", async () => {
+		for (const body of [{ name: "Member Co" }, { name: "" }]) {
+			const res = await rename("user_rename_member", body);
+			expect(res.status).toBe(403);
+			expect(await res.json()).toMatchObject({ error: { code: "forbidden" } });
+		}
+		expect((await findOrgForUser(getDb(env.DB), "user_rename_admin"))?.name).toBe("Sprite Labs Ltd");
+	});
+
+	it("rejects a missing, too short, too long or unparseable name", async () => {
+		for (const body of [{}, { name: " A " }, { name: "x".repeat(81) }, { name: 7 }, "not json"]) {
+			const res = await rename("user_rename_admin", body);
+			expect(res.status).toBe(400);
+			expect(await res.json()).toMatchObject({ error: { code: "invalid_name" } });
+		}
+	});
+
+	it("needs a session and a company", async () => {
+		expect((await rename(null, { name: "Nobody" })).status).toBe(401);
+		const res = await rename("user_without_org", { name: "Nobody" });
+		expect(res.status).toBe(403);
+		expect(await res.json()).toMatchObject({ error: { code: "no_org" } });
 	});
 });
 

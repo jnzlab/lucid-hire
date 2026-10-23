@@ -428,3 +428,124 @@ describe("POST /jobs/:id/duplicate", () => {
 		expect((await call("user_new", "POST", `/jobs/${acme.id}/duplicate`)).status).toBe(403);
 	});
 });
+
+describe("GET /jobs pipeline, activity and status counts", () => {
+	type Item = {
+		id: string;
+		title: string;
+		scoredCount: number;
+		toReviewCount: number;
+		shortlistedCount: number;
+		rejectedCount: number;
+		readingCount: number;
+		failedCount: number;
+		topScore: number | null;
+		topCandidate: { id: string; name: string | null } | null;
+		lastCvAt: string | null;
+	};
+	type List = { jobs: Item[]; total: number; counts: { all: number; open: number; draft: number; closed: number } };
+	let orgId: string;
+
+	async function list(query = "", user = "user_pipe") {
+		const res = await call(user, "GET", `/jobs${query}`);
+		expect(res.status).toBe(200);
+		return (await res.json()) as List;
+	}
+	const titles = (result: List) => result.jobs.map((job) => job.title);
+	const at = (iso: string) => new Date(iso);
+
+	// Backend (open) has a bit of everything; Frontend (open) one CV to review; Designer (draft) none; Analyst (closed)
+	// one being read, uploaded last of all.
+	beforeAll(async () => {
+		orgId = (await createOrgForUser(db, "user_pipe", "Pipeline Co")).org.id;
+		const job = (id: string, title: string, status: "open" | "draft" | "closed", minute: number) =>
+			db.insert(jobs).values({
+				id,
+				orgId,
+				title,
+				description: "d",
+				status,
+				createdBy: "user_pipe",
+				createdAt: new Date(Date.UTC(2026, 9, 1, 10, minute)),
+			});
+		await job("p_backend", "Backend Engineer", "open", 0);
+		await job("p_frontend", "Frontend Engineer", "open", 1);
+		await job("p_designer", "Product Designer", "draft", 2);
+		await job("p_analyst", "Data Analyst", "closed", 3);
+		const cv = (id: string, jobId: string, fields: Partial<typeof candidates.$inferInsert>) =>
+			db.insert(candidates).values({ id, orgId, jobId, fileKey: id, fileName: `${id}.pdf`, fileSize: 1, createdBy: "u", ...fields });
+		// Ada and Bea tie on 90; Bea was scored first, so she ranks first.
+		await cv("p_ada", "p_backend", { name: "Ada", status: "scored", score: 90, createdAt: at("2026-10-20T12:00:00Z"), scoredAt: at("2026-10-20T12:05:00Z") });
+		await cv("p_bea", "p_backend", { name: "Bea", status: "scored", score: 90, createdAt: at("2026-10-20T12:02:00Z"), scoredAt: at("2026-10-20T12:03:00Z") });
+		await cv("p_cy", "p_backend", { name: "Cy", status: "scored", score: 70, decision: "shortlisted", createdAt: at("2026-10-20T11:00:00Z"), scoredAt: at("2026-10-20T11:01:00Z") });
+		await cv("p_di", "p_backend", { name: "Di", status: "scored", score: 30, decision: "rejected", createdAt: at("2026-10-20T11:30:00Z"), scoredAt: at("2026-10-20T11:31:00Z") });
+		await cv("p_queued", "p_backend", { status: "queued", createdAt: at("2026-10-20T13:00:00Z") });
+		// A failed CV someone rejected counts as failed and as not a fit.
+		await cv("p_failed", "p_backend", { status: "failed", decision: "rejected", createdAt: at("2026-10-20T10:00:00Z") });
+		await cv("p_eve", "p_frontend", { name: "Eve", status: "scored", score: 99, createdAt: at("2026-10-02T09:00:00Z"), scoredAt: at("2026-10-02T09:01:00Z") });
+		await cv("p_fay", "p_analyst", { name: "Fay", status: "scoring", createdAt: at("2026-10-21T09:00:00Z") });
+		// Another company's CVs must never be counted.
+		const acme = await createAs("user_acme", { title: "Backend Engineer", description: "Acme's", status: "open" });
+		const acmeOrg = (await db.select().from(jobs).where(eq(jobs.id, acme.id)))[0].orgId;
+		await db.insert(candidates).values({
+			id: "p_spy",
+			orgId: acmeOrg,
+			jobId: acme.id,
+			fileKey: "spy",
+			fileName: "spy.pdf",
+			fileSize: 1,
+			status: "scored",
+			score: 100,
+			createdBy: "u",
+		});
+	});
+
+	it("gives each job its pipeline, its best scored CV by the ranking and its latest CV", async () => {
+		const byTitle = Object.fromEntries((await list()).jobs.map((job) => [job.title, job]));
+		expect(byTitle["Backend Engineer"]).toMatchObject({
+			scoredCount: 4,
+			toReviewCount: 2,
+			shortlistedCount: 1,
+			rejectedCount: 2,
+			readingCount: 1,
+			failedCount: 1,
+			topScore: 90,
+			topCandidate: { id: "p_bea", name: "Bea" },
+			lastCvAt: "2026-10-20T13:00:00.000Z",
+		});
+		expect(byTitle["Frontend Engineer"]).toMatchObject({ toReviewCount: 1, topScore: 99, topCandidate: { id: "p_eve", name: "Eve" } });
+		expect(byTitle["Data Analyst"]).toMatchObject({ toReviewCount: 0, readingCount: 1, topScore: null, topCandidate: null });
+		expect(byTitle["Product Designer"]).toMatchObject({
+			scoredCount: 0,
+			toReviewCount: 0,
+			shortlistedCount: 0,
+			rejectedCount: 0,
+			readingCount: 0,
+			failedCount: 0,
+			topScore: null,
+			topCandidate: null,
+			lastCvAt: null,
+		});
+	});
+
+	it("sorts by latest CV (jobs without CVs last) and by most to review, newest breaking ties", async () => {
+		expect(titles(await list("?sort=activity"))).toEqual(["Data Analyst", "Backend Engineer", "Frontend Engineer", "Product Designer"]);
+		expect(titles(await list("?sort=review"))).toEqual(["Backend Engineer", "Frontend Engineer", "Data Analyst", "Product Designer"]);
+	});
+
+	it("counts jobs per status for the search, whatever the status filter", async () => {
+		expect((await list()).counts).toEqual({ all: 4, open: 2, draft: 1, closed: 1 });
+		const searched = await list("?q=engineer&status=closed");
+		expect(searched).toMatchObject({ jobs: [], total: 0, counts: { all: 2, open: 2, draft: 0, closed: 0 } });
+		expect(await list("?status=open")).toMatchObject({ total: 2, counts: { all: 4, open: 2 } });
+	});
+
+	it("never counts another company's CVs or jobs", async () => {
+		const acme = await list("?q=backend", "user_acme");
+		expect(acme.counts.all).toBe(1);
+		expect(acme.jobs[0]).toMatchObject({ toReviewCount: 1, topCandidate: { id: "p_spy" } });
+		const own = (await list("?q=backend")).jobs;
+		expect(own).toHaveLength(1);
+		expect(own[0].topCandidate?.id).toBe("p_bea");
+	});
+});

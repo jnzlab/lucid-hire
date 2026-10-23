@@ -1,7 +1,8 @@
-import { and, desc, eq, gte, isNotNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, ne, or, sql } from "drizzle-orm";
 import { CV_SCORE_OPERATION } from "./scoring.ts";
 import type { Db } from "./db/client.ts";
-import { aiUsage, candidates, jobs } from "./db/schema.ts";
+import { type Decision, aiUsage, candidates, jobs } from "./db/schema.ts";
+import { countIf, isReading, isToReview, pipelineByJob, toCount } from "./pipeline.ts";
 
 const DAY = 86_400_000;
 const FUNNEL_DAYS = 90;
@@ -54,9 +55,6 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 // The overview page is a handful of cards that load and fail on their own, so each has its own function and
 // route, and each reads with one D1 batch. Days and months are UTC. `now` is a parameter so tests can fix the clock.
 
-// Each aggregate is aliased: D1 names unaliased columns by their SQL text, so look-alike ones would collapse into one.
-const countIf = (alias: string, condition: ReturnType<typeof sql>) =>
-	sql<number>`coalesce(sum(case when ${condition} then 1 else 0 end), 0)`.as(alias);
 // `column >= from [and column < before]`, for a timestamp column in ms.
 const between = (column: typeof candidates.scoredAt | typeof jobs.createdAt, from: number, before?: number) =>
 	before === undefined ? sql`${column} >= ${from}` : sql`${column} >= ${from} and ${column} < ${before}`;
@@ -190,6 +188,197 @@ export async function getOverviewAiMix(db: Db, orgId: string, now = new Date()):
 		.from(aiUsage)
 		.where(and(eq(aiUsage.orgId, orgId), eq(aiUsage.ok, true), gte(aiUsage.createdAt, new Date(now.getTime() - FUNNEL_DAYS * DAY))));
 	return { scoring: count(mx.scoring), descriptionRewrites: count(mx.descriptions), interviewQuestions: count(mx.questions) };
+}
+
+const WAITING_JOBS = 6;
+const WAITING_TOP = 3;
+const FAILED_JOBS = 10;
+const EMPTY_JOBS = 5;
+const DRAFT_JOBS = 5;
+const BEST_NEW_DAYS = 7;
+const BEST_NEW_LIMIT = 5;
+
+export type AttentionCandidate = {
+	candidateId: string;
+	name: string | null;
+	fileName: string;
+	headline: string | null;
+	score: number;
+};
+export type OverviewAttention = {
+	// Across every job of the company, whatever its status (pipeline.ts says what each word counts). `jobsToReview` is
+	// how many jobs have at least one CV to review, so "14 to review across 3 jobs" needs no second request.
+	totals: { toReview: number; reading: number; failed: number; openJobs: number; jobsToReview: number };
+	// Open jobs with CVs to review or being read, most to review first, each with its best three to review.
+	waiting: Array<{
+		jobId: string;
+		jobTitle: string;
+		toReview: number;
+		shortlisted: number;
+		reading: number;
+		top: AttentionCandidate[];
+	}>;
+	// Jobs (any status) with CVs that couldn't be read, most first.
+	failed: Array<{ jobId: string; jobTitle: string; count: number }>;
+	// Open jobs that have no CVs at all, newest first.
+	emptyOpenJobs: Array<{ jobId: string; jobTitle: string; slug: string }>;
+	drafts: Array<{ jobId: string; jobTitle: string; updatedAt: string }>;
+	// The best CVs scored in the last 7 days, across jobs and whatever their decision.
+	bestNew: Array<{
+		candidateId: string;
+		jobId: string;
+		jobTitle: string;
+		name: string | null;
+		fileName: string;
+		headline: string | null;
+		score: number;
+		decision: Decision;
+		scoredAt: string;
+	}>;
+};
+
+// The overview's work queue: what is waiting for a decision, what went wrong and what is new, in one D1 batch. Every
+// list is capped in SQL, so the Worker only shapes a few dozen rows.
+export async function getOverviewAttention(db: Db, orgId: string, now = new Date()): Promise<OverviewAttention> {
+	const ownCandidates = eq(candidates.orgId, orgId);
+	const ownJobs = eq(jobs.orgId, orgId);
+	const pipeline = pipelineByJob(db, orgId);
+	const waitingWhere = and(
+		ownJobs,
+		eq(jobs.status, "open"),
+		or(sql`${pipeline.toReview} > 0`, sql`${pipeline.reading} > 0`),
+	);
+	const waitingOrder = [sql`${pipeline.toReview} desc`, sql`${pipeline.reading} desc`, desc(jobs.createdAt), desc(jobs.id)];
+	const waitingIds = db
+		.select({ id: jobs.id })
+		.from(jobs)
+		.innerJoin(pipeline, eq(pipeline.jobId, jobs.id))
+		.where(waitingWhere)
+		.orderBy(...waitingOrder)
+		.limit(WAITING_JOBS);
+	// The to-review CVs of those jobs, numbered within each job by THE ranking (candidates.ts rankOrder).
+	const ranked = db
+		.select({
+			jobId: candidates.jobId,
+			candidateId: candidates.id,
+			name: candidates.name,
+			fileName: candidates.fileName,
+			headline: candidates.headline,
+			score: candidates.score,
+			place: sql<number>`row_number() over (partition by ${candidates.jobId}
+				order by ${candidates.score} desc, ${candidates.scoredAt}, ${candidates.createdAt}, ${candidates.id})`.as("place"),
+		})
+		.from(candidates)
+		.where(and(ownCandidates, isToReview, isNotNull(candidates.score), inArray(candidates.jobId, waitingIds)))
+		.as("ranked");
+
+	const [[totals], waitingRows, topRows, failedRows, emptyRows, draftRows, bestRows] = await db.batch([
+		db
+			.select({
+				toReview: countIf("t_to_review", isToReview),
+				reading: countIf("t_reading", isReading),
+				failed: countIf("t_failed", sql`${candidates.status} = 'failed'`),
+				jobsToReview: sql<number>`count(distinct case when ${isToReview} then ${candidates.jobId} end)`.as("t_jobs_to_review"),
+				openJobs: sql<number>`(select count(*) from ${jobs} where ${jobs.orgId} = ${orgId} and ${jobs.status} = 'open')`.as(
+					"t_open_jobs",
+				),
+			})
+			.from(candidates)
+			.where(ownCandidates),
+		db
+			.select({
+				jobId: jobs.id,
+				jobTitle: jobs.title,
+				toReview: sql<number>`${pipeline.toReview}`.as("w_to_review"),
+				shortlisted: sql<number>`${pipeline.shortlisted}`.as("w_shortlisted"),
+				reading: sql<number>`${pipeline.reading}`.as("w_reading"),
+			})
+			.from(jobs)
+			.innerJoin(pipeline, eq(pipeline.jobId, jobs.id))
+			.where(waitingWhere)
+			.orderBy(...waitingOrder)
+			.limit(WAITING_JOBS),
+		db.select().from(ranked).where(sql`${ranked.place} <= ${WAITING_TOP}`).orderBy(ranked.jobId, sql`${ranked.place}`),
+		db
+			.select({ jobId: jobs.id, jobTitle: jobs.title, count: sql<number>`${pipeline.failed}`.as("f_count") })
+			.from(jobs)
+			.innerJoin(pipeline, eq(pipeline.jobId, jobs.id))
+			.where(and(ownJobs, sql`${pipeline.failed} > 0`))
+			.orderBy(sql`${pipeline.failed} desc`, desc(jobs.createdAt), desc(jobs.id))
+			.limit(FAILED_JOBS),
+		db
+			.select({ jobId: jobs.id, jobTitle: jobs.title, slug: sql<string>`${jobs.slug}` })
+			.from(jobs)
+			.where(
+				and(
+					ownJobs,
+					eq(jobs.status, "open"),
+					// "No CVs yet" must be true: a job whose CVs were all deleted has still used its slots.
+					eq(jobs.cvCount, 0),
+					sql`not exists (select 1 from ${candidates} where ${candidates.jobId} = ${jobs.id})`,
+				),
+			)
+			.orderBy(desc(jobs.createdAt), desc(jobs.id))
+			.limit(EMPTY_JOBS),
+		db
+			.select({ jobId: jobs.id, jobTitle: jobs.title, updatedAt: jobs.updatedAt })
+			.from(jobs)
+			.where(and(ownJobs, eq(jobs.status, "draft")))
+			.orderBy(desc(jobs.updatedAt), desc(jobs.id))
+			.limit(DRAFT_JOBS),
+		db
+			.select({
+				candidateId: candidates.id,
+				jobId: candidates.jobId,
+				jobTitle: jobs.title,
+				name: candidates.name,
+				fileName: candidates.fileName,
+				headline: candidates.headline,
+				score: candidates.score,
+				decision: candidates.decision,
+				scoredAt: candidates.scoredAt,
+			})
+			.from(candidates)
+			.innerJoin(jobs, eq(jobs.id, candidates.jobId))
+			.where(
+				and(
+					ownCandidates,
+					scored,
+					isNotNull(candidates.score),
+					gte(candidates.scoredAt, new Date(now.getTime() - BEST_NEW_DAYS * DAY)),
+				),
+			)
+			.orderBy(desc(candidates.score), desc(candidates.scoredAt), asc(candidates.id))
+			.limit(BEST_NEW_LIMIT),
+	]);
+
+	const topByJob = new Map<string, AttentionCandidate[]>();
+	for (const { jobId, candidateId, name, fileName, headline, score } of topRows) {
+		const list = topByJob.get(jobId) ?? [];
+		list.push({ candidateId, name, fileName, headline, score: score ?? 0 });
+		topByJob.set(jobId, list);
+	}
+	return {
+		totals: {
+			toReview: toCount(totals.toReview),
+			reading: toCount(totals.reading),
+			failed: toCount(totals.failed),
+			openJobs: toCount(totals.openJobs),
+			jobsToReview: toCount(totals.jobsToReview),
+		},
+		waiting: waitingRows.map((row) => ({
+			jobId: row.jobId,
+			jobTitle: row.jobTitle,
+			toReview: toCount(row.toReview),
+			shortlisted: toCount(row.shortlisted),
+			reading: toCount(row.reading),
+			top: topByJob.get(row.jobId) ?? [],
+		})),
+		failed: failedRows.map((row) => ({ ...row, count: toCount(row.count) })),
+		emptyOpenJobs: emptyRows,
+		drafts: draftRows.map((row) => ({ ...row, updatedAt: row.updatedAt.toISOString() })),
+		bestNew: bestRows.map((row) => ({ ...row, score: row.score ?? 0, scoredAt: (row.scoredAt ?? now).toISOString() })),
+	};
 }
 
 export async function getOverviewActivity(db: Db, orgId: string): Promise<ActivityEvent[]> {

@@ -2,10 +2,11 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 import { type DescriptionEnhancer, enhanceWithGemini } from "./ai.ts";
-import { requireAuth, verifyClerkSession, type SessionVerifier } from "./auth.ts";
+import { requireAuth, requireOrg, verifyClerkSession, type SessionVerifier } from "./auth.ts";
 import { ALLOWED_ORIGINS } from "./config.ts";
 import { getDb } from "./db/client.ts";
 import { type QuestionWriter, writeQuestionsWithGemini } from "./interview-questions.ts";
+import { allCandidateRoutes } from "./all-candidates-routes.ts";
 import { billingRoutes } from "./billing-routes.ts";
 import { type UserDirectory, clerkDirectory } from "./clerk.ts";
 import { jobRoutes } from "./jobs-routes.ts";
@@ -14,8 +15,9 @@ import { inviteRoutes, teamRoutes } from "./team-routes.ts";
 import { type PolarFetch, polarFetcher } from "./polar.ts";
 import { type CaptchaVerifier, verifyTurnstile } from "./public.ts";
 import { publicRoutes } from "./public-routes.ts";
+import { searchRoutes } from "./search-routes.ts";
 import { webhookRoutes } from "./webhook-routes.ts";
-import { ORG_NAME_MAX, ORG_NAME_MIN, createOrgForUser, findOrgForUser, normalizeOrgName } from "./orgs.ts";
+import { ORG_NAME_MAX, ORG_NAME_MIN, createOrgForUser, findOrgForUser, normalizeOrgName, renameOrg } from "./orgs.ts";
 import type { AppEnv } from "./types.ts";
 
 const REQUEST_ID_HEADER = "x-request-id";
@@ -81,24 +83,32 @@ export function createApp({
 		return c.json({ userId, org }, 200, { "Cache-Control": "no-store" });
 	});
 
+	const invalidName = {
+		error: { code: "invalid_name", message: `Enter a company name between ${ORG_NAME_MIN} and ${ORG_NAME_MAX} characters` },
+	};
+
 	// Onboarding: creates the user's company with them as admin. Repeating it returns the same company.
 	app.post("/orgs", auth, async (c) => {
 		const body = await c.req.json<{ name?: unknown }>().catch(() => null);
 		const name = normalizeOrgName(body?.name);
-		if (!name) {
-			return c.json(
-				{
-					error: {
-						code: "invalid_name",
-						message: `Enter a company name between ${ORG_NAME_MIN} and ${ORG_NAME_MAX} characters`,
-					},
-				},
-				400,
-			);
-		}
+		if (!name) return c.json(invalidName, 400);
 
 		const { org, created } = await createOrgForUser(getDb(c.env.DB), c.get("userId"), name);
 		return c.json({ org }, created ? 201 : 200);
+	});
+
+	// Renames the signed-in user's company, for admins only, by onboarding's rules. Answers with the company as /me has it.
+	app.patch("/orgs/current", auth, requireOrg, async (c) => {
+		const org = c.get("org");
+		if (org.role !== "admin") {
+			return c.json({ error: { code: "forbidden", message: "Only admins can rename the company" } }, 403);
+		}
+		const body = await c.req.json<{ name?: unknown }>().catch(() => null);
+		const name = normalizeOrgName(body?.name);
+		if (!name) return c.json(invalidName, 400);
+
+		await renameOrg(getDb(c.env.DB), org.id, name);
+		return c.json({ org: { ...org, name } });
 	});
 
 	app.route("/webhooks", webhookRoutes({ polar }));
@@ -108,6 +118,9 @@ export function createApp({
 	app.route("/jobs", jobRoutes({ auth, enhance: enhanceDescription, writeQuestions }));
 
 	app.route("/overview", overviewRoutes({ auth }));
+	// Across every job of the company. A job's own candidates are under /jobs/:jobId/candidates.
+	app.route("/candidates", allCandidateRoutes({ auth }));
+	app.route("/search", searchRoutes({ auth }));
 
 	// Unauthenticated: the public job page, its cover image, the apply form and the sitemap.
 	app.route("/public", publicRoutes({ verifyCaptcha }));

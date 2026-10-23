@@ -148,7 +148,7 @@ describe("the monthly job allowance", () => {
 			error: {
 				code: "plan_limit",
 				message: "You've used all 10 new jobs this month. Deleting a job does not give the slot back.",
-				upgradeUrl: "/dashboard/settings#plan",
+				upgradeUrl: "/dashboard/settings/billing",
 			},
 		});
 		expect(await readUnits(db, orgId, "jobs_month", monthPeriod())).toBe(10);
@@ -269,7 +269,7 @@ describe("the AI allowance per hour", () => {
 			error: {
 				code: "plan_limit",
 				message: "You've used all 30 AI requests for this hour. They reset at the top of the hour.",
-				upgradeUrl: "/dashboard/settings#plan",
+				upgradeUrl: "/dashboard/settings/billing",
 			},
 		});
 		expect(await readUnits(db, orgId, "ai_hour", hourPeriod())).toBe(30);

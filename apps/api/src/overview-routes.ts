@@ -4,6 +4,7 @@ import { getDb } from "./db/client.ts";
 import {
 	getOverviewActivity,
 	getOverviewAiMix,
+	getOverviewAttention,
 	getOverviewFunnel,
 	getOverviewKpis,
 	getOverviewVelocity,
@@ -24,6 +25,10 @@ export function overviewRoutes({ auth }: { auth: MiddlewareHandler<AppEnv> }) {
 	);
 	routes.get("/funnel", async (c) => c.json(await getOverviewFunnel(getDb(c.env.DB), c.get("org").id), 200, NO_STORE));
 	routes.get("/ai-mix", async (c) => c.json(await getOverviewAiMix(getDb(c.env.DB), c.get("org").id), 200, NO_STORE));
+	// The work queue: CVs waiting for a decision, failed CVs, jobs without CVs, drafts and the best new matches.
+	routes.get("/attention", async (c) =>
+		c.json(await getOverviewAttention(getDb(c.env.DB), c.get("org").id), 200, NO_STORE),
+	);
 	routes.get("/activity", async (c) =>
 		c.json({ events: await getOverviewActivity(getDb(c.env.DB), c.get("org").id) }, 200, NO_STORE),
 	);
