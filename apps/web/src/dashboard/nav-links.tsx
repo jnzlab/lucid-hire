@@ -32,7 +32,7 @@ export function NavLinks({
 						<li key={item.to}>
 							<Link
 								to={item.to}
-								// Exact, or Link would mark Jobs as the page for every page under /dashboard.
+								// Exact, or Link would mark Overview as the page for every page under /dashboard.
 								activeOptions={{ exact: true }}
 								aria-current={current}
 								title={collapsed ? item.label : undefined}

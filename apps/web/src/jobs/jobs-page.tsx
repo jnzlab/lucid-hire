@@ -39,8 +39,8 @@ const STATUS_SEGMENTS: Segment<"all" | JobStatus>[] = [
 export function JobsPage() {
 	useDocumentTitle("Jobs · LucidHire");
 	const org = useOrg();
-	const filters: JobFilters = useSearch({ from: "/dashboard/" });
-	const navigate = useNavigate({ from: "/dashboard/" });
+	const filters: JobFilters = useSearch({ from: "/dashboard/jobs/" });
+	const navigate = useNavigate({ from: "/dashboard/jobs/" });
 	const jobs = useJobs(filters);
 	const deletedFromJobPage = useRouterState({ select: (state) => state.location.state.deletedJob });
 	// A delete from a row's menu is confirmed the same way as one from the job's page.
@@ -105,7 +105,7 @@ export function JobsPage() {
 // Search, status and sort. They live in the address (`?q=&status=&sort=&page=`), so a filtered list can be
 // bookmarked, shared and reached with the back button. Typing waits a moment before it searches.
 function Toolbar({ filters, total }: { filters: JobFilters; total: number }) {
-	const navigate = useNavigate({ from: "/dashboard/" });
+	const navigate = useNavigate({ from: "/dashboard/jobs/" });
 	const statusId = useId();
 	const sortId = useId();
 	const [text, setText] = useState(filters.q ?? "");
@@ -252,7 +252,7 @@ function Pagination({ page, pages, filters }: { page: number; pages: number; fil
 	return (
 		<nav aria-label="Pagination" className="mt-6 flex flex-wrap items-center justify-between gap-4">
 			{page > 1 ? (
-				<Link to="/dashboard" search={to(page - 1)} className="btn ghost">
+				<Link to="/dashboard/jobs" search={to(page - 1)} className="btn ghost">
 					Previous
 				</Link>
 			) : (
@@ -264,7 +264,7 @@ function Pagination({ page, pages, filters }: { page: number; pages: number; fil
 				Page {page} of {pages}
 			</p>
 			{page < pages ? (
-				<Link to="/dashboard" search={to(page + 1)} className="btn ghost">
+				<Link to="/dashboard/jobs" search={to(page + 1)} className="btn ghost">
 					Next
 				</Link>
 			) : (
@@ -302,7 +302,7 @@ function JobRow({ job, onDeleted }: { job: JobListItem; onDeleted: (title: strin
 
 // The filters matched nothing, which is not the same as having no jobs.
 function NoJobsMatch() {
-	const navigate = useNavigate({ from: "/dashboard/" });
+	const navigate = useNavigate({ from: "/dashboard/jobs/" });
 	return (
 		<section aria-labelledby="no-match-h" className="rounded-xl bg-sheet px-6 py-10 text-center shadow-card">
 			<h2 id="no-match-h" className="text-[22px] leading-[1.1] font-[800] tracking-[-0.02em] [font-stretch:110%]">

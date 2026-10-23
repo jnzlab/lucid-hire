@@ -21,6 +21,7 @@ import { Route as InviteTokenRouteImport } from './routes/invite.$token'
 import { Route as JobsSlugRouteImport } from './routes/jobs.$slug'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
+import { Route as DashboardJobsIndexRouteImport } from './routes/dashboard/jobs.index'
 import { Route as DashboardJobsNewRouteImport } from './routes/dashboard/jobs.new'
 import { Route as DashboardSettingsSplatRouteImport } from './routes/dashboard/settings.$'
 import { Route as DashboardJobsJobIdIndexRouteImport } from './routes/dashboard/jobs.$jobId.index'
@@ -87,6 +88,11 @@ const SignUpSplatRoute = SignUpSplatRouteImport.update({
   path: '/sign-up/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DashboardJobsIndexRoute = DashboardJobsIndexRouteImport.update({
+  id: '/jobs/',
+  path: '/jobs/',
+  getParentRoute: () => DashboardRouteRoute,
+} as any)
 const DashboardJobsNewRoute = DashboardJobsNewRouteImport.update({
   id: '/jobs/new',
   path: '/jobs/new',
@@ -129,6 +135,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/': typeof DashboardIndexRoute
   '/dashboard/jobs/new': typeof DashboardJobsNewRoute
   '/dashboard/settings/$': typeof DashboardSettingsSplatRoute
+  '/dashboard/jobs/': typeof DashboardJobsIndexRoute
   '/dashboard/jobs/$jobId/edit': typeof DashboardJobsJobIdEditRoute
   '/dashboard/jobs/$jobId/': typeof DashboardJobsJobIdIndexRoute
   '/dashboard/jobs/$jobId/candidates/$candidateId': typeof DashboardJobsJobIdCandidatesCandidateIdRoute
@@ -147,6 +154,7 @@ export interface FileRoutesByTo {
   '/dashboard': typeof DashboardIndexRoute
   '/dashboard/jobs/new': typeof DashboardJobsNewRoute
   '/dashboard/settings/$': typeof DashboardSettingsSplatRoute
+  '/dashboard/jobs': typeof DashboardJobsIndexRoute
   '/dashboard/jobs/$jobId/edit': typeof DashboardJobsJobIdEditRoute
   '/dashboard/jobs/$jobId': typeof DashboardJobsJobIdIndexRoute
   '/dashboard/jobs/$jobId/candidates/$candidateId': typeof DashboardJobsJobIdCandidatesCandidateIdRoute
@@ -167,6 +175,7 @@ export interface FileRoutesById {
   '/dashboard/': typeof DashboardIndexRoute
   '/dashboard/jobs/new': typeof DashboardJobsNewRoute
   '/dashboard/settings/$': typeof DashboardSettingsSplatRoute
+  '/dashboard/jobs/': typeof DashboardJobsIndexRoute
   '/dashboard/jobs/$jobId/edit': typeof DashboardJobsJobIdEditRoute
   '/dashboard/jobs/$jobId/': typeof DashboardJobsJobIdIndexRoute
   '/dashboard/jobs/$jobId/candidates/$candidateId': typeof DashboardJobsJobIdCandidatesCandidateIdRoute
@@ -188,6 +197,7 @@ export interface FileRouteTypes {
     | '/dashboard/'
     | '/dashboard/jobs/new'
     | '/dashboard/settings/$'
+    | '/dashboard/jobs/'
     | '/dashboard/jobs/$jobId/edit'
     | '/dashboard/jobs/$jobId/'
     | '/dashboard/jobs/$jobId/candidates/$candidateId'
@@ -206,6 +216,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/dashboard/jobs/new'
     | '/dashboard/settings/$'
+    | '/dashboard/jobs'
     | '/dashboard/jobs/$jobId/edit'
     | '/dashboard/jobs/$jobId'
     | '/dashboard/jobs/$jobId/candidates/$candidateId'
@@ -225,6 +236,7 @@ export interface FileRouteTypes {
     | '/dashboard/'
     | '/dashboard/jobs/new'
     | '/dashboard/settings/$'
+    | '/dashboard/jobs/'
     | '/dashboard/jobs/$jobId/edit'
     | '/dashboard/jobs/$jobId/'
     | '/dashboard/jobs/$jobId/candidates/$candidateId'
@@ -329,6 +341,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignUpSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/dashboard/jobs/': {
+      id: '/dashboard/jobs/'
+      path: '/jobs'
+      fullPath: '/dashboard/jobs/'
+      preLoaderRoute: typeof DashboardJobsIndexRouteImport
+      parentRoute: typeof DashboardRouteRoute
+    }
     '/dashboard/jobs/new': {
       id: '/dashboard/jobs/new'
       path: '/jobs/new'
@@ -372,6 +391,7 @@ interface DashboardRouteRouteChildren {
   DashboardIndexRoute: typeof DashboardIndexRoute
   DashboardJobsNewRoute: typeof DashboardJobsNewRoute
   DashboardSettingsSplatRoute: typeof DashboardSettingsSplatRoute
+  DashboardJobsIndexRoute: typeof DashboardJobsIndexRoute
   DashboardJobsJobIdEditRoute: typeof DashboardJobsJobIdEditRoute
   DashboardJobsJobIdIndexRoute: typeof DashboardJobsJobIdIndexRoute
   DashboardJobsJobIdCandidatesCandidateIdRoute: typeof DashboardJobsJobIdCandidatesCandidateIdRoute
@@ -382,6 +402,7 @@ const DashboardRouteRouteChildren: DashboardRouteRouteChildren = {
   DashboardIndexRoute: DashboardIndexRoute,
   DashboardJobsNewRoute: DashboardJobsNewRoute,
   DashboardSettingsSplatRoute: DashboardSettingsSplatRoute,
+  DashboardJobsIndexRoute: DashboardJobsIndexRoute,
   DashboardJobsJobIdEditRoute: DashboardJobsJobIdEditRoute,
   DashboardJobsJobIdIndexRoute: DashboardJobsJobIdIndexRoute,
   DashboardJobsJobIdCandidatesCandidateIdRoute:

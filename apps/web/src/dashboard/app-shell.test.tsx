@@ -73,7 +73,8 @@ describe("sidebar", () => {
 		renderAt("/dashboard");
 		const nav = await screen.findByRole("navigation", { name: "Main" }, { timeout: 4000 });
 
-		expect(within(nav).getByRole("link", { name: "Jobs" }).getAttribute("aria-current")).toBe("page");
+		expect(within(nav).getByRole("link", { name: "Overview" }).getAttribute("aria-current")).toBe("page");
+		expect(within(nav).getByRole("link", { name: "Jobs" }).getAttribute("aria-current")).toBeNull();
 		expect(within(nav).getByRole("link", { name: "Post a job" }).getAttribute("href")).toBe("/dashboard/jobs/new");
 		expect(screen.getAllByText("Sprite Labs").length).toBeGreaterThan(0);
 		expect(screen.getByText("Your role: Admin")).toBeTruthy();
@@ -106,7 +107,7 @@ describe("sidebar", () => {
 		cleanup();
 
 		jobs = [];
-		renderAt("/dashboard");
+		renderAt("/dashboard/jobs");
 		const empty = await screen.findByRole("navigation", { name: "Main" });
 		await screen.findByRole("heading", { name: "No jobs yet" });
 		expect(within(empty).getByRole("link", { name: "Upload CVs" }).getAttribute("href")).toBe("/dashboard/jobs/new");
@@ -149,8 +150,9 @@ describe("collapsing the sidebar", () => {
 		expect(screen.getByRole("button", { name: "Expand sidebar" }).getAttribute("aria-expanded")).toBe("false");
 		expect(localStorage.getItem("lucidhire.sidebar")).toBe("collapsed");
 		expect(screen.queryByText("Your role: Admin")?.className ?? "sr-only").toContain("sr-only");
-		expect(screen.getByRole("link", { name: "Jobs" })).toBeTruthy();
-		expect(screen.getByRole("link", { name: "Post a job" })).toBeTruthy();
+		const nav = within(screen.getByRole("navigation", { name: "Main" }));
+		expect(nav.getByRole("link", { name: "Jobs" })).toBeTruthy();
+		expect(nav.getByRole("link", { name: "Post a job" })).toBeTruthy();
 	});
 
 	it("starts collapsed when it was left collapsed", async () => {
@@ -218,7 +220,7 @@ describe("mobile menu", () => {
 		fireEvent.click(await screen.findByRole("button", { name: "Open menu" }));
 		const sheet = await screen.findByRole("dialog", { name: "Menu" });
 		fireEvent.click(within(sheet).getByRole("link", { name: "Jobs" }));
-		await waitFor(() => expect(router.state.location.pathname).toBe("/dashboard"));
+		await waitFor(() => expect(router.state.location.pathname).toBe("/dashboard/jobs"));
 		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 });

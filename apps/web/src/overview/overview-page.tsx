@@ -240,7 +240,7 @@ function Activity({ events }: { events: ActivityEvent[] }) {
 					))}
 				</ul>
 			)}
-			<Link to="/dashboard" className="btn ghost mt-4">
+			<Link to="/dashboard/jobs" className="btn ghost mt-4">
 				View all jobs <ArrowRight />
 			</Link>
 		</div>
