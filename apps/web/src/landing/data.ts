@@ -1,7 +1,7 @@
 import { PLANS as PLAN_CONFIG, type PlanKey as PlanKeyOf, planForCvs } from "@lucid-hire/plans";
 
 // Sample data and the toy scoring behind the landing page demos. The real scoring reads the whole
-// CV; here a must-have counts three times a nice-to-have, as the "Your turn" note says.
+// CV; here a must-have counts three times a nice-to-have.
 
 export type Weight = 0 | 1 | 3;
 

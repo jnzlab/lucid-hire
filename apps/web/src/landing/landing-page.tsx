@@ -6,7 +6,6 @@ import "./landing.css";
 import { Pricing } from "./pricing.tsx";
 import { CtaBand, Faq, Features, HowItWorks, Trust } from "./sections.tsx";
 import { Story } from "./story.tsx";
-import { TryIt } from "./try-it.tsx";
 
 // The public landing page: docs/design/landing-prototype.html, built as it is (design system, locked).
 export function LandingPage() {
@@ -21,7 +20,6 @@ export function LandingPage() {
 			<main id="main">
 				<Hero />
 				<Story />
-				<TryIt />
 				<HowItWorks />
 				<Features />
 				<Trust />

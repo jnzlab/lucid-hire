@@ -42,8 +42,8 @@ export function LandingHeader() {
 				</a>
 				<nav className="nav" aria-label="Main">
 					<a href="#story">The story</a>
-					<a href="#try" className="opt">
-						Try it
+					<a href="#how" className="opt">
+						How it works
 					</a>
 					<a href="#pricing">Pricing</a>
 					<a href="#faq" className="opt">
