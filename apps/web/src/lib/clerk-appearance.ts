@@ -22,7 +22,8 @@ export const clerkAppearance: Appearance = {
 		colorDanger: "var(--gap-ink)",
 		colorBorder: "var(--line)",
 		colorRing: "var(--ink)",
-		colorModalBackdrop: "rgba(20,20,20,.5)",
+		// The same scrim as the app's own dialogs, darker in dark mode.
+		colorModalBackdrop: "var(--overlay)",
 		fontFamily: '"Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif',
 		fontFamilyButtons: '"Archivo Variable", "Archivo", ui-sans-serif, system-ui, sans-serif',
 		fontFamilyMono: '"Fragment Mono", ui-monospace, "SFMono-Regular", Menlo, monospace',

@@ -429,3 +429,83 @@ Contrast was measured against WCAG 2.1 AA.
 - Rotated or transform-scaled containers holding text people need to
   read.
 - Pill-shaped buttons, emoji icons, text shadows, auto-playing loops.
+
+---
+
+## 9. App shell and components (derived, 2026-10-23)
+
+Values derived for the signed-in dashboard's shell (`apps/web/src/dashboard/`)
+and its shared components (`apps/web/src/ui/`). They're built from the
+tokens above; nothing here adds a colour, font, radius or easing. The
+classes live in `apps/web/src/index.css`.
+
+### 9.1 Theme
+
+- The app follows the person's choice: System, Light or Dark, saved in
+  `localStorage` under `lh-theme` (System by default). The `dark` class
+  goes on `<html>` only while the dashboard is mounted, so the landing
+  page, sign-in, legal and public job pages stay light. An inline script
+  in `index.html` applies the saved choice on `/dashboard` addresses
+  before the first paint, so there's no flash. `<meta name="theme-color">`
+  follows `paper`: `#F5F5F1` / `#141414`.
+- Shadows live in `--elev-sheet/card/lift/float` on `:root` and `.dark`, and
+  `--shadow-*` point at them. Dark shadows are `rgba(0,0,0,.5)` at the same
+  offsets (§2.5).
+- Overlay behind dialogs and drawers: `--overlay`, `rgba(20,20,20,.5)`
+  light and `rgba(0,0,0,.6)` dark (dark needs more to separate the sheet).
+  Clerk's modal backdrop uses it too.
+- Sticky header and mobile top bar: `--hdr-bg`, `paper` at 90% in both
+  themes (`rgba(245,245,241,.9)` / `rgba(20,20,20,.9)`), with the header
+  blur.
+- Desk dot grid: `--desk-dot`, `rgba(20,20,20,.12)` light and
+  `rgba(245,245,241,.10)` dark.
+- Marker surfaces keep the light inks in dark mode. `.rank-band` and
+  `.on-marker-area` (the current nav item, the top ranked row) re-declare
+  `ink`, `ink-2`, `ink-muted`, `ink-faint`, `line`, `line-2`, `paper`,
+  `paper-2`, `sheet` and `gap-ink` with their light values, so text, borders
+  and focus rings on yellow stay dark (`on-marker` never flips).
+- `.btn:hover` text is `on-marker` (the fill is yellow in both themes).
+- The logo mark swaps its ink square for the light ink with dark strokes in
+  dark mode; the marker band stays yellow.
+- The pale swipe (`.swipe-art`) drops to 30% opacity in dark mode so it
+  stays a background.
+
+### 9.2 Shell
+
+| Part | Spec |
+|---|---|
+| **Sidebar** (768px and up) | 256px, `paper-2`, 1px `line` right border, full height, sticky. Collapses to a **64px rail** (Ctrl/⌘+B), saved in `lucidhire.sidebar`; width transition .2s `--ease-out`. In the rail every item is a 44px icon button with a tooltip on the right, and a to-review count becomes an 8px `ink` dot. |
+| **Nav row** (`.nav-item`) | 40px tall on a mouse, 44px on touch, 10px side padding, 6px radius, 500 15px `ink-2`, 20px icon, 12px gap. Hover `line-2` fill. Current: `marker` fill, `on-marker` text, 650, `aria-current`. Open-jobs rows are denser: 36px (44px on touch), 14.5px, 8px gap. |
+| **Search field** | Looks like an input: 40px (44px on touch), `sheet`, 1.5px `line` border, 8px radius, 14px `ink-muted`, a 16px search icon and a keycap on the right. Hover border `ink-faint`. |
+| **Mobile top bar** | 56px, sticky, `--hdr-bg` with the header blur, 1px `line` bottom shadow. Back button or logo mark, page title 650 16px, avatar button 44px. |
+| **Tab bar** | Fixed, 64px plus `env(safe-area-inset-bottom)`, `sheet`, 1px `line` top border, five equal columns. 20px icons over mono 11px labels in `ink-muted`. Current: `ink`, 650, and a 3px `marker` bar along the top edge (inset 22% each side), so colour is never the only signal. `main` gets 64px bottom padding to clear it. |
+| **Bottom sheet** (More, Account) | A drawer from the bottom: `max-height: 88dvh`, 14px top radius, a 36 × 4px `line` grip, safe-area bottom padding. |
+| **Page frame** (`.page`) | `padding-top: clamp(24px,3vw,40px)`, `padding-bottom: clamp(48px,6vw,80px)`, inside the 1280px container. |
+| **Page title** (`.page-title`) | Archivo 820, `clamp(28px,3.2vw,40px)` / 1.02, 112% stretch, -.035em, balanced. Between the section heading and the card heading: app pages are denser than marketing sections. Focused on arrival (tabindex -1, no ring). |
+| **Layers** | Sticky bars 60, dialogs and drawers 80 (`.layer-modal`), menus and popovers 82 (`.layer-popover`, they open from dialogs too), toasts 85 (`.layer-toast`), skip link 90, tooltips 95. |
+
+### 9.3 Components
+
+| Component | Spec |
+|---|---|
+| **Keycap** (`.kbd`) | Mono 11.5px `ink-2`, 22px tall, min 22px wide, 6px side padding, 1px `line` border with an `ink-faint` bottom edge, 4px radius, `sheet`. Sequences read "G then O"; ⌘ on a Mac, Ctrl elsewhere. |
+| **Tooltip** | Mono 12.5px / 1.35 `paper` on `ink`, 6 × 9px padding, 6px radius, max 280px, the float shadow. Appears after 400ms on hover or keyboard focus, hides on Escape, scroll or pointer down. Never holds anything people must act on. |
+| **Icon button** | 44 × 44px, 8px radius, `ink-muted`; hover and open: `line-2` fill and `ink`. Outline variant: 1.5px `line` border on `sheet`, `ink` border on hover. Always has a name and a tooltip. |
+| **Count badge** | Mono 11.5px tabular, 20px tall, min 22px wide, 6px radius, 1px `line` border on `paper`, `ink-2`. Marker variant (things waiting on you): `marker` with an `on-marker` border, because yellow alone barely shows on paper. 999+ caps it. |
+| **Checkbox** | An 18px box, 1.5px `ink` border, 4px radius, `sheet`; checked or mixed: `marker` with an `on-marker` border and the drawn check or dash. 44px hit area. |
+| **Meter** | An 8px `line` track with a 4px radius, filled in `ink`; from 90% the fill turns `gap-ink` and the words say "Almost at the limit" (or "✕ Limit reached"), never colour alone. |
+| **Skeleton** | `line-2` bars, 4px radius, min 12px tall. Static: nothing loops but the live dot (§2.6). |
+| **Tabs** | A 1px `line` under the row. Tab 44px tall, 12px padding, 600 15px `ink-muted`, 6px top radius; hover `paper-2`. Chosen: `ink`, 650, and a 3px `ink` bar inset 8px. Focus ring inset 3px so the row's overflow doesn't clip it. |
+| **Menu** | `sheet`, 1px `line` border, 8px radius, 6px padding, min 220px, max 340px, the float shadow. Items 40px (44px on touch), 6px radius, 500 15px; focus and hover `paper-2`, keyboard focus also a 2px `ink` outline inset 2px. Destructive items `gap-ink`. Group labels mono 11.5px uppercase `ink-muted`; separators 1px `line-2`. |
+| **Popover** | As the menu, with a 12px radius, 16px padding and max 400px. |
+| **Dialog** | `sheet`, 12px radius, the float shadow, on `--overlay`. Widths `min(N, 100vw - 32px)` for N = 440 (confirm), 560 (default), 640 (palette), 800. Padding 24px, 32px from 561px. Title is the panel heading (Archivo 800, 19px). Footer buttons right-aligned, 12px apart. The palette sits 12vh from the top. |
+| **Drawer** | 480px from the right by default (`--drawer-w`), full height, 1px `line` edge, the float shadow. Below 768px every drawer becomes a bottom sheet (§9.2). |
+| **Toast** | The status pill on `ink`: mono 13.5px / 1.35 `paper`, min 48px tall, 8px radius, the float shadow, max 560px, bottom-centre 24px up (above the tab bar on phones). Action button 650 14px underlined in `paper`; Dismiss 44px. Hover fill `paper` at 14% (`color-mix`). Errors start with ✕. |
+| **Command palette** | A top-placed 640px dialog, max `min(640px, 80dvh)` tall. A 56px field row with a 20px icon and 17px text, groups under mono 11.5px labels, 44px rows, the active row `paper-2`. Matches are marked with `.mk` (no negative margin, so spaces stay). |
+
+### 9.4 Motion
+
+- Entrances use `--ease-out`: tooltip fade .15s, menu and popover pop-in
+  .16s (4px rise), dialog pop-in .2s, toast rise .25s (8px), drawers and
+  sheets slide .28s. All use `animation-fill-mode: backwards` and are
+  complete at rest under reduced motion (the global rule cuts them).

@@ -12,6 +12,8 @@ vi.mock("@clerk/react", () => ({
 		userId: session.signedIn ? "user_9" : null,
 		getToken: async () => (session.signedIn ? "session-token" : null),
 	}),
+	// The dashboard's account menu reads the name and email; without a user it shows "Your account".
+	useUser: () => ({ isLoaded: true, user: null }),
 	RedirectToSignIn: () => <p>Redirecting to sign in</p>,
 	UserButton: Object.assign(() => null, { MenuItems: () => null, Link: () => null }),
 	UserProfile: () => null,

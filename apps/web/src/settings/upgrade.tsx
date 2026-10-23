@@ -1,11 +1,10 @@
 import { Link } from "@tanstack/react-router";
 
-// The way to the plan cards on the settings page.
+// The way to the plan cards: Settings → Plan & billing.
 export function UpgradeLink({ className = "" }: { className?: string }) {
 	return (
 		<Link
-			to="/dashboard/settings/$"
-			hash="plan"
+			to="/dashboard/settings/billing"
 			className={`inline-flex min-h-11 items-center rounded-[3px] font-semibold underline underline-offset-[.18em] ${className}`}
 		>
 			Upgrade

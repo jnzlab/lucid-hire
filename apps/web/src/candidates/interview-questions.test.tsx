@@ -193,7 +193,7 @@ describe("interview questions", () => {
 		saved = written;
 		post = async () =>
 			Response.json(
-				{ error: { code: "plan_limit", message: "You've used all 30 AI requests for this hour. They reset at the top of the hour.", upgradeUrl: "/dashboard/settings#plan" } },
+				{ error: { code: "plan_limit", message: "You've used all 30 AI requests for this hour. They reset at the top of the hour.", upgradeUrl: "/dashboard/settings/billing" } },
 				{ status: 429 },
 			);
 		// The upgrade link needs a router around it; this one only knows the settings route.
@@ -212,7 +212,7 @@ describe("interview questions", () => {
 		fireEvent.click(await screen.findByRole("button", { name: "Write new questions" }));
 		const alert = await screen.findByRole("alert");
 		expect(alert.textContent).toContain("You've used all 30 AI requests for this hour.");
-		expect(within(alert).getByRole("link", { name: "Upgrade" }).getAttribute("href")).toBe("/dashboard/settings#plan");
+		expect(within(alert).getByRole("link", { name: "Upgrade" }).getAttribute("href")).toBe("/dashboard/settings/billing");
 	});
 
 	it.each(["queued", "scoring", "failed"] as const)("is not shown, or asked for, while the CV is %s", (status) => {

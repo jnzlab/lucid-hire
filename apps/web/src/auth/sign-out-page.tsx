@@ -2,6 +2,7 @@ import { useAuth, useClerk } from "@clerk/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
+import { forgetUserVisits } from "../lib/recent.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
 import { AuthLayout } from "./auth-layout.tsx";
 import { ShortlistStage } from "./stages.tsx";
@@ -12,7 +13,7 @@ type Status = "checking" | "working" | "done" | "already" | "failed";
 // stays here instead of redirecting to the home page.
 export function SignOutPage() {
 	useDocumentTitle("Sign out · LucidHire");
-	const { isLoaded, isSignedIn } = useAuth();
+	const { isLoaded, isSignedIn, userId } = useAuth();
 	const { signOut } = useClerk();
 	const queryClient = useQueryClient();
 	const [status, setStatus] = useState<Status>("checking");
@@ -23,8 +24,9 @@ export function SignOutPage() {
 		setStatus("working");
 		try {
 			await signOut(() => {});
-			// What the last session loaded must not show to the next person at this screen.
+			// What the last session loaded or opened must not show to the next person at this screen.
 			queryClient.clear();
+			forgetUserVisits(userId);
 			setStatus("done");
 		} catch (error) {
 			console.error("Sign out failed", error);

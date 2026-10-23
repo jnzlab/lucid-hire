@@ -26,6 +26,21 @@
 		<meta name="twitter:title" content="LucidHire: we read every CV, you meet the best ones" />
 		<meta name="twitter:image" content="https://lucidhire.io/og-image.png" />
 		<title>LucidHire: we read every CV, you meet the best ones</title>
+		<!-- The dashboard's light or dark theme, applied before the first paint so it doesn't flash. Only /dashboard
+		     pages follow it; everything else stays light. Mirrors src/lib/theme.ts (key lh-theme). -->
+		<script>
+			(function () {
+				try {
+					if (!/^\/dashboard(\/|$)/.test(location.pathname)) return;
+					var choice = localStorage.getItem("lh-theme");
+					var dark = choice === "dark" || (choice !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+					if (!dark) return;
+					document.documentElement.classList.add("dark");
+					document.documentElement.style.colorScheme = "dark";
+					document.querySelector('meta[name="theme-color"]').setAttribute("content", "#141414");
+				} catch (error) {}
+			})();
+		</script>
 	</head>
 	<body>
 		<div id="root"></div>

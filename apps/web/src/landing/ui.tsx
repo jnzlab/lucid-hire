@@ -4,13 +4,13 @@ import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
 // Every "start" CTA leads to sign-up, or straight to the dashboard for someone already signed in. A pricing CTA also
-// carries the plan it stands for: through sign-up and onboarding, or straight to the settings page when signed in.
+// carries the plan it stands for: through sign-up and onboarding, or straight to Plan & billing when signed in.
 export function SignUpCta({ className, children, plan }: { className: string; children: ReactNode; plan?: PlanKey }) {
 	const { isSignedIn } = useAuth();
 	const paid = isPaidPlanKey(plan) ? plan : undefined;
 	if (isSignedIn && paid) {
 		return (
-			<Link to="/dashboard/settings/$" search={{ upgrade: paid }} className={className}>
+			<Link to="/dashboard/settings/billing" search={{ upgrade: paid }} className={className}>
 				{children}
 			</Link>
 		);

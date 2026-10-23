@@ -4,14 +4,20 @@ import { RequireSession } from "../auth/require-session.tsx";
 import { PageError, PageLoading } from "../components/page-state.tsx";
 import { useMe } from "../lib/me.ts";
 import { safeReturnPath } from "../lib/return-to.ts";
+import { useDashboardTheme } from "../lib/theme.ts";
+import { ToastProvider } from "../ui/toast.tsx";
 import { AppShell } from "./app-shell.tsx";
 import { OrgContext } from "./org.ts";
 
-// Every page under /dashboard: a session, then a company, then the app shell around the page.
+// Every page under /dashboard: a session, then a company, then the app shell around the page. The dashboard's light
+// or dark theme applies from the first loading screen and comes off again when you leave the dashboard.
 export function DashboardLayout() {
+	useDashboardTheme();
 	return (
 		<RequireSession>
-			<WithOrg />
+			<ToastProvider>
+				<WithOrg />
+			</ToastProvider>
 		</RequireSession>
 	);
 }

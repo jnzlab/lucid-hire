@@ -1,7 +1,7 @@
-import { cleanup, configure, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, configure, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Job } from "../lib/jobs.ts";
-import { PublicLink } from "./share-panel.tsx";
+import { ShareButton, SharePanel } from "./share-panel.tsx";
 
 configure({ asyncUtilTimeout: 5000 });
 
@@ -30,9 +30,9 @@ afterEach(() => {
 	vi.unstubAllGlobals();
 });
 
-describe("PublicLink", () => {
+describe("SharePanel", () => {
 	it("shows the link, copies it and says so", async () => {
-		render(<PublicLink job={job} />);
+		render(<SharePanel job={job} />);
 		expect(screen.getByText(url)).toBeTruthy();
 		const open = screen.getByRole("link", { name: "Open public page" });
 		expect(open.getAttribute("href")).toBe(url);
@@ -44,51 +44,56 @@ describe("PublicLink", () => {
 	});
 
 	it("shares by email, X, LinkedIn, WhatsApp and Facebook, or copies a caption", async () => {
-		render(<PublicLink job={job} />);
-		const toggle = screen.getByRole("button", { name: "Share" });
-		expect(toggle.getAttribute("aria-expanded")).toBe("false");
-		fireEvent.click(toggle);
-		expect(toggle.getAttribute("aria-expanded")).toBe("true");
-
-		const hrefOf = (name: string) => screen.getByRole("link", { name }).getAttribute("href")!;
+		render(<SharePanel job={job} />);
+		const targets = within(screen.getByRole("group", { name: "Share to" }));
+		const hrefOf = (name: string) => targets.getByRole("link", { name }).getAttribute("href")!;
 		expect(hrefOf("Email")).toMatch(/^mailto:\?subject=iOS%20Developer&body=/);
 		expect(hrefOf("X")).toMatch(/^https:\/\/x\.com\/intent\/tweet\?text=/);
 		expect(hrefOf("LinkedIn")).toContain("linkedin.com/sharing/share-offsite/?url=");
 		expect(hrefOf("WhatsApp")).toContain("api.whatsapp.com/send?text=");
 		expect(hrefOf("Facebook")).toContain("facebook.com/sharer/sharer.php?u=");
-		expect(screen.getByRole("link", { name: "X" }).getAttribute("target")).toBe("_blank");
+		expect(targets.getByRole("link", { name: "X" }).getAttribute("target")).toBe("_blank");
 
-		fireEvent.click(screen.getByRole("button", { name: "Copy caption" }));
+		fireEvent.click(targets.getByRole("button", { name: "Copy caption" }));
 		await waitFor(() => expect(writeText).toHaveBeenCalledWith(`iOS Developer\n\nAbout Build great apps.\n\nApply here: ${url}`));
 		expect((await screen.findByRole("status")).textContent).toBe("Caption copied");
-		expect(screen.queryByRole("link", { name: "Facebook" })).toBeNull();
-	});
-
-	it("closes the share menu with Escape", () => {
-		render(<PublicLink job={job} />);
-		fireEvent.click(screen.getByRole("button", { name: "Share" }));
-		fireEvent.keyDown(document, { key: "Escape" });
-		expect(screen.queryByRole("link", { name: "Email" })).toBeNull();
 	});
 
 	it("offers no link for a draft", () => {
-		render(<PublicLink job={{ ...job, status: "draft" }} />);
+		render(<SharePanel job={{ ...job, status: "draft" }} />);
 		expect(screen.getByText("Open the job to get a public link.")).toBeTruthy();
 		expect(screen.queryByRole("button", { name: "Copy link" })).toBeNull();
-		expect(screen.queryByRole("button", { name: "Share" })).toBeNull();
+		expect(screen.queryByRole("group", { name: "Share to" })).toBeNull();
 	});
 
-	it("keeps the link for a closed job but hides sharing", () => {
-		render(<PublicLink job={{ ...job, status: "closed" }} />);
+	it("keeps the link for a closed job but says why it isn't worth sharing", () => {
+		render(<SharePanel job={{ ...job, status: "closed" }} />);
 		expect(screen.getByRole("button", { name: "Copy link" })).toBeTruthy();
 		expect(screen.getByRole("link", { name: "Open public page" })).toBeTruthy();
-		expect(screen.queryByRole("button", { name: "Share" })).toBeNull();
+		expect(screen.getByText("The job is closed, so its page says it isn't taking CVs.")).toBeTruthy();
+		expect(screen.queryByRole("group", { name: "Share to" })).toBeNull();
 	});
 
 	it("says when the clipboard is unavailable", async () => {
 		writeText.mockRejectedValue(new Error("denied"));
-		render(<PublicLink job={job} />);
+		render(<SharePanel job={job} />);
 		fireEvent.click(screen.getByRole("button", { name: "Copy link" }));
 		expect((await screen.findByRole("status")).textContent).toMatch(/Couldn't copy/);
+	});
+});
+
+describe("ShareButton", () => {
+	it("opens the panel in a popover and closes it with Escape, back on the button", async () => {
+		render(<ShareButton job={job} />);
+		const toggle = screen.getByRole("button", { name: "Share" });
+		expect(toggle.getAttribute("aria-expanded")).toBe("false");
+		fireEvent.click(toggle);
+		expect(toggle.getAttribute("aria-expanded")).toBe("true");
+		const panel = screen.getByRole("dialog", { name: "Share this job" });
+		expect(within(panel).getByText(url)).toBeTruthy();
+
+		fireEvent.keyDown(within(panel).getByRole("button", { name: "Copy link" }), { key: "Escape" });
+		expect(screen.queryByRole("dialog", { name: "Share this job" })).toBeNull();
+		await waitFor(() => expect(document.activeElement).toBe(toggle));
 	});
 });

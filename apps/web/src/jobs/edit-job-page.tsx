@@ -1,11 +1,13 @@
-import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { useNavigate, useRouterState } from "@tanstack/react-router";
 import { AnnouncedBanner } from "../components/announced-banner.tsx";
-import { type Job, useJob, useUpdateJob } from "../lib/jobs.ts";
+import { type Job, type JobInput, type JobStatus, useJob, useUpdateJob } from "../lib/jobs.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
-import { CoverField } from "./cover-field.tsx";
+import { PageHeader } from "../ui/page-header.tsx";
+import { useToast } from "../ui/use-toast.ts";
+import { EditorSkeleton } from "./editor/editor-skeleton.tsx";
+import { savedMessage } from "./editor/publish.ts";
 import { JobForm } from "./job-form.tsx";
 import { JobLoadError } from "./job-page.tsx";
-import { BackToJobs, PageHeading, SectionLoading } from "./job-ui.tsx";
 
 declare module "@tanstack/react-router" {
 	interface HistoryState {
@@ -19,10 +21,9 @@ export function EditJobPage({ jobId }: { jobId: string }) {
 	useDocumentTitle(job.data ? `Edit ${job.data.title} · LucidHire` : "Edit job · LucidHire");
 
 	return (
-		<div className="wrap py-[clamp(32px,5vw,64px)]">
-			<BackToJobs />
+		<div className="wrap page">
 			{job.isPending ? (
-				<SectionLoading label="Loading job" page />
+				<EditorSkeleton label="Loading job" />
 			) : job.isError ? (
 				<JobLoadError error={job.error} onRetry={() => void job.refetch()} />
 			) : (
@@ -32,36 +33,47 @@ export function EditJobPage({ jobId }: { jobId: string }) {
 	);
 }
 
+// One line under the title about who can see the job now.
+const SUMMARY: Record<JobStatus, string> = {
+	open: "Candidates see your changes on the apply page as soon as you save.",
+	draft: "It's a draft, so only your team can see it.",
+	closed: "It's closed, so it takes no new CVs.",
+};
+
 function EditJob({ job }: { job: Job }) {
 	const navigate = useNavigate();
+	const toast = useToast();
 	const update = useUpdateJob(job.id);
 	const duplicated = useRouterState({ select: (state) => state.location.state.duplicatedJob });
-	const toJob = { to: "/dashboard/jobs/$jobId", params: { jobId: job.id } } as const;
+	const jobPath = `/dashboard/jobs/${job.id}`;
+
+	const save = (input: JobInput, status: JobStatus) => {
+		const previous = job.status;
+		// Only a status that changed is sent, so saving the words never reopens or closes anything by accident.
+		update.mutate(status === previous ? input : { ...input, status }, {
+			onSuccess: (saved) => {
+				toast.show(savedMessage("edit", saved.status, previous));
+				void navigate({ to: "/dashboard/jobs/$jobId", params: { jobId: job.id }, ignoreBlocker: true });
+			},
+		});
+	};
 
 	return (
 		<>
-			<PageHeading eyebrow="Edit job" title={job.title} />
-			<AnnouncedBanner message={duplicated ? "Duplicated as a draft" : undefined} className="mt-6" />
+			<PageHeader
+				breadcrumbs={[{ label: "Jobs", href: "/dashboard/jobs" }, { label: job.title, href: jobPath }, { label: "Edit" }]}
+				title="Edit job"
+				summary={SUMMARY[job.status]}
+			>
+				{duplicated && (
+					<div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+						<AnnouncedBanner message="Duplicated as a draft" />
+						<p className="text-[14px] text-ink-muted">Change what's different, then save. It stays a draft until you open it.</p>
+					</div>
+				)}
+			</PageHeader>
 			<div className="mt-8">
-				<CoverField job={job} />
-			</div>
-			<div className="mt-8">
-				<JobForm
-					initial={{ title: job.title, description: job.description }}
-					saving={update.isPending}
-					saveError={update.error}
-					onSave={(input) => update.mutate(input, { onSuccess: () => void navigate({ ...toJob, ignoreBlocker: true }) })}
-					actions={({ saving }) => (
-						<>
-							<Link {...toJob} className="btn ghost">
-								Cancel
-							</Link>
-							<button type="submit" className="btn" aria-disabled={saving}>
-								{saving ? "Saving" : "Save changes"}
-							</button>
-						</>
-					)}
-				/>
+				<JobForm mode="edit" job={job} saving={update.isPending} saveError={update.error} cancelHref={jobPath} onSave={save} />
 			</div>
 		</>
 	);

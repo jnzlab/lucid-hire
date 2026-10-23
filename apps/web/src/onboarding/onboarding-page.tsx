@@ -64,7 +64,7 @@ function PickedPlanRedirect({ next }: { next: string | undefined }) {
 	const [plan] = useState(takePickedPlan);
 	if (next) return <Navigate to={next} replace />;
 	return plan ? (
-		<Navigate to="/dashboard/settings/$" search={{ upgrade: plan }} replace />
+		<Navigate to="/dashboard/settings/billing" search={{ upgrade: plan }} replace />
 	) : (
 		<Navigate to="/dashboard" replace />
 	);
