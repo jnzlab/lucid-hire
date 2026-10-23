@@ -53,11 +53,12 @@ export function jobRoutes({ auth, enhance, writeQuestions }: JobRouteOptions) {
 	const routes = new Hono<AppEnv>();
 	routes.use(auth, requireOrg);
 
-	// The list takes ?q= (title or description), ?status=, ?sort= and ?page=, 20 jobs to a page.
+	// The list takes ?q= (title or description), ?status=, ?sort= and ?page=, 20 jobs to a page. `counts` is per status
+	// for the same search, so the status tabs can show how many each would list.
 	routes.get("/", validQuery(listJobsQuery), async (c) => {
 		const query = c.req.valid("query");
-		const { jobs, total } = await listJobs(getDb(c.env.DB), c.get("org").id, query);
-		return c.json({ jobs, total, page: query.page, pageSize: JOBS_PAGE_SIZE }, 200, { "Cache-Control": "no-store" });
+		const { jobs, total, counts } = await listJobs(getDb(c.env.DB), c.get("org").id, query);
+		return c.json({ jobs, total, page: query.page, pageSize: JOBS_PAGE_SIZE, counts }, 200, { "Cache-Control": "no-store" });
 	});
 
 	routes.post("/", validJson(createJobInput), async (c) => {

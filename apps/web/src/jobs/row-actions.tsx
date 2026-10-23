@@ -1,225 +1,181 @@
-import { Link, useNavigate } from "@tanstack/react-router";
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import { ChevronDown, CircleStop, Copy, Ellipsis, Eye, Link2, Pencil, Play, Share2, Trash2 } from "lucide-react";
+import { type ReactNode, useState } from "react";
 import { ConfirmDialog } from "../components/confirm-dialog.tsx";
-import { IconMore } from "../components/icons.tsx";
 import { useOrg } from "../dashboard/org.ts";
-import { type JobListItem, useDeleteJob, useDuplicateJob } from "../lib/jobs.ts";
+import { type JobListItem, type JobStatus, useDeleteJob, useDuplicateJob, useUpdateJob } from "../lib/jobs.ts";
 import { publicJobUrl } from "../lib/public-jobs.ts";
 import { buildShareLinks, shareTargets } from "../lib/share.ts";
-import { useCopy } from "./use-copy.ts";
+import { Menu, MenuItem, MenuSeparator } from "../ui/menu.tsx";
+import { useToast } from "../ui/use-toast.ts";
+import { cvsOnJob } from "./list/summaries.ts";
 
-const item =
-	"flex min-h-11 w-full items-center rounded-md px-3 text-left text-[15px] font-[500] text-ink-2 hover:bg-paper-2 hover:text-ink focus-visible:bg-paper-2";
+const ICON = { size: 16, "aria-hidden": true } as const;
 
-// The "..." menu on a job row: Candidates, Edit, Duplicate, the public link and sharing (as on the job's page:
-// a draft has no public page, a closed job has one but isn't worth sharing) and, for admins, Delete. A real menu button: Enter,
-// Space or the arrow keys open it, the arrows move, Escape closes it and gives focus back.
-export function RowActions({ job, onDeleted }: { job: JobListItem; onDeleted: (title: string) => void }) {
+// The one status change each status offers, what it does in a line, and the verb its toast uses.
+const STATUS_CHANGE: Record<JobStatus, { to: JobStatus; label: string; description: string; done: string; icon: ReactNode }> = {
+	open: {
+		to: "closed",
+		label: "Close job",
+		description: "Stops new CVs. The apply page says it's closed.",
+		done: "Closed",
+		icon: <CircleStop {...ICON} />,
+	},
+	closed: { to: "open", label: "Reopen job", description: "Takes CVs again on the apply page.", done: "Reopened", icon: <Play {...ICON} /> },
+	draft: { to: "open", label: "Open job", description: "Puts the apply page live so it takes CVs.", done: "Opened", icon: <Play {...ICON} /> },
+};
+
+// The "…" menu on a job row: view, edit, duplicate, the apply link and sharing (as on the job's page: a draft has no
+// public page, a closed job has one but isn't worth sharing), the status change, and Delete for admins. Copies,
+// status changes and deletes are confirmed in a toast; a status change can be undone from it.
+export function RowActions({ job, onDeleted }: { job: JobListItem; onDeleted: (job: JobListItem) => void }) {
 	const org = useOrg();
 	const navigate = useNavigate();
+	const toast = useToast();
 	const duplicate = useDuplicateJob(job.id);
+	const update = useUpdateJob(job.id);
 	const remove = useDeleteJob(job.id);
-	const [open, setOpen] = useState(false);
 	const [confirming, setConfirming] = useState(false);
 	const [sharing, setSharing] = useState(false);
-	const { message, copy: copyText } = useCopy();
-	const buttonRef = useRef<HTMLButtonElement>(null);
-	const rootRef = useRef<HTMLDivElement>(null);
-	// Which item takes focus when the menu opens: the first, or (from the Up arrow) the last.
-	const startAt = useRef(0);
-	const items = () => [...(rootRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])];
 
-	useEffect(() => {
-		if (!open) return;
-		const all = [...(rootRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])];
-		all.at(startAt.current)?.focus();
-		// Choosing outside closes the menu without moving focus.
-		const close = (event: Event) => {
-			if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-		};
-		document.addEventListener("pointerdown", close);
-		return () => document.removeEventListener("pointerdown", close);
-	}, [open]);
-
-	const focusItem = (index: number) => {
-		const all = items();
-		all[(index + all.length) % all.length]?.focus();
-	};
-	const close = (returnFocus = true) => {
-		setOpen(false);
-		setSharing(false);
-		if (returnFocus) buttonRef.current?.focus();
-	};
-
-	const onButtonKey = (event: KeyboardEvent) => {
-		if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-			event.preventDefault();
-			startAt.current = event.key === "ArrowDown" ? 0 : -1;
-			setOpen(true);
+	const copy = async (text: string, done: string, what: string) => {
+		try {
+			await navigator.clipboard.writeText(text);
+			toast.show(done);
+		} catch {
+			toast.error(
+				<>
+					Couldn't <span className="mk mk-gap">copy</span> the {what}. Open the job and copy it from Share.
+				</>,
+			);
 		}
 	};
-	const onMenuKey = (event: KeyboardEvent) => {
-		const at = items().indexOf(document.activeElement as HTMLElement);
-		if (event.key === "ArrowDown") focusItem(at + 1);
-		else if (event.key === "ArrowUp") focusItem(at - 1);
-		else if (event.key === "Home") focusItem(0);
-		else if (event.key === "End") focusItem(-1);
-		else if (event.key === "Escape") close();
-		else if (event.key === "Tab") return setOpen(false);
-		else return;
-		event.preventDefault();
-	};
 
-	const copy = () => {
-		close();
+	const duplicateJob = () =>
 		duplicate.mutate(undefined, {
 			onSuccess: (created) =>
-				void navigate({
-					to: "/dashboard/jobs/$jobId/edit",
-					params: { jobId: created.id },
-					state: { duplicatedJob: true },
-				}),
+				void navigate({ to: "/dashboard/jobs/$jobId/edit", params: { jobId: created.id }, state: { duplicatedJob: true } }),
+			// The API's own words: a plan limit says which limit, without generic upgrade wording.
+			onError: (error) => toast.error(error.message),
+		});
+
+	// mutateAsync rather than callbacks: a status filter can take the row off the list before the answer comes back,
+	// and the toast (with its Undo) must still appear.
+	const setStatus = async (to: JobStatus, from: JobStatus, undo = false) => {
+		try {
+			await update.mutateAsync({ status: to });
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : "Something went wrong. Try again.");
+			return;
+		}
+		if (undo) return;
+		toast.show({
+			message: `${STATUS_CHANGE[from].done} “${job.title}”`,
+			action: { label: "Undo", onClick: () => void setStatus(from, to, true) },
 		});
 	};
+
 	// The list doesn't carry descriptions, so a caption from here is the title and the link.
 	const targets = shareTargets(buildShareLinks({ title: job.title, description: "", slug: job.slug }));
-	const hasPublicPage = job.status !== "draft";
-	const removed =
-		job.cvCount > 0 ? `It and its ${job.cvCount} ${job.cvCount === 1 ? "CV are" : "CVs are"} removed` : "It's removed";
+	const change = STATUS_CHANGE[job.status];
+	const cvs = cvsOnJob(job);
+	const removed = cvs > 0 ? `It and its ${cvs} ${cvs === 1 ? "CV are" : "CVs are"} removed` : "It's removed";
 
 	return (
-		<div ref={rootRef} className="relative flex-none">
-			<button
-				ref={buttonRef}
-				type="button"
-				aria-label={`Actions for ${job.title}`}
-				aria-haspopup="menu"
-				aria-expanded={open}
-				onClick={() => {
-					startAt.current = 0;
-					setOpen(!open);
+		<>
+			<Menu
+				align="end"
+				onOpenChange={(open) => {
+					if (!open) setSharing(false);
 				}}
-				onKeyDown={onButtonKey}
-				className="inline-grid size-11 place-items-center rounded-md text-ink-muted hover:bg-paper-2 hover:text-ink"
-			>
-				<IconMore />
-			</button>
-			{open && (
-				<div
-					role="menu"
-					aria-label={`Actions for ${job.title}`}
-					onKeyDown={onMenuKey}
-					className="absolute top-full right-0 z-30 mt-1 w-48 rounded-lg bg-sheet p-1.5 shadow-float"
-				>
-					<Link
-						role="menuitem"
-						to="/dashboard/jobs/$jobId"
-						params={{ jobId: job.id }}
-						className={item}
-						onClick={() => close(false)}
-					>
-						Candidates
-					</Link>
-					<Link
-						role="menuitem"
-						to="/dashboard/jobs/$jobId/edit"
-						params={{ jobId: job.id }}
-						className={item}
-						onClick={() => close(false)}
-					>
-						Edit
-					</Link>
-					<button type="button" role="menuitem" className={item} onClick={copy}>
-						Duplicate
+				trigger={(props) => (
+					<button {...props} aria-label={`Actions for ${job.title}`} className="icon-btn relative z-10">
+						<Ellipsis size={20} aria-hidden="true" />
 					</button>
-					{hasPublicPage && (
+				)}
+			>
+				<MenuItem href={`/dashboard/jobs/${job.id}`} icon={<Eye {...ICON} />}>
+					View job
+				</MenuItem>
+				<MenuItem href={`/dashboard/jobs/${job.id}/edit`} icon={<Pencil {...ICON} />}>
+					Edit job
+				</MenuItem>
+				<MenuItem onSelect={duplicateJob} icon={<Copy {...ICON} />} disabled={duplicate.isPending}>
+					Duplicate
+				</MenuItem>
+				{job.status !== "draft" && (
+					<>
+						<MenuSeparator />
+						<MenuItem
+							icon={<Link2 {...ICON} />}
+							onSelect={() => void copy(publicJobUrl(job.slug), "Apply link copied", "link")}
+						>
+							Copy apply link
+						</MenuItem>
+					</>
+				)}
+				{job.status === "open" && (
+					<>
+						{/* Opens the share targets in place, under it, so the menu stays one level deep. */}
 						<button
 							type="button"
 							role="menuitem"
-							className={item}
-							onClick={() => {
-								close();
-								void copyText(publicJobUrl(job.slug), "Copied");
-							}}
+							tabIndex={-1}
+							aria-expanded={sharing}
+							className="menu-item"
+							onClick={() => setSharing(!sharing)}
 						>
-							Copy public link
+							<span className="grid size-4 flex-none place-items-center">
+								<Share2 {...ICON} />
+							</span>
+							<span className="flex min-w-0 flex-1 flex-col">
+								<span className="truncate">Share</span>
+							</span>
+							<ChevronDown
+								size={16}
+								aria-hidden="true"
+								className={`flex-none text-ink-muted transition-transform ${sharing ? "rotate-180" : ""}`}
+							/>
 						</button>
-					)}
-					{job.status === "open" && (
-						<>
-							<button
-								type="button"
-								role="menuitem"
-								aria-expanded={sharing}
-								className={item}
-								onClick={() => setSharing(!sharing)}
-							>
-								Share
-							</button>
-							{sharing && (
-								<div role="group" aria-label="Share this job" className="ml-3 border-l border-line pl-1">
-									{targets.map((target) =>
-										"caption" in target ? (
-											<button
-												key={target.label}
-												type="button"
-												role="menuitem"
-												className={item}
-												onClick={() => {
-													close();
-													void copyText(target.caption, "Caption copied");
-												}}
-											>
-												{target.label}
-											</button>
-										) : (
-											<a
-												key={target.label}
-												role="menuitem"
-												href={target.href}
-												{...(target.external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
-												className={item}
-												onClick={() => close(false)}
-											>
-												{target.label}
-											</a>
-										),
-									)}
-								</div>
-							)}
-						</>
-					)}
-					{org.role === "admin" && (
-						<button
-							type="button"
-							role="menuitem"
-							className={`${item} text-gap-ink hover:text-gap-ink`}
-							onClick={() => {
-								// Focus goes to the menu button first, so the dialog hands focus back to something that stays.
-								close();
-								setConfirming(true);
-							}}
-						>
-							Delete
-						</button>
-					)}
-				</div>
-			)}
+						{sharing && (
+							<div role="group" aria-label="Share this job" className="ml-[17px] border-l border-line pl-1.5">
+								{targets.map((target) =>
+									"caption" in target ? (
+										<MenuItem key={target.label} onSelect={() => void copy(target.caption, "Caption copied", "caption")}>
+											{target.label}
+										</MenuItem>
+									) : (
+										<MenuItem key={target.label} href={target.href} target={target.external ? "_blank" : undefined}>
+											{target.label}
+										</MenuItem>
+									),
+								)}
+							</div>
+						)}
+					</>
+				)}
+				<MenuSeparator />
+				<MenuItem
+					icon={change.icon}
+					description={change.description}
+					disabled={update.isPending}
+					onSelect={() => void setStatus(change.to, job.status)}
+				>
+					{change.label}
+				</MenuItem>
+				{org.role === "admin" && (
+					<>
+						<MenuSeparator />
+						{/* The menu closes first and gives focus to its button, so the dialog hands focus back to it. */}
+						<MenuItem destructive icon={<Trash2 {...ICON} />} onSelect={() => setConfirming(true)}>
+							Delete job
+						</MenuItem>
+					</>
+				)}
+			</Menu>
 			{duplicate.isPending && (
 				<p role="status" className="sr-only">
 					Duplicating
-				</p>
-			)}
-			<p
-				role="status"
-				aria-live="polite"
-				className="absolute top-full right-0 z-20 mt-1 rounded-md bg-sheet px-3 py-2 font-mono text-[12.5px] text-ink shadow-float empty:hidden"
-			>
-				{message}
-			</p>
-			{duplicate.isError && (
-				<p role="alert" className="absolute top-full right-0 z-20 mt-1 w-64 rounded-md bg-sheet p-3 text-[14px] text-gap-ink shadow-float">
-					✕ {duplicate.error.message}
 				</p>
 			)}
 			{confirming && (
@@ -233,18 +189,20 @@ export function RowActions({ job, onDeleted }: { job: JobListItem; onDeleted: (t
 						remove.reset();
 						setConfirming(false);
 					}}
-					onConfirm={() =>
-						remove.mutate(undefined, {
-							onSuccess: () => {
+					onConfirm={() => {
+						// The row leaves the list as soon as the cache drops it, so the page (not this row) says it's gone.
+						remove.mutateAsync().then(
+							() => {
 								setConfirming(false);
-								onDeleted(job.title);
+								onDeleted(job);
 							},
-						})
-					}
+							() => {},
+						);
+					}}
 				>
 					{removed} for everyone at {org.name}. You can't undo this.
 				</ConfirmDialog>
 			)}
-		</div>
+		</>
 	);
 }

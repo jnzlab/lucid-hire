@@ -2,18 +2,20 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RECENT_KEY } from "../lib/recent.ts";
 import { createAppRouter } from "../router.ts";
 
-const clerk = vi.hoisted(() => ({ signedIn: true, signOut: vi.fn() }));
+const clerk = vi.hoisted(() => ({ signedIn: true, userId: null as string | null, signOut: vi.fn() }));
 
 vi.mock("@clerk/react", () => ({
-	useAuth: () => ({ isLoaded: true, isSignedIn: clerk.signedIn, userId: null, getToken: async () => null }),
+	useAuth: () => ({ isLoaded: true, isSignedIn: clerk.signedIn, userId: clerk.userId, getToken: async () => null }),
 	useClerk: () => ({ signOut: clerk.signOut }),
 	Show: () => null,
 }));
 
 beforeEach(() => {
 	clerk.signedIn = true;
+	clerk.userId = null;
 	clerk.signOut.mockReset().mockResolvedValue(undefined);
 });
 afterEach(() => {
@@ -47,6 +49,20 @@ describe("sign-out page", () => {
 		expect(screen.getByRole("link", { name: "Sign in again" }).getAttribute("href")).toBe("/sign-in");
 		expect(screen.getByRole("link", { name: "Go home" }).getAttribute("href")).toBe("/");
 		expect(document.title).toBe("Sign out · LucidHire");
+	});
+
+	it("forgets the user's recent visits in the palette, and only theirs", async () => {
+		clerk.userId = "user_1";
+		const visit = (id: string) => [{ kind: "job", id, title: id, at: 1 }];
+		localStorage.setItem(
+			RECENT_KEY,
+			JSON.stringify({ "user_1/org_1": visit("j1"), "user_1/org_2": visit("j2"), "user_2/org_1": visit("j3") }),
+		);
+		renderSignOut();
+
+		expect(await screen.findByText("You're signed out.")).toBeTruthy();
+		expect(JSON.parse(localStorage.getItem(RECENT_KEY) ?? "{}")).toEqual({ "user_2/org_1": visit("j3") });
+		localStorage.removeItem(RECENT_KEY);
 	});
 
 	it("says so when there was no session, without calling Clerk", async () => {

@@ -1,527 +1,457 @@
-import { Link, useRouterState } from "@tanstack/react-router";
-import { useRef, useState } from "react";
-import { AnnouncedBanner } from "../components/announced-banner.tsx";
-import { ConfirmDialog } from "../components/confirm-dialog.tsx";
-import { Check, NoteMark } from "../components/icons.tsx";
-import { ScoreRing } from "../components/score-ring.tsx";
+import type { UseQueryResult } from "@tanstack/react-query";
+import { useNavigate, useRouter, useSearch } from "@tanstack/react-router";
+import { FileUp, Link2, Upload } from "lucide-react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { useOrg } from "../dashboard/org.ts";
-import { SectionError, SectionLoading } from "../jobs/job-ui.tsx";
+import { SectionError } from "../jobs/job-ui.tsx";
+import type { Capacity } from "../jobs/workspace/capacity.ts";
+import { CandidateRow } from "../jobs/workspace/candidate-row.tsx";
+import { FilterBar } from "../jobs/workspace/filter-bar.tsx";
+import { useArrowsLive } from "../jobs/workspace/use-arrows-live.ts";
+import type { StatusChange } from "../jobs/workspace/use-status-change.ts";
 import {
-	type CandidateSummary,
-	CV_LIMIT_PER_JOB,
-	DECISION_LABEL,
-	type Decision,
-	SLOW_CHECK_MS,
-	candidateName,
-	cvNoun,
-	failureMessage,
-	isSlow,
-	isWorking,
-	useCandidates,
-	useDeleteCandidate,
-	useRetryCandidate,
-	useUploadCvs,
-} from "../lib/candidates.ts";
-import {
-	DEFAULT_VIEW,
-	type ListView,
-	SORTS,
-	STATUS_FILTERS,
-	type SortKey,
-	type StatusFilter,
-	isFiltered,
-	visibleCandidates,
-} from "../lib/candidate-list.ts";
-import { formatNumber } from "../lib/format.ts";
+	type JobSearch,
+	type JobSort,
+	SHOW_EMPTY,
+	type ShowFilter,
+	candidatePath,
+	isFilteredView,
+	showCounts,
+	viewOf,
+	visibleRows,
+} from "../jobs/workspace/view.ts";
+import { type CandidateList, isWorking } from "../lib/candidates.ts";
 import type { Job } from "../lib/jobs.ts";
+import { useHotkeys } from "../lib/hotkeys.ts";
+import { publicJobUrl } from "../lib/public-jobs.ts";
+import { useMediaQuery } from "../lib/use-media-query.ts";
 import { UpgradeAction } from "../settings/upgrade.tsx";
-import { PLANS } from "@lucid-hire/plans";
-import { useNow } from "../lib/use-now.ts";
-import { CandidateTags, DecisionTag } from "./candidate-tags.tsx";
-import { ExportMenu } from "./export-menu.tsx";
-import { OpenCvButton } from "./open-cv-button.tsx";
+import { Checkbox } from "../ui/checkbox.tsx";
+import { EmptyState } from "../ui/empty-state.tsx";
+import { Skeleton } from "../ui/skeleton.tsx";
+import { useToast } from "../ui/use-toast.ts";
+import { BulkBar } from "./bulk-bar.tsx";
+import { CandidateDetail } from "./candidate-detail.tsx";
 import { RefreshFailed } from "./refresh-failed.tsx";
 import { ROW_ACTION } from "./row-action.ts";
-import { type Segment, SegmentedControl } from "./segmented-control.tsx";
-import { UploadZone } from "./upload-zone.tsx";
+import { useSelection } from "./use-selection.ts";
 
-declare module "@tanstack/react-router" {
-	interface HistoryState {
-		// Set by the candidate page after a delete, for the confirmation on the job page.
-		deletedCandidate?: string;
-	}
-}
+// From this width the list and the selected candidate sit side by side, each scrolling on its own.
+export const SPLIT_QUERY = "(min-width: 1100px)";
+// Rows drawn at first, and added by each "Show 50 more".
+const PAGE_SIZE = 50;
+// How long the search waits after the last key before it goes into the address.
+const QUERY_DELAY_MS = 200;
+const ROUTE = "/dashboard/jobs/$jobId/";
 
-// Why a job that isn't open can't take CVs, and what to do about it.
-const CLOSED_NOTE = {
-	draft: "This job is a draft, so it can't take CVs yet. Open it to start uploading.",
-	closed: "This job is closed, so it can't take new CVs. Reopen it to upload more.",
-} as const;
-
-// The job page's Candidates section: the upload zone, then everyone uploaded so far, best match first.
-export function CandidatesSection({ job }: { job: Job }) {
-	const candidates = useCandidates(job.id);
-	const uploads = useUploadCvs(job.id);
-	const deletedCandidate = useRouterState({ select: (state) => state.location.state.deletedCandidate });
-	// Set when a row is deleted here; the candidate page reports its own delete through the router state.
-	const [deletedHere, setDeletedHere] = useState<string>();
-	const headingRef = useRef<HTMLHeadingElement>(null);
-	const list = candidates.data?.candidates ?? [];
-	// "All CVs processed" says so when the last CV that was being read in this visit has finished. A list that was
-	// never working (opened with everything read already) says nothing.
-	const working = list.some(isWorking);
-	const [sawWork, setSawWork] = useState(false);
-	if (working && !sawWork) setSawWork(true);
-	const allProcessed = sawWork && !working && list.length > 0;
-	// The job's own count shows until the list arrives.
-	const used = candidates.data?.cvCount ?? job.cvCount;
-	const limit = candidates.data?.cvLimit ?? CV_LIMIT_PER_JOB;
-	const slotsLeft = Math.max(0, limit - used);
-	const org = useOrg();
-	const full = job.status === "open" && slotsLeft === 0;
-	// Why the job can't take CVs right now, if it can't.
-	const note =
-		job.status !== "open"
-			? CLOSED_NOTE[job.status]
-			: slotsLeft === 0
-				? `This job has used its ${formatNumber(limit)} ${cvNoun(limit)}.`
-				: null;
+// The job page's Candidates tab: the filter bar, then the ranked list and, from 1100px, the selected candidate beside
+// it. The filter, search, sort and selected candidate (`c`) live in the address. J/K (or ↓/↑) move the selection,
+// Enter opens the full candidate page, Esc clears the checked rows or returns from the detail pane, `/` searches.
+// Below 1100px a row opens the candidate's own page, with the view in its address so Back returns to it.
+export function CandidatesSection({
+	job,
+	candidates,
+	capacity,
+	status,
+	onUpload,
+}: {
+	job: Job;
+	candidates: UseQueryResult<CandidateList>;
+	capacity: Capacity;
+	status: StatusChange;
+	onUpload: () => void;
+}) {
+	const list = candidates.data?.candidates;
 
 	return (
-		<section aria-labelledby="candidates-h" className="mt-10">
-			<div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
-				<h2
-					ref={headingRef}
-					tabIndex={-1}
-					id="candidates-h"
-					className="text-[19px] leading-[1.2] font-[800] tracking-[-0.01em] focus:outline-none [font-stretch:108%]"
-				>
-					Candidates
-				</h2>
-				<div className="flex flex-wrap items-center gap-x-5 gap-y-1 font-mono text-[12.5px] text-ink-muted">
-					<p>
-						{formatNumber(used)} of {formatNumber(limit)} {cvNoun(limit)} used
-					</p>
-					<ReadProgress list={list} />
-				</div>
-			</div>
-			{/* Always on the page, so the screen reader hears the line when it appears. */}
-			<p aria-live="polite" className="mt-2 inline-flex items-center gap-2 font-mono text-[12.5px] text-ink empty:hidden">
-				{allProcessed && (
-					<>
-						<Check />
-						All CVs processed. The list is up to date.
-					</>
-				)}
-			</p>
-
-			<AnnouncedBanner message={deletedHere ?? (deletedCandidate && `Deleted “${deletedCandidate}”`)} className="mt-4" />
-
-			<div className="mt-4">
-				<UploadZone
-					uploads={uploads}
-					note={note}
-					// The top plan has nothing to upgrade to.
-					noteAction={full && limit < PLANS.max.cvsPerJob ? <UpgradeAction isAdmin={org.role === "admin"} /> : undefined}
-					slotsLeft={slotsLeft}
-					limit={limit}
+		<section aria-labelledby="candidates-h" className="flex flex-col gap-3 min-[1100px]:min-h-0 min-[1100px]:flex-1">
+			<h2 id="candidates-h" className="sr-only">
+				Candidates
+			</h2>
+			{capacity.note && <CapacityBanner job={job} capacity={capacity} status={status} />}
+			{candidates.isPending ? (
+				<LoadingList />
+			) : candidates.isError && !list ? (
+				<SectionError
+					title="We couldn't load the candidates"
+					message={candidates.error.message}
+					action={
+						<button type="button" className="btn" onClick={() => void candidates.refetch()}>
+							Try again
+						</button>
+					}
 				/>
-			</div>
-
-			<div className="mt-5">
-				{candidates.isPending ? (
-					<SectionLoading label="Loading candidates" />
-				) : candidates.isError && !candidates.data ? (
-					<SectionError
-						title="We couldn't load the candidates"
-						message={candidates.error.message}
-						action={
-							<button type="button" className="btn" onClick={() => void candidates.refetch()}>
-								Try again
-							</button>
-						}
-					/>
-				) : (
-					<>
-						{/* A failed refresh keeps what we have on screen. */}
-						{candidates.isError && (
-							<RefreshFailed polling={list.some(isWorking)} onRetry={() => void candidates.refetch()} />
-						)}
-						{list.length > 0 ? (
-							<RankedList
-								jobId={job.id}
-								candidates={list}
-								onDeleted={(name) => {
-									setDeletedHere(`Deleted “${name}”`);
-									// The row that had focus is gone.
-									headingRef.current?.focus();
-								}}
-							/>
-						) : (
-							<p className="rounded-xl bg-sheet px-6 py-5 text-[15px] text-ink-2 shadow-card">
-								No candidates yet. Uploaded CVs are ranked here.
-							</p>
-						)}
-					</>
-				)}
-			</div>
+			) : !list || list.length === 0 ? (
+				<NoCandidates job={job} canTake={capacity.note === null} onUpload={onUpload} />
+			) : (
+				<Workspace job={job} list={list} refreshFailed={candidates.isError} onRetry={() => void candidates.refetch()} />
+			)}
 		</section>
 	);
 }
 
-// "3 of 5 read", live while CVs are still being read. It's a status region, so screen readers hear
-// each change as the scores come in.
-function ReadProgress({ list }: { list: CandidateSummary[] }) {
-	const working = list.some(isWorking);
-	const read = list.filter(({ status }) => status === "scored").length;
-	const failed = list.filter(({ status }) => status === "failed").length;
-	return (
-		<p role="status" className="inline-flex items-center gap-2 text-ink empty:hidden">
-			{working && <span className="live-dot" aria-hidden="true" />}
-			{list.length > 0 && `${read} of ${list.length} read${failed > 0 ? ` · ${failed} failed` : ""}`}
-		</p>
-	);
-}
-
-type Show = "all" | Decision;
-
-const SHOW_ORDER: Show[] = ["all", "shortlisted", "undecided", "rejected"];
-const EMPTY_FILTER: Record<Decision, string> = {
-	shortlisted: "No shortlisted candidates yet.",
-	undecided: "No undecided candidates yet.",
-	rejected: "No rejected candidates yet.",
-};
-// Rows drawn at first, and added by each "Show 50 more".
-const PAGE_SIZE = 50;
-
-function RankedList({
-	jobId,
-	candidates,
-	onDeleted,
+// The list and the detail pane once there is at least one CV.
+function Workspace({
+	job,
+	list,
+	refreshFailed,
+	onRetry,
 }: {
-	jobId: string;
-	candidates: CandidateSummary[];
-	onDeleted: (name: string) => void;
-}) {
-	const [view, setView] = useState<ListView>(DEFAULT_VIEW);
-	const [limit, setLimit] = useState(PAGE_SIZE);
-	// A rank belongs to the CV (the API sends it), not to its place on screen: searching and filtering hide rows
-	// and never renumber the rest.
-	const change = (patch: Partial<ListView>) => {
-		setView((current) => ({ ...current, ...patch }));
-		setLimit(PAGE_SIZE);
-	};
-	// The decision filter appears once there is something to decide on.
-	const filterable = candidates.some(({ status }) => status === "scored");
-	const decision = filterable ? view.decision : "all";
-	const rows = visibleCandidates(candidates, { ...view, decision });
-	const shown = rows.slice(0, limit);
-	const filtered = isFiltered({ ...view, decision });
-	const onlyDecision = decision !== "all" && view.query.trim() === "" && view.status === "all";
-
-	return (
-		<>
-			<div className="mb-4 flex justify-end">
-				<ExportMenu jobId={jobId} />
-			</div>
-			<ListTools view={view} onChange={change} />
-			{filterable && <DecisionFilter candidates={candidates} show={view.decision} onChange={(show) => change({ decision: show })} />}
-			{filtered && (
-				<p aria-live="polite" className="mb-3 font-mono text-[12.5px] text-ink-muted">
-					{rows.length === candidates.length
-						? `Showing all ${candidates.length} candidates`
-						: `Showing ${rows.length} of ${candidates.length} candidates`}
-				</p>
-			)}
-			{rows.length === 0 ? (
-				<div className="rounded-xl bg-sheet px-6 py-5 text-[15px] text-ink-2 shadow-card">
-					<p>{onlyDecision ? EMPTY_FILTER[decision] : "No candidates match your search and filters."}</p>
-					{!onlyDecision && (
-						<button type="button" className={`mt-2 ${ROW_ACTION}`} onClick={() => change(DEFAULT_VIEW)}>
-							Clear search and filters
-						</button>
-					)}
-				</div>
-			) : (
-				<ol aria-labelledby="candidates-h" className="rounded-xl bg-sheet px-6 shadow-card">
-					{shown.map((candidate) => (
-						<CandidateItem key={candidate.id} jobId={jobId} candidate={candidate} onDeleted={onDeleted} />
-					))}
-				</ol>
-			)}
-			{rows.length > shown.length && (
-				<div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
-					<button type="button" className="btn ghost" onClick={() => setLimit((current) => current + PAGE_SIZE)}>
-						Show {Math.min(PAGE_SIZE, rows.length - shown.length)} more
-					</button>
-					<p className="font-mono text-[12.5px] text-ink-muted">
-						{shown.length} of {rows.length} shown
-					</p>
-				</div>
-			)}
-		</>
-	);
-}
-
-// Search, status and sort. Search and status only hide rows; sort never moves a CV without a score ahead of one with.
-function ListTools({ view, onChange }: { view: ListView; onChange: (patch: Partial<ListView>) => void }) {
-	return (
-		<div className="mb-4 grid gap-3 min-[561px]:grid-cols-[minmax(0,1fr)_auto_auto]">
-			<label className="block">
-				<span className="mb-1 block font-mono text-[12.5px] text-ink-muted">Search candidates</span>
-				<input
-					type="search"
-					className="field"
-					value={view.query}
-					placeholder="Name, email or summary"
-					autoComplete="off"
-					onChange={(event) => onChange({ query: event.target.value })}
-				/>
-			</label>
-			<label className="block">
-				<span className="mb-1 block font-mono text-[12.5px] text-ink-muted">Status</span>
-				<select
-					className="field"
-					value={view.status}
-					onChange={(event) => onChange({ status: event.target.value as StatusFilter })}
-				>
-					{STATUS_FILTERS.map(({ value, label }) => (
-						<option key={value} value={value}>
-							{label}
-						</option>
-					))}
-				</select>
-			</label>
-			<label className="block">
-				<span className="mb-1 block font-mono text-[12.5px] text-ink-muted">Sort by</span>
-				<select className="field" value={view.sort} onChange={(event) => onChange({ sort: event.target.value as SortKey })}>
-					{SORTS.map(({ value, label }) => (
-						<option key={value} value={value}>
-							{label}
-						</option>
-					))}
-				</select>
-			</label>
-		</div>
-	);
-}
-
-// "Show: All 5, Shortlisted 2, Undecided 2, Rejected 1". It only hides rows; the counts are of the whole list.
-function DecisionFilter({
-	candidates,
-	show,
-	onChange,
-}: {
-	candidates: CandidateSummary[];
-	show: Show;
-	onChange: (show: Show) => void;
-}) {
-	const count = (option: Show) =>
-		option === "all" ? candidates.length : candidates.filter(({ decision }) => decision === option).length;
-	const segments: Segment<Show>[] = SHOW_ORDER.map((option) => ({
-		value: option,
-		label: `${option === "all" ? "All" : DECISION_LABEL[option]} ${count(option)}`,
-	}));
-	return (
-		<div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-			<span id="show-h" className="font-mono text-[12.5px] text-ink-muted">
-				Show
-			</span>
-			<SegmentedControl name="show" labelledBy="show-h" value={show} segments={segments} onChange={onChange} compact />
-		</div>
-	);
-}
-
-// A row with its tags, its actions and, when the API allows it, a Retry button. Each row keeps its own retry
-// state and whether all its requirements are open.
-function CandidateItem({
-	jobId,
-	candidate,
-	onDeleted,
-}: {
-	jobId: string;
-	candidate: CandidateSummary;
-	onDeleted: (name: string) => void;
+	job: Job;
+	list: CandidateList["candidates"];
+	refreshFailed: boolean;
+	onRetry: () => void;
 }) {
 	const org = useOrg();
-	const retry = useRetryCandidate(jobId);
-	const [expanded, setExpanded] = useState(false);
-	const retryLabel = retry.isPending ? "Retrying" : "Retry";
-	const name = candidateName(candidate);
-	const hidden = candidate.checks.length - candidate.matches.length - candidate.gaps.length;
-	// Open: every requirement, the met ones first. Closed: the four best matches and the two worst gaps.
-	const matches = expanded ? candidate.checks.filter(({ met }) => met).map(({ label }) => label) : candidate.matches;
-	const gaps = expanded ? candidate.checks.filter(({ met }) => !met).map(({ label }) => label) : candidate.gaps;
-	return (
-		<li className="border-b border-line-2 py-1 last:border-b-0">
-			<CandidateRow jobId={jobId} candidate={candidate} />
-			<CandidateTags
-				matches={matches}
-				gaps={gaps}
-				className={`mt-1 mb-1 ml-[42px] ${candidate.decision === "rejected" ? "opacity-75" : ""}`}
-			/>
-			<div className="mb-2 ml-[42px] flex flex-wrap items-center gap-x-4 gap-y-0">
-				{(hidden > 0 || expanded) && (
-					<button
-						type="button"
-						className={ROW_ACTION}
-						aria-expanded={expanded}
-						aria-label={`${expanded ? "Show fewer requirements" : "Show all requirements"} for ${name}`}
-						onClick={() => setExpanded(!expanded)}
-					>
-						{expanded ? "Show fewer requirements" : "Show all requirements"}
-					</button>
-				)}
-				<OpenCvButton jobId={jobId} candidateId={candidate.id} fileName={candidate.fileName} forName={name} />
-				{org.role === "admin" && <DeleteCandidate jobId={jobId} candidate={candidate} onDeleted={onDeleted} />}
-				{candidate.canRetry && (
-					/* Only looks disabled while it retries, so it keeps keyboard focus; the click is ignored. */
-					<button
-						type="button"
-						className="btn ghost"
-						aria-label={`${retryLabel} ${name}`}
-						aria-disabled={retry.isPending}
-						onClick={() => {
-							if (!retry.isPending) retry.mutate(candidate.id);
-						}}
-					>
-						{retryLabel}
-					</button>
-				)}
-			</div>
-			{retry.isError && (
-				<p role="alert" className="mb-3 ml-[42px] text-[14px] text-gap-ink">
-					✕ {retry.error.message}
-				</p>
-			)}
-		</li>
-	);
-}
+	const router = useRouter();
+	const search = useSearch({ from: ROUTE });
+	const navigate = useNavigate({ from: ROUTE });
+	const split = useMediaQuery(SPLIT_QUERY, false);
+	const searchRef = useRef<HTMLInputElement>(null);
+	const listRef = useRef<HTMLOListElement>(null);
+	const detailRef = useRef<HTMLDivElement>(null);
+	const headerRef = useRef<HTMLDivElement>(null);
+	const selectAllRef = useRef<HTMLElement | null>(null);
+	const arrowsLive = useArrowsLive(detailRef);
 
-// Delete from the row, for admins, behind the same confirmation as on the candidate page. The row goes with the
-// CV, so the parent says what was deleted.
-function DeleteCandidate({
-	jobId,
-	candidate,
-	onDeleted,
-}: {
-	jobId: string;
-	candidate: CandidateSummary;
-	onDeleted: (name: string) => void;
-}) {
-	const org = useOrg();
-	const remove = useDeleteCandidate(jobId, candidate.id);
-	const [confirming, setConfirming] = useState(false);
-	const name = candidateName(candidate);
-	return (
-		<>
-			<button
-				type="button"
-				className={`${ROW_ACTION} text-gap-ink`}
-				aria-label={`Delete candidate ${name}`}
-				onClick={() => setConfirming(true)}
-			>
-				Delete candidate
-			</button>
-			{confirming && (
-				<ConfirmDialog
-					heading={`Delete “${name}”?`}
-					confirmLabel="Delete candidate"
-					busyLabel="Deleting"
-					busy={remove.isPending}
-					error={remove.isError ? remove.error.message : null}
-					onCancel={() => {
-						remove.reset();
-						setConfirming(false);
-					}}
-					onConfirm={() =>
-						// The row is gone once this lands, so the parent is told here, not by a callback on the mutation.
-						void remove
-							.mutateAsync()
-							.then(() => onDeleted(name))
-							.catch(() => {})
-					}
-				>
-					It's removed for everyone at {org.name}, with the CV file. You can't undo this.
-				</ConfirmDialog>
-			)}
-		</>
-	);
-}
+	const setSearch = (patch: Partial<JobSearch>) =>
+		void navigate({ search: (previous) => ({ ...previous, ...patch }), replace: true, resetScroll: false });
 
-// One candidate: rank, name and headline, score. The best match sits on the marker stroke with its score
-// ringed (design system §3). A CV still being read, or one that failed, says so where the headline would be.
-function CandidateRow({ jobId, candidate }: { jobId: string; candidate: CandidateSummary }) {
-	const { rank } = candidate;
-	const top = rank === 1;
-	// Rejected: the name and score go grey, which stays above 4.5:1 on the sheet and on the marker stroke.
-	const rejected = candidate.decision === "rejected";
-	return (
-		<Link
-			to="/dashboard/jobs/$jobId/candidates/$candidateId"
-			params={{ jobId, candidateId: candidate.id }}
-			className={`group -mx-3.5 grid min-h-14 grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-x-3.5 rounded-md px-3.5 ${top ? "rank-band py-4" : "py-3 hover:bg-paper-2"}`}
-		>
-			<span className={`font-mono text-[12px] ${top ? "" : "text-ink-faint"}`} aria-hidden="true">
-				{rank ?? "–"}
-			</span>
-			<span className="min-w-0">
-				<span
-					className={`block font-[800] [overflow-wrap:anywhere] [font-stretch:108%] group-hover:underline group-hover:underline-offset-[.18em] ${top ? "text-[24px] leading-[1.05] tracking-[-0.02em]" : "text-[17px] leading-[1.2] tracking-[-0.01em]"} ${rejected ? "text-ink-muted" : ""}`}
-				>
-					{rank !== null && <span className="sr-only">Rank {rank}: </span>}
-					{candidateName(candidate)}
-					{candidate.hasNote && (
-						<span className="ml-2 inline-flex translate-y-0.5 text-ink-muted">
-							<NoteMark />
-							<span className="sr-only">Has a note</span>
-						</span>
-					)}
-				</span>
-				<Detail candidate={candidate} top={top} />
-				{candidate.decision !== "undecided" && <DecisionTag decision={candidate.decision} className="mt-2" />}
-			</span>
-			{candidate.status === "scored" && candidate.score !== null && (
-				<span className={`${top ? "mr-3" : ""} ${rejected ? "text-ink-muted" : ""}`}>
-					<span className="sr-only">Score </span>
-					{top ? (
-						<ScoreRing score={candidate.score} className="text-[64px]" />
-					) : (
-						<span className="font-display text-[30px] leading-none font-[800] tabular-nums [font-stretch:62%]">
-							{candidate.score}
-						</span>
-					)}
-				</span>
-			)}
-		</Link>
-	);
-}
-
-// The line under the name: the headline once scored, otherwise what is happening to the CV. On the marker
-// stroke the text is on-marker, as it is on every mark.
-function Detail({ candidate, top }: { candidate: CandidateSummary; top: boolean }) {
-	const line = `mt-1 block font-mono text-[12px] leading-[1.3] [overflow-wrap:anywhere] ${top ? "text-on-marker" : "text-ink-muted"}`;
-	if (isWorking(candidate)) return <Reading candidate={candidate} line={line} />;
-	if (candidate.status === "failed") {
-		return (
-			<span className="mt-1 block font-mono text-[12px] leading-[1.3] text-gap-ink [overflow-wrap:anywhere]">
-				✕ {failureMessage(candidate)}
-			</span>
-		);
+	// The search box answers every key at once; the address catches up after a pause. A change of address from
+	// elsewhere (Back, Clear, a link) puts its words in the box.
+	const [query, setQuery] = useState(search.q ?? "");
+	const [seenQ, setSeenQ] = useState(search.q);
+	if (search.q !== seenQ) {
+		setSeenQ(search.q);
+		if ((search.q ?? "") !== query.trim()) setQuery(search.q ?? "");
 	}
-	return <span className={line}>{candidate.headline || candidate.fileName}</span>;
-}
 
-// Only mounted while the CV is being read, so the clock that decides "taking longer than usual" ticks only then.
-function Reading({ candidate, line }: { candidate: CandidateSummary; line: string }) {
-	const now = useNow(SLOW_CHECK_MS);
+	const { show, q, sort } = viewOf({ ...search, q: query });
+	const counts = useMemo(() => showCounts(list), [list]);
+	const rows = useMemo(() => visibleRows(list, { show, q, sort }), [list, show, q, sort]);
+	const filtered = isFilteredView({ show, q, sort });
+
+	// Paging starts again at 50 whenever the view changes, and always reaches far enough to show the selected row.
+	const viewKey = `${show}|${q.trim()}|${sort}`;
+	const [limit, setLimit] = useState(PAGE_SIZE);
+	const [limitKey, setLimitKey] = useState(viewKey);
+	if (viewKey !== limitKey) {
+		setLimitKey(viewKey);
+		setLimit(PAGE_SIZE);
+	}
+	const wanted = search.c ? rows.findIndex(({ id }) => id === search.c) : -1;
+	const shown = useMemo(() => rows.slice(0, Math.max(limit, wanted + 1)), [rows, limit, wanted]);
+	const shownIds = useMemo(() => shown.map(({ id }) => id), [shown]);
+
+	const selectedId = useSelectedRow({ ids: shownIds, c: search.c, split, viewKey });
+	const bulk = useSelection(shownIds);
+
+	// Where focus goes after the next render: the row J/K moved to, or the one that took over from a row that left
+	// while it had focus.
+	const focusNext = useRef<string | null>(null);
+	const rowLink = (id: string) => listRef.current?.querySelector<HTMLElement>(`[data-row="${CSS.escape(id)}"]`) ?? null;
+	useEffect(() => {
+		if (!search.c || selectedId === search.c) return;
+		if (selectedId && (document.activeElement === document.body || document.activeElement === null)) focusNext.current = selectedId;
+		setSearch({ c: selectedId ?? undefined });
+	});
+	useEffect(() => {
+		const id = focusNext.current;
+		const row = id && rowLink(id);
+		if (!row) return;
+		focusNext.current = null;
+		row.focus({ preventScroll: true });
+		row.scrollIntoView?.({ block: "nearest" });
+	});
+	// The bulk bar sends focus back to the "select all" box when it goes. The box keeps its own ref (for its mixed
+	// state), so it is found in the list's header.
+	useEffect(() => {
+		selectAllRef.current = headerRef.current?.querySelector("input") ?? null;
+	});
+
+	// A new filter or search keeps the selected candidate when it is still listed; otherwise the first row takes over.
+	const keepIfShown = (next: { show?: ShowFilter; q?: string }) =>
+		search.c && visibleRows(list, { show, q, sort, ...next }).some(({ id }) => id === search.c) ? search.c : undefined;
+	const commitQuery = useEffectEvent(() => {
+		const words = query.trim();
+		setSearch({ q: words || undefined, c: keepIfShown({ q: words }) });
+	});
+	useEffect(() => {
+		if (query.trim() === (search.q ?? "")) return;
+		const timer = window.setTimeout(() => commitQuery(), QUERY_DELAY_MS);
+		return () => window.clearTimeout(timer);
+	}, [query, search.q]);
+
+	const changeShow = (next: ShowFilter) => setSearch({ show: next === "all" ? undefined : next, c: keepIfShown({ show: next }) });
+	const changeSort = (next: JobSort) => setSearch({ sort: next === "best" ? undefined : next });
+	const clearView = () => {
+		setQuery("");
+		setSearch({ show: undefined, q: undefined, sort: undefined });
+	};
+
+	const hrefOf = (id: string) => candidatePath(job.id, id, { show: search.show, q, sort: search.sort });
+	// Opens the candidate's own page. The row goes into this page's address first, so Back returns to it.
+	const open = (id: string) => {
+		if (search.c !== id) setSearch({ c: id });
+		void router.navigate({ href: hrefOf(id) });
+	};
+	const select = (id: string, focus = false) => {
+		if (focus) focusNext.current = id;
+		setSearch({ c: id });
+	};
+	// J/K and the arrows. Moving past the last row drawn brings the next one in.
+	const move = (step: 1 | -1) => {
+		const index = selectedId ? rows.findIndex(({ id }) => id === selectedId) : -1;
+		const next = rows[index === -1 ? 0 : Math.min(Math.max(index + step, 0), rows.length - 1)];
+		if (next) select(next.id, true);
+	};
+	// Esc empties the checked rows first; from the detail pane it goes back to the selected row; on a narrow screen it
+	// lets go of the highlighted row.
+	const escape = () => {
+		if (bulk.selected.size > 0) return bulk.clear();
+		if (selectedId && detailRef.current?.contains(document.activeElement)) return rowLink(selectedId)?.focus();
+		if (!split && search.c) setSearch({ c: undefined });
+	};
+
+	useHotkeys([
+		{ keys: ["j", "ArrowDown"], label: "Next candidate", group: "Job triage", run: () => move(1), enabled: arrowsLive },
+		{ keys: ["k", "ArrowUp"], label: "Previous candidate", group: "Job triage", run: () => move(-1), enabled: arrowsLive },
+		// In the detail pane, a menu or a radio group the arrows keep their own job, but J and K still move.
+		{ keys: "j", label: "Next candidate", group: "Job triage", run: () => move(1), enabled: !arrowsLive, hidden: true },
+		{ keys: "k", label: "Previous candidate", group: "Job triage", run: () => move(-1), enabled: !arrowsLive, hidden: true },
+		{
+			keys: "Enter",
+			label: "Open the candidate's page",
+			group: "Job triage",
+			run: () => selectedId && open(selectedId),
+			enabled: selectedId !== null,
+		},
+		{ keys: "Escape", label: "Clear the selection", group: "Job triage", run: escape },
+		{
+			keys: "/",
+			label: "Search candidates",
+			group: "Lists",
+			run: () => {
+				searchRef.current?.focus();
+				searchRef.current?.select();
+			},
+		},
+	]);
+
 	return (
 		<>
-			<span className={`${line} flex items-center gap-2`}>
-				<span className="live-dot" aria-hidden="true" />
-				Reading the CV
-			</span>
-			{isSlow(candidate, now) && <span className={line}>This is taking longer than usual.</span>}
+			<FilterBar
+				show={show}
+				counts={counts}
+				onShow={changeShow}
+				query={query}
+				onQuery={setQuery}
+				searchRef={searchRef}
+				sort={sort}
+				onSort={changeSort}
+			/>
+			<div className="grid items-start gap-4 min-[1100px]:min-h-0 min-[1100px]:flex-1 min-[1100px]:grid-cols-[minmax(360px,440px)_minmax(0,1fr)] min-[1100px]:grid-rows-[minmax(0,1fr)] min-[1100px]:items-stretch">
+				<div className="flex min-w-0 flex-col rounded-xl bg-sheet shadow-card min-[1100px]:min-h-0">
+					<div ref={headerRef} className="flex min-h-12 flex-none flex-wrap items-center gap-x-1 border-b border-line-2 pr-4 pl-1">
+						<Checkbox
+							hideLabel
+							label="Select all shown"
+							checked={bulk.allChecked}
+							indeterminate={bulk.someChecked}
+							onCheckedChange={bulk.toggleAll}
+							disabled={shown.length === 0}
+						/>
+						<p aria-live="polite" className="min-w-0 flex-1 font-mono text-[12.5px] text-ink-muted">
+							{filtered
+								? `Showing ${rows.length} of ${list.length}`
+								: `${list.length} ${list.length === 1 ? "candidate" : "candidates"}`}
+						</p>
+						{filtered && (
+							<button type="button" className={ROW_ACTION} onClick={clearView}>
+								Clear
+							</button>
+						)}
+					</div>
+					{refreshFailed && (
+						<div className="flex-none border-b border-line-2 px-4 pt-2">
+							<RefreshFailed polling={list.some(isWorking)} onRetry={onRetry} />
+						</div>
+					)}
+					<div className="flex flex-col min-[1100px]:min-h-0 min-[1100px]:flex-1 min-[1100px]:overflow-y-auto min-[1100px]:overscroll-contain">
+						{rows.length === 0 ? (
+							<NoMatches show={show} onlyShow={q.trim() === ""} onClear={clearView} />
+						) : (
+							<ol ref={listRef} aria-label="Candidates" className="divide-y divide-line-2">
+								{shown.map((candidate) => (
+									<CandidateRow
+										key={candidate.id}
+										jobId={job.id}
+										candidate={candidate}
+										href={hrefOf(candidate.id)}
+										selected={candidate.id === selectedId}
+										checked={bulk.selected.has(candidate.id)}
+										onCheck={() => bulk.toggle(candidate.id)}
+										onCheckRange={() => (bulk.toggleRange ?? bulk.toggle)(candidate.id)}
+										onActivate={() => (split ? select(candidate.id) : open(candidate.id))}
+										onOpen={split ? () => open(candidate.id) : null}
+									/>
+								))}
+							</ol>
+						)}
+						{rows.length > shown.length && (
+							<div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line-2 px-4 py-3">
+								<button type="button" className="btn ghost xs" onClick={() => setLimit(shown.length + PAGE_SIZE)}>
+									Show {Math.min(PAGE_SIZE, rows.length - shown.length)} more
+								</button>
+								<p className="font-mono text-[12.5px] text-ink-muted">
+									{shown.length} of {rows.length} shown
+								</p>
+							</div>
+						)}
+						{/* The bar sticks to the bottom of whatever scrolls the list: this pane from 1100px, the page below. */}
+						<BulkBar
+							selectedIds={[...bulk.selected]}
+							onClear={bulk.clear}
+							isAdmin={org.role === "admin"}
+							exportJobId={job.id}
+							returnFocus={selectAllRef}
+							className="mx-2 mt-auto mb-2"
+						/>
+					</div>
+				</div>
+				{split && (
+					<div ref={detailRef} className="min-w-0 overflow-hidden rounded-xl border border-line-2 bg-paper min-[1100px]:min-h-0">
+						{selectedId ? (
+							<CandidateDetail key={selectedId} jobId={job.id} candidateId={selectedId} mode="panel" />
+						) : (
+							<EmptyState compact title="No candidate selected">
+								Pick someone from the list to see their evidence here.
+							</EmptyState>
+						)}
+					</div>
+				)}
+			</div>
 		</>
+	);
+}
+
+// Which row is selected. In the split view there always is one: the one in the address, else the first. When the
+// selected candidate leaves the list while the view stays the same (decided under "To review", deleted), the row now
+// in its place takes over, or the last row if it was at the end. On a narrow screen only a row named in the address
+// is highlighted (the one the recruiter came back from).
+function useSelectedRow({ ids, c, split, viewKey }: { ids: string[]; c: string | undefined; split: boolean; viewKey: string }) {
+	// Where the named row last sat, in which view. Kept in state while rendering (React's "adjust state when a prop
+	// changes"), so the row that takes over is known in the same render the old one disappears.
+	const [place, setPlace] = useState<{ id: string; index: number; viewKey: string } | null>(null);
+	const index = c ? ids.indexOf(c) : -1;
+	if (c && index !== -1 && (place?.id !== c || place.index !== index || place.viewKey !== viewKey)) {
+		setPlace({ id: c, index, viewKey });
+	}
+	if (c && index !== -1) return c;
+	if (c && place?.id === c && place.viewKey === viewKey && ids.length > 0) return ids[Math.min(place.index, ids.length - 1)];
+	return split ? (ids[0] ?? null) : null;
+}
+
+// What the list says when the filter or search leaves nothing. A filter on its own explains itself; anything more
+// offers to clear it all.
+function NoMatches({ show, onlyShow, onClear }: { show: ShowFilter; onlyShow: boolean; onClear: () => void }) {
+	if (onlyShow && show !== "all") {
+		return <p className="px-5 py-6 text-[15px] text-ink-2">{SHOW_EMPTY[show]}</p>;
+	}
+	return (
+		<div className="flex flex-col items-start gap-1 px-5 py-6">
+			<p className="text-[15px] text-ink-2">No candidates match your search and filters.</p>
+			<button type="button" className={ROW_ACTION} onClick={onClear}>
+				Clear search and filters
+			</button>
+		</div>
+	);
+}
+
+// Why the job can't take CVs, above the list, with the one thing that changes it.
+function CapacityBanner({ job, capacity, status }: { job: Job; capacity: Capacity; status: StatusChange }) {
+	const org = useOrg();
+	return (
+		<div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border-[1.5px] border-line bg-sheet px-4 py-2">
+			<p className="min-w-0 flex-[1_1_280px] py-1.5 text-[15px] text-ink-2">{capacity.note}</p>
+			{job.status !== "open" ? (
+				<StatusButton status={status} />
+			) : (
+				capacity.upgradable && <UpgradeAction isAdmin={org.role === "admin"} />
+			)}
+		</div>
+	);
+}
+
+// "Open job" or "Reopen job" outside the status menu: in the banner and the upload drawer. Only looks disabled while it
+// saves, so it keeps keyboard focus.
+export function StatusButton({ status }: { status: StatusChange }) {
+	return (
+		<button type="button" className="btn xs" aria-disabled={status.pending} onClick={status.change}>
+			{status.pending ? "Saving" : status.next.label}
+		</button>
+	);
+}
+
+// A job without a single CV yet: drop them anywhere on the page, upload them, or hand out the apply link.
+function NoCandidates({ job, canTake, onUpload }: { job: Job; canTake: boolean; onUpload: () => void }) {
+	const toast = useToast();
+	const copyLink = async () => {
+		try {
+			await navigator.clipboard.writeText(publicJobUrl(job.slug));
+			toast.show("Apply link copied");
+		} catch {
+			toast.error("Couldn't copy. Open Share and copy the link from there.");
+		}
+	};
+	return (
+		<div className="rounded-xl border-2 border-dashed border-line bg-sheet min-[1100px]:min-h-0 min-[1100px]:flex-1 min-[1100px]:overflow-y-auto">
+			<EmptyState
+				swipe
+				title="No CVs yet"
+				illustration={<FileUp size={44} strokeWidth={1.6} className="text-ink" />}
+				actions={
+					canTake && (
+						<>
+							<button type="button" className="btn" onClick={onUpload}>
+								<Upload size={18} aria-hidden="true" />
+								Upload CVs
+							</button>
+							{job.status === "open" && (
+								<button type="button" className="btn ghost" onClick={() => void copyLink()}>
+									<Link2 size={18} aria-hidden="true" />
+									Copy apply link
+								</button>
+							)}
+						</>
+					)
+				}
+			>
+				{canTake
+					? "Drop PDFs anywhere on this page, or share the apply link. Every CV is read and ranked against this job."
+					: "Uploaded CVs and applications are read and ranked here, best match first."}
+			</EmptyState>
+		</div>
+	);
+}
+
+// Rows of grey bars while the list loads.
+function LoadingList() {
+	return (
+		<div className="rounded-xl bg-sheet p-5 shadow-card">
+			<Skeleton label="Loading candidates" className="h-4 w-40" />
+			<div className="mt-5 flex flex-col gap-5">
+				{[0, 1, 2, 3].map((row) => (
+					<div key={row} className="flex items-center gap-4">
+						<Skeleton className="h-4 w-4" />
+						<div className="flex flex-1 flex-col gap-2">
+							<Skeleton className="h-4 w-1/2" />
+							<Skeleton className="h-3 w-3/4" />
+						</div>
+						<Skeleton className="h-7 w-8" />
+					</div>
+				))}
+			</div>
+		</div>
 	);
 }

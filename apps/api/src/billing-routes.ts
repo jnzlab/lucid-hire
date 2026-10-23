@@ -86,7 +86,7 @@ export function billingRoutes({ auth, polar, directory }: BillingRouteOptions) {
 				external_customer_id: org.id,
 				...(user?.email ? { customer_email: user.email } : {}),
 				metadata: { org_id: org.id },
-				success_url: `${origin}/dashboard/settings?checkout=success`,
+				success_url: `${origin}/dashboard/settings/billing?checkout=success`,
 			},
 		});
 		const body = (await res.json().catch(() => null)) as { url?: string } | null;

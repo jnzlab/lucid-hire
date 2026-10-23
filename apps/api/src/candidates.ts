@@ -1,4 +1,4 @@
-import { type SQL, and, asc, desc, eq, inArray, isNotNull, lt, or, sql } from "drizzle-orm";
+import { type SQL, and, asc, desc, eq, inArray, isNotNull, lt, ne, or, sql } from "drizzle-orm";
 import type { SQLiteColumn } from "drizzle-orm/sqlite-core";
 import { z } from "zod";
 import type { Db } from "./db/client.ts";
@@ -80,6 +80,9 @@ export type Candidate = Omit<CandidateSummary, "profile"> & {
 	decidedBy: string | null;
 };
 
+// The address the applicant gave when applying, else the one on the CV. Lists show and search it.
+export const candidateEmailSql = sql<string | null>`coalesce(${candidates.email}, json_extract(${candidates.profile}, '$.email'))`;
+
 const summaryColumns = {
 	id: candidates.id,
 	fileName: candidates.fileName,
@@ -92,7 +95,7 @@ const summaryColumns = {
 	summary: candidates.summary,
 	hasNote: sql<number>`${candidates.note} is not null`,
 	source: candidates.source,
-	email: sql<string | null>`coalesce(${candidates.email}, json_extract(${candidates.profile}, '$.email'))`,
+	email: candidateEmailSql,
 	cvEmail: sql<string | null>`json_extract(${candidates.profile}, '$.email')`,
 	runs: candidates.runs,
 	error: candidates.error,
@@ -457,6 +460,74 @@ export async function decideCandidate(
 		.where(inJobById(orgId, jobId, id))
 		.returning(candidateColumns);
 	return row ? ranked(db, orgId, jobId, row) : null;
+}
+
+// The most CVs one bulk action takes: a page of the candidates list is 50, a job's list can be selected whole.
+export const BULK_MAX = 200;
+const BULK_HINT = `Choose between 1 and ${BULK_MAX} candidates`;
+
+const bulkIds = z
+	.array(z.string({ error: "Send each candidate's id as text" }).min(1).max(100), { error: BULK_HINT })
+	.min(1, { error: BULK_HINT })
+	.max(BULK_MAX, { error: BULK_HINT })
+	.refine((ids) => new Set(ids).size === ids.length, { error: "List each candidate only once" });
+
+export const bulkDecideInput = z.object({
+	ids: bulkIds,
+	decision: z.enum(CANDIDATE_DECISIONS, { error: "Choose undecided, shortlisted or rejected" }),
+});
+export const bulkDeleteInput = z.object({ ids: bulkIds });
+
+// The company's candidates among `ids`. The ids travel as one JSON parameter, because D1 binds at most 100 values a
+// statement and a bulk action can send 200. Ids from another company, or that don't exist, simply match nothing.
+const inOrgByIds = (orgId: string, ids: string[]) =>
+	and(eq(candidates.orgId, orgId), sql`${candidates.id} in (select value from json_each(${JSON.stringify(ids)}))`);
+
+export type BulkDecided = { id: string; jobId: string; decision: Decision; previous: Decision };
+
+// One decision for many CVs, across jobs, by the single PATCH's rules: `decided_at` and `decided_by` are set (or
+// cleared on undecided) only where the decision changes, and `updated_at` stays put. Rows that already have the
+// decision are left alone and not returned, so what comes back is exactly what an undo has to put back. The read of the
+// old decisions and the update share one batch, which D1 runs as a transaction.
+export async function decideCandidates(
+	db: Db,
+	orgId: string,
+	ids: string[],
+	userId: string,
+	decision: Decision,
+): Promise<BulkDecided[]> {
+	const changing = and(inOrgByIds(orgId, ids), ne(candidates.decision, decision));
+	const [before, after] = await db.batch([
+		db.select({ id: candidates.id, previous: candidates.decision }).from(candidates).where(changing),
+		db
+			.update(candidates)
+			.set({
+				decision,
+				decidedAt: decision === "undecided" ? null : new Date(),
+				decidedBy: decision === "undecided" ? null : userId,
+				updatedAt: sql`${candidates.updatedAt}`,
+			})
+			.where(changing)
+			.returning({ id: candidates.id, jobId: candidates.jobId, decision: candidates.decision }),
+	]);
+	const previous = new Map(before.map((row) => [row.id, row.previous]));
+	const order = new Map(ids.map((id, index) => [id, index]));
+	return after
+		.map((row) => ({ ...row, previous: previous.get(row.id) ?? row.decision }))
+		.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+}
+
+// Deletes the company's CVs among `ids` and returns them with their R2 keys, for the caller to remove the files. Their
+// jobs keep the slots they used, as with a single delete.
+export async function deleteCandidates(
+	db: Db,
+	orgId: string,
+	ids: string[],
+): Promise<Array<{ id: string; jobId: string; fileKey: string }>> {
+	return db
+		.delete(candidates)
+		.where(inOrgByIds(orgId, ids))
+		.returning({ id: candidates.id, jobId: candidates.jobId, fileKey: candidates.fileKey });
 }
 
 // The R2 key and name of a CV file, or null when the candidate isn't the company's.

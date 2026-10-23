@@ -25,6 +25,16 @@
   --border:var(--line); --input:var(--line); --ring:var(--ink);
   --chart-1:var(--ink); --chart-2:var(--ink-muted); --chart-3:var(--marker); --chart-4:var(--gap-ink); --chart-5:var(--line);
   --radius:8px;
+
+  /* Derived for light and dark (design system §9): the four shadows, the dimmed page behind dialogs, the sticky
+     header's 90% paper and the desk's dot grid. Dark shadows are rgba(0,0,0,.5) at the same offsets (§2.5). */
+  --elev-sheet:0 1px 0 rgba(20,20,20,.05), 0 2px 4px -2px rgba(20,20,20,.12), 0 18px 32px -18px rgba(20,20,20,.32);
+  --elev-card:0 1px 0 rgba(20,20,20,.06), 0 18px 40px -28px rgba(20,20,20,.35);
+  --elev-lift:0 22px 44px -30px rgba(20,20,20,.55);
+  --elev-float:0 34px 64px -30px rgba(20,20,20,.55), 0 1px 0 rgba(20,20,20,.05), 0 18px 32px -18px rgba(20,20,20,.32);
+  --overlay:rgba(20,20,20,.5);
+  --hdr-bg:rgba(245,245,241,.9);
+  --desk-dot:rgba(20,20,20,.12);
   color-scheme:light;
 }
 
@@ -33,7 +43,21 @@
   --ink:#F5F5F1; --ink-2:#D6D6CC; --ink-muted:#BEBEB4; --ink-faint:#8C8C84;
   --line:#373732; --line-2:#2A2A27;
   --marker-soft:#484320; --gap-soft:#432F38; --gap-ink:#FF9BC8;
+  --elev-sheet:0 1px 0 rgba(0,0,0,.5), 0 2px 4px -2px rgba(0,0,0,.5), 0 18px 32px -18px rgba(0,0,0,.5);
+  --elev-card:0 1px 0 rgba(0,0,0,.5), 0 18px 40px -28px rgba(0,0,0,.5);
+  --elev-lift:0 22px 44px -30px rgba(0,0,0,.5);
+  --elev-float:0 34px 64px -30px rgba(0,0,0,.5), 0 1px 0 rgba(0,0,0,.5), 0 18px 32px -18px rgba(0,0,0,.5);
+  --overlay:rgba(0,0,0,.6);
+  --hdr-bg:rgba(20,20,20,.9);
+  --desk-dot:rgba(245,245,241,.10);
   color-scheme:dark;
+}
+
+/* A marker-yellow surface (the top row's band, the current nav item) keeps the light theme's inks in dark mode, so
+   text and outlines on it stay dark (design system §2.1: on-marker never flips). */
+.rank-band, .on-marker-area {
+  --ink:#141414; --ink-2:#34342F; --ink-muted:#5C5C55; --ink-faint:#8C8C84;
+  --line:#D9D9D1; --line-2:#E8E8E1; --paper:#F5F5F1; --paper-2:#ECECE5; --sheet:#FFFFFF; --gap-ink:#A3134F;
 }
 
 @theme inline {
@@ -45,6 +69,7 @@
   --color-marker:var(--marker); --color-marker-soft:var(--marker-soft);
   --color-gap:var(--gap); --color-gap-soft:var(--gap-soft); --color-gap-ink:var(--gap-ink);
   --color-on-marker:var(--on-marker);
+  --color-overlay:var(--overlay);
   --color-background:var(--background); --color-foreground:var(--foreground);
   --color-card:var(--card); --color-card-foreground:var(--card-foreground);
   --color-popover:var(--popover); --color-popover-foreground:var(--popover-foreground);
@@ -63,10 +88,11 @@
 
   --radius-sheet:3px; --radius-chip:6px; --radius-sm:6px; --radius-md:8px; --radius-lg:10px; --radius-xl:12px; --radius-2xl:14px;
 
-  --shadow-sheet:0 1px 0 rgba(20,20,20,.05), 0 2px 4px -2px rgba(20,20,20,.12), 0 18px 32px -18px rgba(20,20,20,.32);
-  --shadow-card:0 1px 0 rgba(20,20,20,.06), 0 18px 40px -28px rgba(20,20,20,.35);
-  --shadow-lift:0 22px 44px -30px rgba(20,20,20,.55);
-  --shadow-float:0 34px 64px -30px rgba(20,20,20,.55), 0 1px 0 rgba(20,20,20,.05), 0 18px 32px -18px rgba(20,20,20,.32);
+  /* The values live in :root and .dark above, so dark mode gets its own shadows. */
+  --shadow-sheet:var(--elev-sheet);
+  --shadow-card:var(--elev-card);
+  --shadow-lift:var(--elev-lift);
+  --shadow-float:var(--elev-float);
 
   --ease-out:cubic-bezier(.2,.7,.1,1);
   --ease-in-out:cubic-bezier(.65,0,.25,1);
@@ -102,27 +128,35 @@
   .skip:focus{top:calc(env(safe-area-inset-top,0px) + 8px)}
 
   /* App header (design system §2.3): sticky, paper at 90% with the blur, 64px (58px at 900px and below). */
-  .app-hdr{position:sticky;top:0;z-index:60;background:rgba(245,245,241,.9);-webkit-backdrop-filter:saturate(1.5) blur(12px);backdrop-filter:saturate(1.5) blur(12px);box-shadow:0 1px 0 var(--line)}
+  .app-hdr{position:sticky;top:0;z-index:60;background:var(--hdr-bg);-webkit-backdrop-filter:saturate(1.5) blur(12px);backdrop-filter:saturate(1.5) blur(12px);box-shadow:0 1px 0 var(--line)}
   .app-hdr > .wrap{height:64px;display:flex;align-items:center;gap:20px}
   @media (max-width:900px){.app-hdr > .wrap{height:58px}}
 
   /* Buttons (design system §4): ink, and yellow fills in from the left on hover while the arrow
      moves 4px. App size is 42px; the landing page keeps its own 50px copy under .lp. */
   .btn{--bg:var(--ink);--fg:var(--paper);display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:42px;padding:0 16px;border:2px solid var(--ink);border-radius:8px;background:linear-gradient(var(--marker),var(--marker)) 0 0/0% 100% no-repeat var(--bg);color:var(--fg);font-family:inherit;font-weight:650;font-size:15px;line-height:1;font-stretch:104%;text-decoration:none;cursor:pointer;white-space:nowrap;transition:background-size .4s --theme(--ease-out),color .2s}
-  .btn:hover{background-size:100% 100%;color:var(--ink)}
+  .btn:hover{background-size:100% 100%;color:var(--on-marker)}
   .btn.ghost{--bg:transparent;--fg:var(--ink)}
   .btn .arr{transition:transform .3s --theme(--ease-out)}
   .btn:hover .arr{transform:translateX(4px)}
   /* aria-disabled is for a button that is busy: it looks disabled but keeps keyboard focus, and its handler ignores clicks. */
   .btn:disabled,.btn[aria-disabled="true"]{cursor:progress;background-size:0% 100%;color:var(--fg);opacity:.7}
+  /* A truly disabled button (a limit, a missing permission) isn't busy: it simply can't be pressed. */
+  .btn:disabled{cursor:not-allowed}
   /* Touch targets are at least 44px (design system §2.3). On a fine pointer the app size stays 42px. */
   @media (pointer:coarse){.btn{min-height:44px}}
   /* Destructive (design system §4, derived): the secondary button in gap-ink; pink fills in on hover. */
   .btn.danger{--bg:transparent;--fg:var(--gap-ink);border-color:var(--gap-ink);background-image:linear-gradient(var(--gap-soft),var(--gap-soft))}
   .btn.danger:hover{color:var(--gap-ink)}
+  /* Marker (design system §4): only on the upgrade prompt. Ink fills in on hover and the text turns yellow. */
+  .btn.yl{--bg:var(--marker);--fg:var(--on-marker);border-color:var(--on-marker);background-image:linear-gradient(var(--on-marker),var(--on-marker))}
+  .btn.yl:hover{color:var(--marker)}
+  /* Compact (design system §4): 36px, for buttons in tables and toolbars. */
+  .btn.xs{min-height:36px;padding:0 12px;font-size:14px;gap:8px}
+  @media (pointer:coarse){.btn.xs{min-height:44px}}
 
   /* Desk (design system §3): the grey stage with a 22px dot grid that sheets sit on. */
-  .desk{background:radial-gradient(rgba(20,20,20,.12) 1px,transparent 1.3px) 0 0/22px 22px var(--desk)}
+  .desk{background:radial-gradient(var(--desk-dot) 1px,transparent 1.3px) 0 0/22px 22px var(--desk)}
 
   /* Text input (design system §4, derived). */
   .field{display:block;width:100%;min-height:44px;padding:10px 14px;border:1.5px solid var(--line);border-radius:8px;background:var(--sheet);color:var(--ink);font:inherit;font-size:16px;line-height:1.3;transition:border-color .2s}
@@ -162,11 +196,138 @@
   .score-ring{position:relative;display:inline-block}
   .score-ring svg{position:absolute;left:-.24em;top:-.14em;width:calc(100% + .48em);height:calc(100% + .28em);overflow:visible}
   .score-ring path{fill:none;stroke:currentColor;stroke-width:3.2;stroke-linecap:round;stroke-dasharray:1;animation:ring-draw 1s --theme(--ease-out) .15s backwards}
+
+  /* ---- App shell and shared components (design system §9) ---- */
+
+  /* Layers, lowest first: sticky bars 60, dialogs and drawers 80, menus and popovers 82 (they open from dialogs
+     too), toasts 85, the skip link 90, tooltips 95. */
+  .layer-modal{z-index:80}
+  .layer-popover{z-index:82}
+  .layer-toast{z-index:85}
+
+  /* Page frame (spec §2.7): the 1280px container with denser top padding than the marketing sections. Pages that use
+     the full width (the job workspace, a candidate) use .page without .wrap. */
+  .page{padding-top:clamp(24px,3vw,40px);padding-bottom:clamp(48px,6vw,80px)}
+  .page-title{font-family:var(--font-display);font-size:clamp(28px,3.2vw,40px);line-height:1.02;font-weight:820;font-stretch:112%;letter-spacing:-.035em;overflow-wrap:anywhere;text-wrap:balance}
+
+  /* Keycap (spec §2.4): mono 11.5px, 22px tall, a line border with a darker bottom edge. */
+  .kbd{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 6px;border:1px solid var(--line);border-bottom-color:var(--ink-faint);border-radius:4px;background:var(--sheet);color:var(--ink-2);font:400 11.5px/1 var(--font-mono);white-space:nowrap}
+
+  /* Tooltip: a small ink label, like the toast. */
+  .tooltip{position:fixed;z-index:95;max-width:min(280px,calc(100vw - 16px));padding:6px 9px;border-radius:6px;background:var(--ink);color:var(--paper);font:400 12.5px/1.35 var(--font-mono);pointer-events:none;box-shadow:var(--elev-float);animation:fade-in .15s --theme(--ease-out) backwards}
+
+  /* Icon button: 44px, ink-muted until hovered. */
+  .icon-btn{display:inline-grid;flex:none;place-items:center;width:44px;height:44px;border:0;border-radius:8px;background:transparent;color:var(--ink-muted);cursor:pointer;transition:background-color .2s,color .2s}
+  .icon-btn:hover{background:var(--line-2);color:var(--ink)}
+  .icon-btn[aria-expanded="true"]{background:var(--line-2);color:var(--ink)}
+  .icon-btn-outline{border:1.5px solid var(--line);background:var(--sheet)}
+  .icon-btn-outline:hover{border-color:var(--ink)}
+
+  /* Count badge: mono 11.5px on paper with a line border; the marker one has an ink outline. */
+  .count-badge{display:inline-flex;flex:none;align-items:center;justify-content:center;min-width:22px;height:20px;padding:0 6px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink-2);font:400 11.5px/1 var(--font-mono);font-variant-numeric:tabular-nums}
+  .count-badge-marker{border-color:var(--on-marker);background:var(--marker);color:var(--on-marker)}
+
+  /* Checkbox: an 18px box, 1.5px ink border; checked is marker with the drawn check, in a 44px hit area. */
+  .checkbox{position:relative;display:inline-flex;align-items:center;gap:10px;min-width:44px;min-height:44px;cursor:pointer}
+  .checkbox.is-disabled{cursor:not-allowed;opacity:.5}
+  .checkbox-box{display:grid;flex:none;place-items:center;width:18px;height:18px;border:1.5px solid var(--ink);border-radius:4px;background:var(--sheet);color:var(--on-marker)}
+  .checkbox.is-bare{justify-content:center}
+  .checkbox-check{opacity:0}
+  .peer:checked + .checkbox-box,.peer:indeterminate + .checkbox-box{background:var(--marker);border-color:var(--on-marker)}
+  .peer:checked + .checkbox-box .checkbox-check{opacity:1}
+  .peer:focus-visible + .checkbox-box{outline:3px solid var(--ink);outline-offset:3px}
+  .checkbox:hover .peer:not(:checked):not(:indeterminate) + .checkbox-box{background:var(--paper-2)}
+
+  /* Skeleton (design system §4): line-2 bars with a 4px radius. Static: nothing loops but the live dot. */
+  .skeleton{min-height:12px;border-radius:4px;background:var(--line-2)}
+
+  /* Meter: an 8px line track filled in ink; gap-ink from 90%. */
+  .meter{height:8px;overflow:hidden;border-radius:4px;background:var(--line)}
+  .meter-fill{display:block;height:100%;border-radius:4px;background:var(--ink);transition:width .4s --theme(--ease-out)}
+  .meter-fill.is-high{background:var(--gap-ink)}
+
+  /* Tabs: one 1px line under the row; the chosen tab is ink, 650, with a 3px ink bar. Links styled as tabs (a filter
+     row) use aria-current instead of aria-selected. */
+  .tablist{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--line);scrollbar-width:none}
+  .tablist::-webkit-scrollbar{display:none}
+  .tab{position:relative;display:inline-flex;flex:none;align-items:center;gap:8px;min-height:44px;padding:0 12px;border:0;border-radius:6px 6px 0 0;background:none;color:var(--ink-muted);font:inherit;font-size:15px;font-weight:600;line-height:1;white-space:nowrap;text-decoration:none;cursor:pointer;transition:color .2s,background-color .2s}
+  .tab:hover{background:var(--paper-2);color:var(--ink)}
+  .tab:focus-visible{outline-offset:-3px}
+  .tab[aria-selected="true"],.tab[aria-current="page"],.tab[aria-current="true"]{color:var(--ink);font-weight:650}
+  .tab[aria-selected="true"]::after,.tab[aria-current="page"]::after,.tab[aria-current="true"]::after{content:"";position:absolute;right:8px;bottom:0;left:8px;height:3px;border-radius:2px 2px 0 0;background:var(--ink)}
+
+  /* Menu and popover (design system §4): sheet, 8px radius for menus and 12px for popovers, the float shadow. */
+  .menu-panel,.popover-panel{position:fixed;overflow-y:auto;border:1px solid var(--line);background:var(--sheet);color:var(--ink);box-shadow:var(--elev-float);animation:pop-in .16s --theme(--ease-out) backwards}
+  .menu-panel{min-width:220px;max-width:min(340px,calc(100vw - 16px));padding:6px;border-radius:8px}
+  .popover-panel{width:max-content;max-width:min(400px,calc(100vw - 16px));padding:16px;border-radius:12px}
+  .menu-panel:focus,.popover-panel:focus{outline:none}
+  .menu-item{display:flex;align-items:center;gap:10px;width:100%;min-height:40px;padding:8px 10px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:15px;font-weight:500;line-height:1.25;text-align:left;text-decoration:none;cursor:pointer}
+  .menu-item:hover,.menu-item:focus{background:var(--paper-2);outline:none}
+  .menu-item:focus-visible{outline:2px solid var(--ink);outline-offset:-2px}
+  .menu-item.is-destructive{color:var(--gap-ink)}
+  .menu-item[aria-disabled="true"]{color:var(--ink-faint);cursor:not-allowed}
+  .menu-sep{height:1px;margin:6px 4px;background:var(--line-2)}
+  .menu-label{padding:10px 10px 4px;color:var(--ink-muted);font:400 11.5px/1.3 var(--font-mono);letter-spacing:.08em;text-transform:uppercase}
+  @media (pointer:coarse){.menu-item{min-height:44px}}
+
+  /* Dialog and drawer (design system §4): sheet on the dimmed page, 12px radius, the float shadow. */
+  .dialog-panel{max-height:calc(100dvh - 32px);overflow-y:auto;border-radius:12px;background:var(--sheet);color:var(--ink);box-shadow:var(--elev-float);animation:pop-in .2s --theme(--ease-out) backwards}
+  .dialog-panel:focus,.drawer-panel:focus{outline:none}
+  .drawer-panel{position:absolute;display:flex;flex-direction:column;background:var(--sheet);color:var(--ink);box-shadow:var(--elev-float)}
+  .drawer-panel[data-side="right"],.drawer-panel[data-side="left"]{top:0;bottom:0;width:min(var(--drawer-w),calc(100vw - 32px));animation:slide-in-right .28s --theme(--ease-out) backwards}
+  .drawer-panel[data-side="right"]{right:0;border-left:1px solid var(--line)}
+  .drawer-panel[data-side="left"]{left:0;border-right:1px solid var(--line);animation-name:slide-in-left}
+  .drawer-panel[data-side="bottom"]{right:0;bottom:0;left:0;max-height:88dvh;padding-bottom:env(safe-area-inset-bottom,0px);border-top:1px solid var(--line);border-radius:14px 14px 0 0;animation:slide-in-up .28s --theme(--ease-out) backwards}
+  .drawer-grip{align-self:center;width:36px;height:4px;margin-top:8px;border-radius:2px;background:var(--line)}
+  @media (max-width:767px){
+    .drawer-panel[data-side="right"],.drawer-panel[data-side="left"]{top:auto;right:0;left:0;width:auto;max-height:88dvh;padding-bottom:env(safe-area-inset-bottom,0px);border:0;border-top:1px solid var(--line);border-radius:14px 14px 0 0;animation-name:slide-in-up}
+  }
+
+  /* Toasts (spec §2.5): the status pill on ink with paper text, bottom-centre, above the mobile tab bar. */
+  .toast-region{position:fixed;left:50%;bottom:calc(24px + var(--toast-lift,0px) + env(safe-area-inset-bottom,0px));width:min(560px,calc(100vw - 32px));transform:translateX(-50%);pointer-events:none}
+  .toast{display:flex;align-items:center;gap:8px;max-width:100%;min-height:48px;padding:0 4px 0 16px;border-radius:8px;background:var(--ink);color:var(--paper);font:400 13.5px/1.35 var(--font-mono);box-shadow:var(--elev-float);pointer-events:auto;animation:toast-in .25s --theme(--ease-out) backwards}
+  .toast .mk{color:var(--on-marker)}
+  .toast-action{flex:none;min-height:44px;padding:0 10px;border:0;border-radius:6px;background:none;color:var(--paper);font:650 14px/1 var(--font-sans);text-decoration:underline;text-underline-offset:.18em;cursor:pointer}
+  .toast-close{display:grid;flex:none;place-items:center;width:44px;height:44px;border:0;border-radius:6px;background:none;color:var(--paper);opacity:.75;cursor:pointer}
+  .toast-action:hover,.toast-close:hover{background:color-mix(in srgb,var(--paper) 14%,transparent);opacity:1}
+  .toast :focus-visible{outline-color:var(--paper);outline-offset:-3px}
+  @media (max-width:767px){.toast-region{bottom:calc(64px + 16px + var(--toast-lift,0px) + env(safe-area-inset-bottom,0px))}}
+
+  /* Sidebar and tab bar items (spec §2.1, §2.2). 40px rows on a mouse, 44px on touch. */
+  .nav-item{display:flex;align-items:center;gap:12px;min-height:40px;padding:0 10px;border-radius:6px;color:var(--ink-2);font-size:15px;font-weight:500;line-height:1.2;text-decoration:none;transition:background-color .2s,color .2s}
+  .nav-item:hover{background:var(--line-2);color:var(--ink)}
+  .nav-item[aria-current="page"],.nav-item[aria-current="true"]{background:var(--marker);color:var(--on-marker);font-weight:650}
+  .nav-item.is-rail{justify-content:center;width:44px;padding:0}
+  /* Open jobs: denser 36px rows on a mouse. */
+  .nav-item.is-dense{min-height:36px;gap:8px;padding-right:8px;font-size:14.5px}
+  @media (pointer:coarse){.nav-item,.nav-item.is-dense{min-height:44px}}
+  .search-field{display:flex;align-items:center;gap:8px;width:100%;min-height:40px;padding:0 6px 0 10px;border:1.5px solid var(--line);border-radius:8px;background:var(--sheet);color:var(--ink-muted);font:inherit;font-size:14px;text-align:left;cursor:pointer;transition:border-color .2s}
+  .search-field:hover{border-color:var(--ink-faint);color:var(--ink-2)}
+  @media (pointer:coarse){.search-field{min-height:44px}}
+  .top-bar{position:sticky;top:0;z-index:60;background:var(--hdr-bg);-webkit-backdrop-filter:saturate(1.5) blur(12px);backdrop-filter:saturate(1.5) blur(12px);box-shadow:0 1px 0 var(--line)}
+  .tab-bar{position:fixed;right:0;bottom:0;left:0;z-index:60;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));height:calc(64px + env(safe-area-inset-bottom,0px));padding:0 env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px);border-top:1px solid var(--line);background:var(--sheet)}
+  .tab-bar-item{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-width:0;border:0;background:none;color:var(--ink-muted);font:400 11px/1 var(--font-mono);text-decoration:none;cursor:pointer}
+  .tab-bar-item[aria-current="page"],.tab-bar-item[aria-current="true"]{color:var(--ink);font-weight:650}
+  .tab-bar-item[aria-current="page"]::before,.tab-bar-item[aria-current="true"]::before{content:"";position:absolute;top:0;left:22%;right:22%;height:3px;border-radius:0 0 2px 2px;background:var(--marker)}
+  .tab-bar-item:focus-visible{outline-offset:-3px}
+
+  /* The logo mark is an ink square; on dark paper it swaps to the light ink with dark strokes, the band stays yellow. */
+  .dark .logo-mark rect{fill:var(--ink)}
+  .dark .logo-mark path:not([stroke="#FFE84A"]){stroke:var(--paper)}
+
+  /* The swipe is pale yellow by design; on dark paper it is toned down so it stays a background. */
+  .dark .swipe-art{opacity:.3}
 }
 
 @keyframes live-blink { to { opacity:.15; } }
 @keyframes rank-band-in { from { clip-path:inset(0 100% 0 0); } }
 @keyframes ring-draw { from { stroke-dashoffset:1; } }
+@keyframes fade-in { from { opacity:0; } }
+@keyframes pop-in { from { opacity:0; transform:translateY(-4px); } }
+@keyframes toast-in { from { opacity:0; transform:translateY(8px); } }
+@keyframes slide-in-right { from { transform:translateX(100%); } }
+@keyframes slide-in-left { from { transform:translateX(-100%); } }
+@keyframes slide-in-up { from { transform:translateY(100%); } }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; }

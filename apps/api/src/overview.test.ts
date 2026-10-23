@@ -3,7 +3,14 @@ import { createApp } from "./app.ts";
 import type { SessionVerifier } from "./auth.ts";
 import { type Db, getDb } from "./db/client.ts";
 import { aiUsage, candidates, jobs } from "./db/schema.ts";
-import { getOverviewActivity, getOverviewAiMix, getOverviewFunnel, getOverviewKpis, getOverviewVelocity } from "./overview.ts";
+import {
+	getOverviewActivity,
+	getOverviewAiMix,
+	getOverviewAttention,
+	getOverviewFunnel,
+	getOverviewKpis,
+	getOverviewVelocity,
+} from "./overview.ts";
 import { createOrgForUser } from "./orgs.ts";
 import { createTestD1 } from "./test/d1.ts";
 
@@ -243,8 +250,129 @@ describe("a busy company", () => {
 	});
 });
 
+describe("the work queue (attention)", () => {
+	let queueId: string;
+
+	beforeAll(async () => {
+		queueId = (await createOrgForUser(db, "user_queue", "Queue Co")).org.id;
+		await job("q_busy", queueId, { status: "open", title: "Busy", createdAt: at("2026-10-01T09:00:00Z") });
+		await job("q_reading", queueId, { status: "open", title: "Reading only", createdAt: at("2026-10-02T09:00:00Z") });
+		await job("q_quiet", queueId, { status: "open", title: "Quiet", createdAt: at("2026-10-03T09:00:00Z") });
+		await job("q_empty", queueId, { status: "open", title: "Empty", slug: "empty-abc12345", createdAt: at("2026-10-04T09:00:00Z") });
+		await job("q_closed", queueId, { status: "closed", title: "Closed", createdAt: at("2026-09-01T09:00:00Z") });
+		await job("q_draft1", queueId, { status: "draft", title: "Draft one", updatedAt: at("2026-10-10T09:00:00Z") });
+		await job("q_draft2", queueId, { status: "draft", title: "Draft two", updatedAt: at("2026-10-12T09:00:00Z") });
+
+		const scoredCv = (jobId: string, id: string, name: string, score: number, scoredAt: string, fields: Partial<typeof candidates.$inferInsert> = {}) =>
+			cv(jobId, queueId, { id, name, headline: `${name}'s headline`, status: "scored", score, scoredAt: at(scoredAt), ...fields });
+		// Busy: four to review (Kim and Lee tie on 75; Kim was scored first), one shortlisted, one being read, one failed.
+		await scoredCv("q_busy", "q_joy", "Joy", 88, "2026-10-20T09:00:00Z");
+		await scoredCv("q_busy", "q_kim", "Kim", 75, "2026-10-19T10:00:00Z");
+		await scoredCv("q_busy", "q_lee", "Lee", 75, "2026-10-19T11:00:00Z");
+		await scoredCv("q_busy", "q_max", "Max", 60, "2026-10-08T09:00:00Z");
+		await scoredCv("q_busy", "q_ned", "Ned", 90, "2026-10-20T08:00:00Z", { decision: "shortlisted", decidedAt: at("2026-10-20T10:00:00Z") });
+		await cv("q_busy", queueId, { status: "queued" });
+		await cv("q_busy", queueId, { status: "failed" });
+		await cv("q_reading", queueId, { status: "scoring" });
+		await scoredCv("q_quiet", "q_old", "Old", 50, "2026-10-01T09:00:00Z", { decision: "shortlisted" });
+		// A closed job still has CVs to review and two that failed.
+		await scoredCv("q_closed", "q_top", "Top", 95, "2026-10-21T09:00:00Z");
+		await cv("q_closed", queueId, { status: "failed" });
+		await cv("q_closed", queueId, { status: "failed", decision: "rejected" });
+		// Another company's CV waiting for review must never show up here.
+		await cv("j_acme", acmeId, { id: "q_spy", name: "Spy", status: "scored", score: 99, scoredAt: ago(1) });
+	});
+
+	it("totals the company's CVs to review, being read and failed, with its open jobs", async () => {
+		const { totals } = await getOverviewAttention(db, queueId, NOW);
+		expect(totals).toEqual({ toReview: 5, reading: 2, failed: 3, openJobs: 4, jobsToReview: 2 });
+	});
+
+	it("lists open jobs waiting for a decision, most to review first, with their best three to review", async () => {
+		const { waiting } = await getOverviewAttention(db, queueId, NOW);
+		expect(waiting).toEqual([
+			{
+				jobId: "q_busy",
+				jobTitle: "Busy",
+				toReview: 4,
+				shortlisted: 1,
+				reading: 1,
+				top: [
+					{ candidateId: "q_joy", name: "Joy", fileName: expect.any(String), headline: "Joy's headline", score: 88 },
+					{ candidateId: "q_kim", name: "Kim", fileName: expect.any(String), headline: "Kim's headline", score: 75 },
+					{ candidateId: "q_lee", name: "Lee", fileName: expect.any(String), headline: "Lee's headline", score: 75 },
+				],
+			},
+			{ jobId: "q_reading", jobTitle: "Reading only", toReview: 0, shortlisted: 0, reading: 1, top: [] },
+		]);
+	});
+
+	it("lists failed CVs by job, open jobs without CVs and the latest drafts", async () => {
+		const attention = await getOverviewAttention(db, queueId, NOW);
+		expect(attention.failed).toEqual([
+			{ jobId: "q_closed", jobTitle: "Closed", count: 2 },
+			{ jobId: "q_busy", jobTitle: "Busy", count: 1 },
+		]);
+		expect(attention.emptyOpenJobs).toEqual([{ jobId: "q_empty", jobTitle: "Empty", slug: "empty-abc12345" }]);
+		expect(attention.drafts).toEqual([
+			{ jobId: "q_draft2", jobTitle: "Draft two", updatedAt: "2026-10-12T09:00:00.000Z" },
+			{ jobId: "q_draft1", jobTitle: "Draft one", updatedAt: "2026-10-10T09:00:00.000Z" },
+		]);
+	});
+
+	it("picks the five best CVs scored in the last 7 days, whatever their job or decision", async () => {
+		const { bestNew } = await getOverviewAttention(db, queueId, NOW);
+		expect(bestNew.map((c) => [c.candidateId, c.score])).toEqual([
+			["q_top", 95],
+			["q_ned", 90],
+			["q_joy", 88],
+			["q_lee", 75],
+			["q_kim", 75],
+		]);
+		expect(bestNew[0]).toEqual({
+			candidateId: "q_top",
+			jobId: "q_closed",
+			jobTitle: "Closed",
+			name: "Top",
+			fileName: expect.any(String),
+			headline: "Top's headline",
+			score: 95,
+			decision: "undecided",
+			scoredAt: "2026-10-21T09:00:00.000Z",
+		});
+		expect(bestNew[1].decision).toBe("shortlisted");
+	});
+
+	it("caps the waiting jobs at 6 and each job's list at 3", async () => {
+		const manyId = (await createOrgForUser(db, "user_many", "Many Co")).org.id;
+		for (let i = 1; i <= 8; i++) {
+			await job(`m_${i}`, manyId, { status: "open", title: `Role ${i}`, createdAt: at(`2026-10-0${i}T09:00:00Z`) });
+			for (let k = 0; k < i; k++) await cv(`m_${i}`, manyId, { status: "scored", score: 50 + k, scoredAt: ago(1) });
+		}
+		const { waiting, totals } = await getOverviewAttention(db, manyId, NOW);
+		expect(waiting.map((w) => [w.jobTitle, w.toReview, w.top.length])).toEqual([
+			["Role 8", 8, 3],
+			["Role 7", 7, 3],
+			["Role 6", 6, 3],
+			["Role 5", 5, 3],
+			["Role 4", 4, 3],
+			["Role 3", 3, 3],
+		]);
+		expect(waiting[0].top.map((c) => c.score)).toEqual([57, 56, 55]);
+		expect(totals).toMatchObject({ toReview: 36, jobsToReview: 8, openJobs: 8 });
+	});
+
+	it("never mixes in another company's CVs", async () => {
+		const attention = await getOverviewAttention(db, queueId, NOW);
+		expect(JSON.stringify(attention)).not.toContain("Spy");
+		const acme = await getOverviewAttention(db, acmeId, NOW);
+		expect(acme.totals.toReview).toBe(1);
+		expect(acme.waiting[0].top[0]).toMatchObject({ candidateId: "q_spy" });
+	});
+});
+
 describe("the overview endpoints", () => {
-	const paths = ["kpis", "velocity", "funnel", "ai-mix", "activity"];
+	const paths = ["kpis", "velocity", "funnel", "ai-mix", "activity", "attention"];
 	const get = (path: string, token: string | null) =>
 		app.request(`/overview/${path}`, { headers: token ? { authorization: `Bearer t:${token}` } : {} }, env);
 
@@ -264,6 +392,14 @@ describe("the overview endpoints", () => {
 			funnel: { received: 0, scored: 0, shortlisted: 0 },
 			"ai-mix": { scoring: 0 },
 			activity: { events: [] },
+			attention: {
+				totals: { toReview: 0, reading: 0, failed: 0, openJobs: 0, jobsToReview: 0 },
+				waiting: [],
+				failed: [],
+				emptyOpenJobs: [],
+				drafts: [],
+				bestNew: [],
+			},
 		};
 		for (const path of paths) {
 			const res = await get(path, "user_empty");

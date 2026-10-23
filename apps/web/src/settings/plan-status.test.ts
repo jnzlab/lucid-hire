@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Billing } from "../lib/billing.ts";
-import { statusBadge } from "./plan-status.ts";
+import { renewalLine, statusBadge } from "./plan-status.ts";
 
 const billing = (fields: Partial<Billing>): Billing => ({
 	plan: "pro",
@@ -33,5 +33,41 @@ describe("statusBadge", () => {
 
 	it("says Ended once the plan has dropped back to Free", () => {
 		expect(statusBadge(billing({ status: "canceled", effectivePlan: "free" }))).toEqual({ label: "Ended", tone: "off" });
+	});
+});
+
+describe("renewalLine", () => {
+	it("gives the renewal date and price for a paying plan", () => {
+		expect(renewalLine(billing({}))).toBe("Renews on 20 Nov 2026 · $10 a month");
+		expect(renewalLine(billing({ plan: "max", effectivePlan: "max" }))).toBe("Renews on 20 Nov 2026 · $30 a month");
+	});
+
+	it("falls back to the price when the period end isn't known yet", () => {
+		expect(renewalLine(billing({ currentPeriodEnd: null }))).toBe("$10 a month");
+	});
+
+	it("says when a trial turns into a paid plan", () => {
+		expect(renewalLine(billing({ status: "trialing" }))).toBe("Trial until 20 Nov 2026, then $10 a month.");
+	});
+
+	it("says when a cancelled plan ends, before the trial or renewal", () => {
+		expect(renewalLine(billing({ cancelAtPeriodEnd: true }))).toBe("Ends on 20 Nov 2026, then you're on Free.");
+		expect(renewalLine(billing({ status: "trialing", cancelAtPeriodEnd: true }))).toBe("Ends on 20 Nov 2026, then you're on Free.");
+	});
+
+	it("explains a failed or unfinished payment", () => {
+		expect(renewalLine(billing({ status: "past_due" }))).toBe("The last payment failed. Update the payment method to keep the plan.");
+		expect(renewalLine(billing({ status: "incomplete" }))).toBe("Waiting for the first payment to go through.");
+	});
+
+	it("tells Free it never renews or runs out", () => {
+		expect(renewalLine(billing({ plan: "free", effectivePlan: "free", status: null, currentPeriodEnd: null }))).toBe(
+			"No card needed. Free doesn't renew or run out.",
+		);
+	});
+
+	it("names the plan that has ended", () => {
+		expect(renewalLine(billing({ status: "canceled", effectivePlan: "free" }))).toBe("Your Pro plan has ended. You're on Free now.");
+		expect(renewalLine(billing({ plan: "free", status: "unpaid", effectivePlan: "free" }))).toBe("Your paid plan has ended. You're on Free now.");
 	});
 });

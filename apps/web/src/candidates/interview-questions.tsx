@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Check } from "../components/icons.tsx";
 import { ApiError } from "../lib/api.ts";
 import type { Candidate } from "../lib/candidates.ts";
@@ -9,8 +9,20 @@ import { UpgradeLink } from "../settings/upgrade.tsx";
 const COPIED_MS = 2000;
 
 // Questions that probe a scored candidate's gaps and check their strongest claims, written by Gemini on request.
-// Nothing is shown until the CV is scored.
-export function InterviewQuestions({ jobId, candidate }: { jobId: string; candidate: Pick<Candidate, "id" | "status"> }) {
+// Nothing is shown until the CV is scored. `headingLevel` is 2 on the candidate page and 3 in the job page's panel;
+// `hideHeading` keeps the heading for screen readers only, where a tab already names the section.
+export function InterviewQuestions({
+	jobId,
+	candidate,
+	headingLevel = 2,
+	hideHeading = false,
+}: {
+	jobId: string;
+	candidate: Pick<Candidate, "id" | "status">;
+	headingLevel?: 2 | 3;
+	hideHeading?: boolean;
+}) {
+	const headingId = useId();
 	const scored = candidate.status === "scored";
 	const saved = useInterviewQuestions(jobId, candidate.id, scored);
 	const write = useWriteQuestions(jobId, candidate.id);
@@ -63,18 +75,21 @@ export function InterviewQuestions({ jobId, candidate }: { jobId: string; candid
 		</button>
 	);
 
+	const Heading = headingLevel === 2 ? "h2" : "h3";
 	return (
-		<section aria-labelledby="questions-h" className="mt-10">
-			<h2 id="questions-h" className="text-[19px] leading-[1.2] font-[800] tracking-[-0.01em] [font-stretch:108%]">
-				Interview questions
-			</h2>
+		<section aria-labelledby={headingId}>
+			<div className={hideHeading ? "sr-only" : "mb-4"}>
+				<Heading id={headingId} className="text-[19px] leading-[1.2] font-[800] tracking-[-0.01em] [font-stretch:108%]">
+					Interview questions
+				</Heading>
+			</div>
 
 			{saved.isPending ? (
-				<p role="status" className="mt-4 font-mono text-[13px] text-ink-muted">
+				<p role="status" className="font-mono text-[13px] text-ink-muted">
 					Loading questions
 				</p>
 			) : saved.isError && !saved.data ? (
-				<div className="mt-4 flex flex-wrap items-center gap-3">
+				<div className="flex flex-wrap items-center gap-3">
 					<p role="alert" className="text-[14px] text-gap-ink">
 						✕ {saved.error.message}
 					</p>
@@ -93,8 +108,8 @@ export function InterviewQuestions({ jobId, candidate }: { jobId: string; candid
 								}
 							}}
 							tabIndex={-1}
-							aria-labelledby="questions-h"
-							className="mt-4 list-decimal rounded-xl bg-sheet py-2 pr-6 pl-12 shadow-card marker:font-mono marker:text-[14px] marker:text-ink-muted"
+							aria-labelledby={headingId}
+							className="list-decimal rounded-xl bg-sheet py-2 pr-6 pl-12 shadow-card max-[560px]:pr-4 max-[560px]:pl-10 marker:font-mono marker:text-[14px] marker:text-ink-muted"
 						>
 							{questions.map(({ question, focus }, index) => (
 								<li key={`${question}-${index}`} className="border-b border-line-2 py-4 pl-1 last:border-b-0">
@@ -102,7 +117,7 @@ export function InterviewQuestions({ jobId, candidate }: { jobId: string; candid
 									{focus && (
 										<p className="mt-2">
 											<span className="inline-flex min-h-6 items-center rounded-md border border-line px-2 font-mono text-[12px] text-ink-muted [overflow-wrap:anywhere]">
-												<span className="sr-only">Probes: </span>
+												<span className="sr-only">Probes:</span>{" "}
 												{focus}
 											</span>
 										</p>
@@ -111,7 +126,7 @@ export function InterviewQuestions({ jobId, candidate }: { jobId: string; candid
 							))}
 						</ol>
 					) : (
-						<p className="mt-2 max-w-[56ch] text-[15px] text-ink-2">
+						<p className="max-w-[56ch] text-[15px] text-ink-2">
 							Questions that probe this candidate's gaps and check their strongest claims.
 						</p>
 					)}
@@ -123,7 +138,7 @@ export function InterviewQuestions({ jobId, candidate }: { jobId: string; candid
 							</button>
 						)}
 						{writeButton}
-						<p role="status" className="inline-flex items-center gap-2.5 font-mono text-[13px] text-ink empty:hidden">
+						<p role="status" className="inline-flex items-center gap-2.5 font-mono text-[13px] text-ink empty:sr-only">
 							{write.isPending ? (
 								<>
 									<span className="live-dot" aria-hidden="true" />

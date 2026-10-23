@@ -1,100 +1,86 @@
-import { useEffect, useRef, useState } from "react";
-import { type Job } from "../lib/jobs.ts";
+import { Copy, ExternalLink, Share2 } from "lucide-react";
+import type { Job } from "../lib/jobs.ts";
 import { publicJobUrl } from "../lib/public-jobs.ts";
 import { buildShareLinks, shareTargets } from "../lib/share.ts";
-import { type Copy, useCopy } from "./use-copy.ts";
+import { Popover } from "../ui/popover.tsx";
+import { useCopy } from "./use-copy.ts";
 
-const MENU_ITEM = "flex min-h-11 w-full items-center rounded-md px-3 text-left text-[14px] font-semibold hover:bg-marker hover:text-on-marker";
+const TARGET =
+	"inline-flex min-h-11 items-center justify-center rounded-md border-[1.5px] border-line bg-sheet px-3 text-[14px] font-semibold text-ink hover:border-ink";
 
-function ShareMenu({ job, copy }: { job: Job; copy: Copy }) {
-	const [open, setOpen] = useState(false);
-	const root = useRef<HTMLDivElement>(null);
-	const button = useRef<HTMLButtonElement>(null);
+// The job's apply link with the ways to hand it on: copy it, open it, or send it somewhere. A draft has no public page
+// yet; a closed job still has one (it says the role is closed) but isn't worth sharing, so it gets no share targets.
+export function SharePanel({ job }: { job: Job }) {
+	const { message, copy } = useCopy();
+	const url = publicJobUrl(job.slug);
 	const targets = shareTargets(buildShareLinks(job));
 
-	useEffect(() => {
-		if (!open) return;
-		const away = (event: PointerEvent) => {
-			if (!root.current?.contains(event.target as Node)) setOpen(false);
-		};
-		const escape = (event: KeyboardEvent) => {
-			if (event.key !== "Escape") return;
-			setOpen(false);
-			button.current?.focus();
-		};
-		document.addEventListener("pointerdown", away);
-		document.addEventListener("keydown", escape);
-		return () => {
-			document.removeEventListener("pointerdown", away);
-			document.removeEventListener("keydown", escape);
-		};
-	}, [open]);
-
-	const external = { target: "_blank", rel: "noopener noreferrer", className: MENU_ITEM, onClick: () => setOpen(false) } as const;
-
 	return (
-		<div ref={root} className="relative">
-			<button ref={button} type="button" className="btn ghost" aria-expanded={open} aria-controls="share-menu" onClick={() => setOpen(!open)}>
-				Share
-			</button>
-			{open && (
-				<ul id="share-menu" aria-label="Share this job" className="absolute right-0 z-30 mt-2 w-56 rounded-lg border border-line bg-sheet p-1.5 shadow-lift">
-					{targets.map((target) => (
-						<li key={target.label}>
-							{"caption" in target ? (
-								<button
-									type="button"
-									className={MENU_ITEM}
-									onClick={() => {
-										void copy(target.caption, "Caption copied");
-										setOpen(false);
-									}}
-								>
-									{target.label}
-								</button>
-							) : (
-								<a href={target.href} {...(target.external ? external : { className: MENU_ITEM, onClick: () => setOpen(false) })}>
-									{target.label}
-								</a>
+		<div className="flex w-[min(360px,calc(100vw-48px))] flex-col gap-3">
+			<h2 className="font-mono text-[12px] leading-[1.4] tracking-[.08em] text-ink-muted uppercase">Apply link</h2>
+			{job.status === "draft" ? (
+				<p className="text-[15px] text-ink-2">Open the job to get a public link.</p>
+			) : (
+				<>
+					<p className="rounded-md border-[1.5px] border-line bg-paper px-3 py-2.5 font-mono text-[13px] leading-[1.4] text-ink [overflow-wrap:anywhere] select-all">
+						{url}
+					</p>
+					<div className="flex flex-wrap gap-2">
+						<button type="button" className="btn xs" onClick={() => void copy(url, "Link copied")}>
+							<Copy size={16} aria-hidden="true" />
+							Copy link
+						</button>
+						<a href={url} target="_blank" rel="noopener noreferrer" className="btn ghost xs">
+							<ExternalLink size={16} aria-hidden="true" />
+							Open public page
+						</a>
+					</div>
+					{job.status === "closed" ? (
+						<p className="text-[14px] text-ink-muted">The job is closed, so its page says it isn't taking CVs.</p>
+					) : (
+						<div role="group" aria-label="Share to" className="flex flex-wrap gap-2 border-t border-line-2 pt-3">
+							{targets.map((target) =>
+								"caption" in target ? (
+									<button key={target.label} type="button" className={TARGET} onClick={() => void copy(target.caption, "Caption copied")}>
+										{target.label}
+									</button>
+								) : (
+									<a
+										key={target.label}
+										href={target.href}
+										className={TARGET}
+										{...(target.external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+									>
+										{target.label}
+									</a>
+								),
 							)}
-						</li>
-					))}
-				</ul>
+						</div>
+					)}
+				</>
 			)}
+			{/* Always in the panel, so screen readers hear each change. */}
+			<p role="status" className="font-mono text-[12.5px] text-ink empty:sr-only">
+				{message}
+			</p>
 		</div>
 	);
 }
 
-// The job's public address with the ways to hand it on. A draft has no public page yet; a closed job still has one
-// (it says the role is closed), but isn't worth sharing.
-export function PublicLink({ job }: { job: Job }) {
-	const { message, copy } = useCopy();
-	const url = publicJobUrl(job.slug);
-
+// "Share" in the job page's header: the apply link in a popover.
+export function ShareButton({ job }: { job: Job }) {
 	return (
-		<section aria-labelledby="public-link-h" className="mt-6 rounded-xl bg-sheet p-4 shadow-card min-[561px]:p-5">
-			<h2 id="public-link-h" className="font-mono text-[12px] tracking-[.08em] text-ink-muted uppercase">
-				Public link
-			</h2>
-			{job.status === "draft" ? (
-				<p className="mt-2 text-[15px] text-ink-2">Open the job to get a public link.</p>
-			) : (
-				<div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-3">
-					<p className="min-w-0 font-mono text-[13.5px] text-ink [overflow-wrap:anywhere]">{url}</p>
-					<div className="flex flex-wrap items-center gap-3">
-						<button type="button" className="btn ghost" onClick={() => void copy(url, "Link copied")}>
-							Copy link
-						</button>
-						<a href={url} target="_blank" rel="noopener noreferrer" className="btn ghost">
-							Open public page
-						</a>
-						{job.status === "open" && <ShareMenu job={job} copy={copy} />}
-					</div>
-				</div>
-			)}
-			<p role="status" aria-live="polite" className="mt-2 min-h-5 font-mono text-[12.5px] text-ink empty:hidden">
-				{message}
-			</p>
-		</section>
+		<Popover
+			label="Share this job"
+			align="end"
+			trigger={
+				<>
+					<Share2 size={18} aria-hidden="true" />
+					Share
+				</>
+			}
+		>
+			<SharePanel job={job} />
+		</Popover>
 	);
 }

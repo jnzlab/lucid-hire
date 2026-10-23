@@ -1,8 +1,12 @@
 import { PLANS } from "@lucid-hire/plans";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, type QueryKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
+import { type AllCandidatesList, allCandidatesKey } from "./all-candidates.ts";
 import { ApiError, apiDelete, apiGet, apiGetBlob, apiGetFile, apiPatch, apiPost, apiUploadPdf } from "./api.ts";
 import { jobKey, jobsKey } from "./jobs.ts";
+import { overviewKey } from "./overview.ts";
+import { forgetVisit } from "./recent.ts";
+import { searchKey } from "./search.ts";
 import { useSession } from "./session.ts";
 
 // The same limits the API enforces (apps/api/src/candidates.ts), checked before anything is sent. The CV limit per
@@ -28,10 +32,11 @@ export const SLOW_CHECK_MS = 30_000;
 
 export type CandidateStatus = (typeof CANDIDATE_STATUSES)[number];
 export type Decision = (typeof CANDIDATE_DECISIONS)[number];
+// What the decisions are called on screen. `rejected` reads "Not a fit" everywhere.
 export const DECISION_LABEL: Record<Decision, string> = {
 	undecided: "Undecided",
 	shortlisted: "Shortlisted",
-	rejected: "Rejected",
+	rejected: "Not a fit",
 };
 export type Requirement = {
 	label: string;
@@ -146,12 +151,44 @@ function withQueued(list: CandidateList, candidate: CandidateSummary): Candidate
 	return rest.toSpliced(firstFailed === -1 ? rest.length : firstFailed, 0, candidate);
 }
 
-// Ranked best first, as the API orders it. Polls while any CV is still being read.
+// Every cached query that counts or lists CVs outside a job's own list: the candidates page, the overview (with the
+// sidebar's to-review badges), the jobs lists' pipeline counts (with the sidebar's live dots) and the palette's search.
+function invalidateAround(queryClient: QueryClient, userId: Nullable) {
+	countsAskedAt.set(queryClient, Date.now());
+	for (const queryKey of [allCandidatesKey(userId), overviewKey(userId), jobsKey(userId), searchKey(userId)]) {
+		void queryClient.invalidateQueries({ queryKey });
+	}
+}
+
+// While a job's CVs are being read, the counts elsewhere ask again as they finish: at once when the last one is done,
+// and otherwise at most this often, since the overview and the open jobs poll on their own meanwhile.
+const COUNTS_REFRESH_MS = 10_000;
+const countsAskedAt = new WeakMap<QueryClient, number>();
+
+// Whether a CV that was being read in `before` has been scored or has failed in `after`.
+function finishedReading(before: CandidateList, after: CandidateList) {
+	const working = new Set(before.candidates.filter(isWorking).map(({ id }) => id));
+	return working.size > 0 && after.candidates.some((row) => working.has(row.id) && !isWorking(row));
+}
+
+// Ranked best first, as the API orders it. Polls while any CV is still being read, and when a CV finishes, the counts
+// elsewhere catch up. That is checked in the fetch itself, so it happens once however many components show the list.
 export function useCandidates(jobId: string) {
 	const { userId, token } = useSession();
+	const queryClient = useQueryClient();
+	const queryKey = listKey(userId, jobId);
 	return useQuery({
-		queryKey: listKey(userId, jobId),
-		queryFn: async ({ signal }) => apiGet<CandidateList>(`/jobs/${jobId}/candidates`, { token: await token(), signal }),
+		queryKey,
+		queryFn: async ({ signal }) => {
+			const before = queryClient.getQueryData<CandidateList>(queryKey);
+			const list = await apiGet<CandidateList>(`/jobs/${jobId}/candidates`, { token: await token(), signal });
+			if (before && finishedReading(before, list)) {
+				const stillReading = list.candidates.some(isWorking);
+				const askedAt = countsAskedAt.get(queryClient) ?? 0;
+				if (!stillReading || Date.now() - askedAt >= COUNTS_REFRESH_MS) invalidateAround(queryClient, userId);
+			}
+			return list;
+		},
 		refetchInterval: ({ state }) => (state.data?.candidates.some(isWorking) ? CANDIDATE_POLL_MS : false),
 	});
 }
@@ -425,8 +462,9 @@ export function useUploadCvs(jobId: string) {
 		if (busy()) return;
 		void queryClient.invalidateQueries({ queryKey: listKey(userId, jobId), exact: true });
 		// The job's own CV count, and its status if the API found it closed.
-		void queryClient.invalidateQueries({ queryKey: jobsKey(userId) });
 		void queryClient.invalidateQueries({ queryKey: jobKey(userId, jobId), exact: true });
+		// The CVs being read now show in the jobs lists and the overview, which then poll until they are read.
+		invalidateAround(queryClient, userId);
 	};
 
 	// Checks the chosen files. With `withDetails` the ones that pass are staged, for a name and email to be typed;
@@ -539,10 +577,12 @@ export function useRetryCandidate(jobId: string) {
 				(list) => list && { ...list, candidates: withQueued(list, candidate) },
 			);
 		},
-		// Also after a refusal: what the recruiter clicked in was out of date.
+		// Also after a refusal: what the recruiter clicked in was out of date. The failed CV is being read again, so
+		// the counts elsewhere move too.
 		onSettled: (_candidate, _error, id) => {
 			void queryClient.invalidateQueries({ queryKey: listKey(userId, jobId), exact: true });
 			void queryClient.invalidateQueries({ queryKey: candidateKey(userId, jobId, id), exact: true });
+			invalidateAround(queryClient, userId);
 		},
 	});
 }
@@ -568,6 +608,133 @@ export function useDeleteCandidate(jobId: string, id: string) {
 				refetchType: "none",
 			});
 			void queryClient.invalidateQueries({ queryKey: listKey(userId, jobId), exact: true });
+			invalidateAround(queryClient, userId);
+			forgetVisit("candidate", id);
+		},
+	});
+}
+
+// The most CVs one bulk action takes (apps/api/src/candidates.ts).
+export const BULK_MAX = 200;
+export type BulkDecideInput = { ids: string[]; decision: Decision };
+// A CV whose decision a bulk action changed, and what it was before.
+export type BulkDecided = { id: string; jobId: string; decision: Decision; previous: Decision };
+export type BulkDeleted = { id: string; jobId: string };
+
+// What an undo sends: one bulk decision per earlier decision, with the CVs that had it.
+export function undoBatches(updated: BulkDecided[]): BulkDecideInput[] {
+	const byDecision = new Map<Decision, string[]>();
+	for (const { id, previous } of updated) byDecision.set(previous, [...(byDecision.get(previous) ?? []), id]);
+	return [...byDecision].map(([decision, ids]) => ({ ids, decision }));
+}
+
+const isCandidateList = (data: unknown): data is CandidateList =>
+	typeof data === "object" && data !== null && Array.isArray((data as CandidateList).candidates);
+const isCandidate = (data: unknown): data is Candidate =>
+	typeof data === "object" && data !== null && typeof (data as Candidate).id === "string" && "rankedCount" in data;
+
+// What the CVs a bulk decision changed showed before it, by id: the decision, and when and by whom it was made for a
+// candidate's own query. A refusal puts back only these.
+type BulkBefore = { decision: Map<string, Decision>; decided: Map<string, Pick<Candidate, "decidedAt" | "decidedBy">> };
+
+// One decision for many CVs, across jobs. Every cached job list, candidate and candidates page shows it at once and
+// gets its old state back if the API refuses; afterwards everything that counts decisions asks again. The answer is
+// what changed, with the old decisions, which `undoBatches` turns into the undo.
+export function useBulkDecide() {
+	const { userId, token } = useSession();
+	const queryClient = useQueryClient();
+	const mutationKey = ["bulk-decide", userId];
+	const candidatesPrefix = ["candidates", userId] as const;
+	return useMutation({
+		mutationKey,
+		mutationFn: async ({ ids, decision }: BulkDecideInput) =>
+			(await apiPost<{ updated: BulkDecided[] }>("/candidates/decisions", { ids, decision }, { token: await token() }))
+				.updated,
+		onMutate: async ({ ids, decision }): Promise<BulkBefore> => {
+			const chosen = new Set(ids);
+			// A fetch already on its way would land after this and show the old decisions.
+			await Promise.all([
+				queryClient.cancelQueries({ queryKey: candidatesPrefix }),
+				queryClient.cancelQueries({ queryKey: allCandidatesKey(userId) }),
+			]);
+			const before: BulkBefore = { decision: new Map(), decided: new Map() };
+			const change = <T extends { id: string; decision: Decision }>(rows: T[]) =>
+				rows.map((row) => {
+					if (!chosen.has(row.id)) return row;
+					if (!before.decision.has(row.id)) before.decision.set(row.id, row.decision);
+					return { ...row, decision };
+				});
+			queryClient.setQueriesData<unknown>({ queryKey: candidatesPrefix }, (data: unknown) => {
+				if (isCandidateList(data)) return { ...data, candidates: change(data.candidates) };
+				if (!isCandidate(data) || !chosen.has(data.id)) return data;
+				before.decision.set(data.id, data.decision);
+				before.decided.set(data.id, { decidedAt: data.decidedAt, decidedBy: data.decidedBy });
+				return decided(data, { decision }, userId);
+			});
+			queryClient.setQueriesData<AllCandidatesList>(
+				{ queryKey: allCandidatesKey(userId) },
+				(list) => list && { ...list, candidates: change(list.candidates) },
+			);
+			return before;
+		},
+		// Puts back only the CVs this action changed, and only where they still show its decision, so another action
+		// started meanwhile keeps what it shows.
+		onError: (_error, { decision }, before) => {
+			if (!before) return;
+			const restore = <T extends { id: string; decision: Decision }>(rows: T[]) =>
+				rows.map((row) => {
+					const was = before.decision.get(row.id);
+					return was === undefined || row.decision !== decision ? row : { ...row, decision: was };
+				});
+			queryClient.setQueriesData<unknown>({ queryKey: candidatesPrefix }, (data: unknown) => {
+				if (isCandidateList(data)) return { ...data, candidates: restore(data.candidates) };
+				const was = isCandidate(data) ? before.decision.get(data.id) : undefined;
+				if (!isCandidate(data) || was === undefined || data.decision !== decision) return data;
+				return { ...data, decision: was, ...before.decided.get(data.id) };
+			});
+			queryClient.setQueriesData<AllCandidatesList>(
+				{ queryKey: allCandidatesKey(userId) },
+				(list) => list && { ...list, candidates: restore(list.candidates) },
+			);
+		},
+		// Also after a refusal: the pages then show what the API holds. While another bulk decision is on its way, only
+		// the last one asks, or the lists would flick back to decisions that are about to change.
+		onSettled: () => {
+			if (queryClient.isMutating({ mutationKey }) > 1) return;
+			void queryClient.invalidateQueries({ queryKey: candidatesPrefix });
+			invalidateAround(queryClient, userId);
+		},
+	});
+}
+
+// Deletes many CVs and their files (admins only). They leave every cached list as soon as the API confirms; a deleted
+// candidate's own query is only marked stale, like a single delete, so an open panel doesn't flash "doesn't exist"
+// before the page moves on. The jobs keep their CV counts: a deleted CV doesn't give its slot back.
+export function useBulkDelete() {
+	const { userId, token } = useSession();
+	const queryClient = useQueryClient();
+	const isJobList = (queryKey: QueryKey) => queryKey[0] === "candidates" && queryKey[1] === userId && queryKey.length === 3;
+	return useMutation({
+		mutationFn: async (ids: string[]) =>
+			(await apiPost<{ deleted: BulkDeleted[] }>("/candidates/delete", { ids }, { token: await token() })).deleted,
+		onSuccess: (deleted) => {
+			const gone = new Set(deleted.map(({ id }) => id));
+			queryClient.setQueriesData<unknown>({ predicate: ({ queryKey }) => isJobList(queryKey) }, (data: unknown) =>
+				isCandidateList(data) ? { ...data, candidates: data.candidates.filter(({ id }) => !gone.has(id)) } : data,
+			);
+			queryClient.setQueriesData<AllCandidatesList>(
+				{ queryKey: allCandidatesKey(userId) },
+				(list) => list && { ...list, candidates: list.candidates.filter(({ id }) => !gone.has(id)) },
+			);
+			for (const { id, jobId } of deleted) {
+				void queryClient.cancelQueries({ queryKey: candidateKey(userId, jobId, id), exact: true });
+				void queryClient.invalidateQueries({ queryKey: candidateKey(userId, jobId, id), exact: true, refetchType: "none" });
+				forgetVisit("candidate", id);
+			}
+		},
+		onSettled: () => {
+			void queryClient.invalidateQueries({ predicate: ({ queryKey }) => isJobList(queryKey) });
+			invalidateAround(queryClient, userId);
 		},
 	});
 }

@@ -22,8 +22,8 @@ export type Billing = {
 	isAdmin: boolean;
 };
 
-// Where every limit message sends people to upgrade.
-export const UPGRADE_PATH = "/dashboard/settings#plan";
+// Where every limit message sends people to upgrade: Settings → Plan & billing.
+export const UPGRADE_PATH = "/dashboard/settings/billing";
 
 // How often the settings page asks again while it waits for Polar's webhook to land, and for how long.
 export const BILLING_POLL_MS = 2000;

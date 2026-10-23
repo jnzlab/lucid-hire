@@ -4,7 +4,7 @@ import type { Db } from "./db/client.ts";
 import { type SubscriptionStatus, organizations } from "./db/schema.ts";
 
 // Where the web app's billing section lives. Every limit error points here.
-export const UPGRADE_URL = "/dashboard/settings#plan";
+export const UPGRADE_URL = "/dashboard/settings/billing";
 
 // Statuses that keep the paid plan. `past_due` stays while Polar retries the payment (the settings page warns the
 // admin); `incomplete`, `unpaid` and `canceled` never grant it.
