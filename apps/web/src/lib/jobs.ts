@@ -1,9 +1,11 @@
+import type { RubricItem } from "@lucid-hire/scoring";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { allCandidatesKey } from "./all-candidates.ts";
 import { apiDelete, apiDeleteJson, apiGet, apiGetBlob, apiPatch, apiPost, apiPutFile } from "./api.ts";
 import { billingKey } from "./billing.ts";
 import { overviewKey } from "./overview.ts";
 import { forgetJobVisits } from "./recent.ts";
+import { RUBRIC_POLL_MS, type RubricStatus, withPendingChanges } from "./rubric.ts";
 import { searchKey } from "./search.ts";
 import { useSession } from "./session.ts";
 
@@ -39,7 +41,9 @@ export type JobListItem = JobSummary & {
 // How many of the company's jobs match the search, per status, whatever the status filter.
 export type JobCounts = { all: number; open: number; draft: number; closed: number };
 export type JobList = { jobs: JobListItem[]; total: number; page: number; pageSize: number; counts: JobCounts };
-export type Job = JobSummary & { description: string };
+// `rubric` is the job's requirements, null until the first draft lands. Removed ones stay in it with `removed: true`,
+// so their ids are never reused; the page hides them.
+export type Job = JobSummary & { description: string; rubric: RubricItem[] | null; rubricStatus: RubricStatus };
 
 export const JOB_SEARCH_MAX = 100;
 // Every sort the API takes. `activity` is the latest CV first (jobs without CVs last), `review` the most CVs to
@@ -98,12 +102,27 @@ export function useJobs(filters: JobFilters = {}, { enabled = true, pollMs }: { 
 	});
 }
 
+// Asks again while the requirements are being drafted. When drafting ends, the job's CVs may have new scores against
+// the new list, so they and the counts elsewhere ask again too. Requirement changes still on their way to the API stay
+// on top of what arrives.
 export function useJob(id: string) {
 	const { userId, token } = useSession();
+	const queryClient = useQueryClient();
+	const queryKey = jobKey(userId, id);
 	return useQuery({
-		queryKey: jobKey(userId, id),
-		queryFn: async ({ signal }) => (await apiGet<{ job: Job }>(`/jobs/${id}`, { token: await token(), signal })).job,
+		queryKey,
+		queryFn: async ({ signal }) => {
+			const before = queryClient.getQueryData<Job>(queryKey);
+			const { job } = await apiGet<{ job: Job }>(`/jobs/${id}`, { token: await token(), signal });
+			if (before?.rubricStatus === "drafting" && job.rubricStatus !== "drafting") {
+				for (const key of [["candidates", userId, id], jobsKey(userId), overviewKey(userId), allCandidatesKey(userId), searchKey(userId)]) {
+					void queryClient.invalidateQueries({ queryKey: key });
+				}
+			}
+			return { ...job, rubric: withPendingChanges(queryClient, userId, id, job.rubric) };
+		},
 		retry: (failures, error) => failures < 1 && !("status" in error && error.status === 404),
+		refetchInterval: ({ state }) => (state.data?.rubricStatus === "drafting" ? RUBRIC_POLL_MS : false),
 	});
 }
 

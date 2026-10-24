@@ -14,6 +14,8 @@ const row = (fields: Partial<CandidateSummary> & { id: string }): CandidateSumma
 	matches: [],
 	gaps: [],
 	checks: [],
+	scoredBeforeRequirements: false,
+	checking: false,
 	summary: null,
 	hasNote: false,
 	source: "upload",

@@ -14,10 +14,13 @@ import { SectionError, SectionLoading } from "./job-ui.tsx";
 import { capacityOf } from "./workspace/capacity.ts";
 import { DescriptionTab } from "./workspace/description-tab.tsx";
 import { JobHeader } from "./workspace/job-header.tsx";
+import { RequirementsTab } from "./workspace/requirements-tab.tsx";
 import { DropOverlay, UploadDrawer, UploadPill } from "./workspace/upload-drawer.tsx";
 import { isPending, summarise } from "./workspace/uploads.ts";
+import { useMoves } from "./workspace/use-moves.ts";
 import { usePageDrop } from "./workspace/use-page-drop.ts";
 import { useStatusChange } from "./workspace/use-status-change.ts";
+import type { JobTab } from "./workspace/view.ts";
 
 // The workspace's side gutters: it uses the content area's full width, not the 1280px column.
 const GUTTER = "px-[clamp(16px,2.5vw,32px)]";
@@ -79,7 +82,16 @@ function JobWorkspace({ job }: { job: Job }) {
 	const list = candidates.data?.candidates;
 	const capacity = capacityOf(job, candidates.data);
 	const status = useStatusChange(job);
-	const tab = search.tab ?? "candidates";
+	const tab: JobTab = search.tab ?? "candidates";
+	// The arrows of the last re-rank, shared by the Requirements tab's ranking and the Candidates tab's rows.
+	const moves = useMoves();
+	const chooseTab = (next: JobTab) =>
+		void navigate({
+			search: (previous) => ({ ...previous, tab: next === "candidates" ? undefined : next }),
+			replace: true,
+			resetScroll: false,
+		});
+	const requirements = job.rubricStatus === "ready" && job.rubric ? job.rubric.filter((item) => !item.removed).length : undefined;
 
 	useEffect(() => {
 		rememberVisit({ kind: "job", id: job.id, title: job.title });
@@ -149,16 +161,7 @@ function JobWorkspace({ job }: { job: Job }) {
 		) : undefined;
 
 	return (
-		<Tabs
-			value={tab}
-			onChange={(next) =>
-				void navigate({
-					search: (previous) => ({ ...previous, tab: next === "description" ? "description" : undefined }),
-					replace: true,
-					resetScroll: false,
-				})
-			}
-		>
+		<Tabs value={tab} onChange={chooseTab}>
 			<div className={`${GUTTER} flex-none pt-[clamp(20px,2.5vw,32px)]`}>
 				<JobHeader
 					job={job}
@@ -172,6 +175,9 @@ function JobWorkspace({ job }: { job: Job }) {
 					<Tab value="candidates" count={list?.length}>
 						Candidates
 					</Tab>
+					<Tab value="requirements" count={requirements}>
+						Requirements
+					</Tab>
 					<Tab value="description">Description</Tab>
 				</TabList>
 			</div>
@@ -180,7 +186,26 @@ function JobWorkspace({ job }: { job: Job }) {
 				focusable={false}
 				className={`${GUTTER} flex flex-col pt-4 pb-[clamp(16px,2.5vw,32px)] min-[1100px]:min-h-0 min-[1100px]:flex-1`}
 			>
-				<CandidatesSection job={job} candidates={candidates} capacity={capacity} status={status} onUpload={openDrawer} />
+				<CandidatesSection
+					job={job}
+					candidates={candidates}
+					capacity={capacity}
+					status={status}
+					onUpload={openDrawer}
+					moves={moves}
+				/>
+			</TabPanel>
+			<TabPanel
+				value="requirements"
+				className={`${GUTTER} pt-4 pb-[clamp(24px,3vw,40px)] min-[1100px]:min-h-0 min-[1100px]:flex-1 min-[1100px]:overflow-y-auto`}
+			>
+				<RequirementsTab
+					job={job}
+					candidates={candidates}
+					moves={moves}
+					onMoves={moves.show}
+					onShowCandidates={() => chooseTab("candidates")}
+				/>
 			</TabPanel>
 			<TabPanel
 				value="description"

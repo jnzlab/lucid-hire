@@ -193,6 +193,8 @@
      ringed in ink. Text on the stroke is always on-marker. Both draw in once and rest finished. */
   .rank-band{position:relative;isolation:isolate;color:var(--on-marker)}
   .rank-band::before{content:"";position:absolute;inset:0;z-index:-1;background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 64' preserveAspectRatio='none'%3E%3Cpath fill='%23FFE84A' d='M8 9C70 5 150 8 230 6s120-2 163 1c4 6 5 16 4 25s0 20-3 27c-60 3-150 1-230 2S50 63 7 60c-4-9-5-19-4-28s1-17 5-23z'/%3E%3C/svg%3E") 0 0/100% 100% no-repeat;animation:rank-band-in .85s --theme(--ease-out) backwards}
+  /* A row that moved in a re-rank slides from its old place to its new one (design system §2.6, reordering). */
+  .flip-move{transition:transform .6s --theme(--ease-in-out)}
   .score-ring{position:relative;display:inline-block}
   .score-ring svg{position:absolute;left:-.24em;top:-.14em;width:calc(100% + .48em);height:calc(100% + .28em);overflow:visible}
   .score-ring path{fill:none;stroke:currentColor;stroke-width:3.2;stroke-linecap:round;stroke-dasharray:1;animation:ring-draw 1s --theme(--ease-out) .15s backwards}

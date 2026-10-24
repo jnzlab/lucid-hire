@@ -38,7 +38,7 @@ import { useToast } from "../ui/use-toast.ts";
 import { DecisionBar, NoteField, NoteToggle } from "./decision-block.tsx";
 import { MetaRow, ScoreBlock } from "./detail/candidate-header.tsx";
 import { CvPreview, type OpenCv, OpenCvAction } from "./detail/cv-preview.tsx";
-import { Evidence } from "./detail/evidence.tsx";
+import { Evidence, LegacyEvidence } from "./detail/evidence.tsx";
 import { type CandidateSearch, type Place, jobHref, placeIn, validateCandidateSearch } from "./detail/job-view.ts";
 import { PrevNext } from "./detail/prev-next.tsx";
 import { useCvPreview } from "./detail/use-cv-preview.ts";
@@ -315,7 +315,7 @@ function DetailBody({
 	const email = candidateEmail(candidate);
 	const scored = candidate.status === "scored";
 	const working = isWorking(candidate);
-	const requirements = candidate.requirements ?? [];
+	const evidence = candidate.evidence ?? [];
 	const isAdmin = org.role === "admin";
 	// Section headings sit under the candidate's name: h1 on the page, h2 in the panel.
 	const level = mode === "page" ? 2 : 3;
@@ -353,7 +353,9 @@ function DetailBody({
 		{ keys: "e", label: "Invite to a call by email", group: "Job triage", run: invite, enabled: canInvite },
 	]);
 
-	// Only looks disabled while it retries, so it keeps keyboard focus; the click is ignored.
+	// Only looks disabled while it retries, so it keeps keyboard focus; the click is ignored. A CV scored before the job
+	// had requirements is read again against them: Re-read.
+	const reread = candidate.scoredBeforeRequirements;
 	const retryButton = (className: string) =>
 		candidate.canRetry && (
 			<button
@@ -364,7 +366,7 @@ function DetailBody({
 					if (!retry.isPending) retry.mutate(candidate.id);
 				}}
 			>
-				{retry.isPending ? "Retrying" : "Retry"}
+				{retry.isPending ? (reread ? "Re-reading" : "Retrying") : reread ? "Re-read" : "Retry"}
 			</button>
 		);
 
@@ -481,6 +483,7 @@ function DetailBody({
 			? "h-[75dvh] min-h-[480px]"
 			: "h-[max(480px,calc(100dvh-240px))]";
 
+	const Heading = level === 2 ? "h2" : "h3";
 	const tabs = (
 		<Tabs value={tab} onChange={showTab}>
 			<TabList label={`About ${name}`}>
@@ -495,8 +498,24 @@ function DetailBody({
 				</Tab>
 			</TabList>
 			<TabPanel value="evidence" className="pt-5">
-				{scored && requirements.length > 0 ? (
-					<Evidence requirements={requirements} headingLevel={level} />
+				{scored && reread ? (
+					<div className="flex flex-col gap-5">
+						<div className="flex max-w-xl flex-col items-start gap-3 rounded-xl border border-line px-5 py-4">
+							<Heading className="text-[17px] leading-[1.2] font-[800] [font-stretch:108%]">
+								Scored before this job's requirements were set
+							</Heading>
+							<p className="text-[15px] text-ink-2">
+								This CV was read against requirements worked out from the description at the time, so it has no evidence
+								for the job's list. It keeps its score and place until you re-read it.
+							</p>
+							{retryButton("btn xs")}
+						</div>
+						{(candidate.legacyRequirements ?? []).length > 0 && (
+							<LegacyEvidence requirements={candidate.legacyRequirements ?? []} headingLevel={level} />
+						)}
+					</div>
+				) : scored && evidence.length > 0 ? (
+					<Evidence evidence={evidence} headingLevel={level} />
 				) : (
 					<TabNote>
 						{working
@@ -543,7 +562,6 @@ function DetailBody({
 		</Tabs>
 	);
 
-	const Heading = level === 2 ? "h2" : "h3";
 	const cvFile = (
 		<section aria-label="CV file" className="rounded-xl bg-sheet p-5 shadow-card">
 			<p className="font-mono text-[12px] leading-[1.4] tracking-[.08em] text-ink-muted uppercase">CV file</p>

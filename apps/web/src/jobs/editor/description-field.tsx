@@ -151,7 +151,7 @@ export function DescriptionField({
 					</p>
 				) : (
 					<p id={helpId} className="text-[13px] text-ink-muted">
-						Markdown works. Every CV is scored against this, so name the skills that matter.
+						Markdown works. The requirements every CV is checked against are drafted from this, so name the skills that matter.
 					</p>
 				)}
 				<span className="flex-none font-mono text-[12px] text-ink-muted tabular-nums" aria-hidden="true">

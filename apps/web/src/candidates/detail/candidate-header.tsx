@@ -6,7 +6,7 @@ import { telHref } from "../../lib/contact.ts";
 import { formatDate, formatRelative } from "../../lib/format.ts";
 import { useNow } from "../../lib/use-now.ts";
 import { IconButton } from "../../ui/icon-button.tsx";
-import { metCount } from "./requirements.ts";
+import { evidenceCount, metCount } from "./requirements.ts";
 
 // Only mounted while the CV is being read, so the clock that decides "taking longer than usual" ticks only then.
 function StillReading({ candidate, retry }: { candidate: Candidate; retry: ReactNode }) {
@@ -21,14 +21,19 @@ function StillReading({ candidate, retry }: { candidate: Candidate; retry: React
 	);
 }
 
-// The score with the screen's one ink ring, how many requirements the CV meets and its rank among the job's scored
-// CVs; while the CV is being read, the reading pill (and "taking longer than usual" with Retry). The ring and the
+// The score with the screen's one ink ring, how many of the requirements that count the CV meets (and partly meets)
+// and its rank among the job's scored CVs; while the CV is being read, the reading pill (and "taking longer than usual" with Retry). The ring and the
 // pill share one status region, so the change from reading to scored is announced. The rank sits outside it: it
 // moves as other CVs are scored, and that shouldn't be read out every time.
 export function ScoreBlock({ candidate, retry, size }: { candidate: Candidate; retry: ReactNode; size: "page" | "panel" }) {
 	const working = isWorking(candidate);
 	const score = candidate.status === "scored" ? candidate.score : null;
-	const requirements = candidate.requirements ?? [];
+	const legacy = candidate.legacyRequirements ?? [];
+	const met = candidate.evidence
+		? evidenceCount(candidate.evidence)
+		: legacy.length > 0
+			? `${metCount(legacy)} requirements met`
+			: null;
 	return (
 		<div className="flex flex-col items-end gap-2 text-right max-[560px]:items-start max-[560px]:text-left">
 			<div role="status" className="flex flex-col items-end gap-2 empty:hidden max-[560px]:items-start">
@@ -44,10 +49,10 @@ export function ScoreBlock({ candidate, retry, size }: { candidate: Candidate; r
 							<span className="sr-only">Score </span>
 							<ScoreRing score={score} />
 						</span>
-						{requirements.length > 0 && (
+						{met && (
 							<span className="font-mono text-[12.5px] text-ink-2">
 								<span className="sr-only">· </span>
-								{metCount(requirements)} requirements met
+								{met}
 							</span>
 						)}
 					</>

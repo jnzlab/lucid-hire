@@ -12,6 +12,10 @@ type ConfirmDialogProps = {
 	busyLabel?: string;
 	busy?: boolean;
 	error?: string | null;
+	// `primary` for a choice that costs something but destroys nothing, such as an AI run.
+	tone?: "danger" | "primary";
+	// Where focus goes on close when the opener is gone (the row that was removed, say).
+	returnFocus?: () => HTMLElement | null;
 	onCancel: () => void;
 	onConfirm: () => void;
 };
@@ -28,6 +32,8 @@ export function ConfirmDialog({
 	busyLabel = confirmLabel,
 	busy = false,
 	error = null,
+	tone = "danger",
+	returnFocus,
 	onCancel,
 	onConfirm,
 }: ConfirmDialogProps) {
@@ -41,6 +47,7 @@ export function ConfirmDialog({
 			closeButton={false}
 			dismissable={!busy}
 			initialFocus={cancelRef}
+			returnFocus={returnFocus}
 			onClose={onCancel}
 			footer={
 				<>
@@ -57,7 +64,7 @@ export function ConfirmDialog({
 					</button>
 					<button
 						type="button"
-						className="btn danger"
+						className={tone === "danger" ? "btn danger" : "btn"}
 						aria-disabled={busy}
 						onClick={() => {
 							if (!busy) onConfirm();

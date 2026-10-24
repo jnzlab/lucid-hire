@@ -1,11 +1,13 @@
 import { PLANS } from "@lucid-hire/plans";
+import type { Check, EvidenceLevel, Weight } from "@lucid-hire/scoring";
 import { type QueryClient, type QueryKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { type AllCandidatesList, allCandidatesKey } from "./all-candidates.ts";
 import { ApiError, apiDelete, apiGet, apiGetBlob, apiGetFile, apiPatch, apiPost, apiUploadPdf } from "./api.ts";
-import { jobKey, jobsKey } from "./jobs.ts";
+import { type Job, jobKey, jobsKey } from "./jobs.ts";
 import { overviewKey } from "./overview.ts";
 import { forgetVisit } from "./recent.ts";
+import { rescoreCandidate, rescoreList, rubricQueue } from "./rubric.ts";
 import { searchKey } from "./search.ts";
 import { useSession } from "./session.ts";
 
@@ -38,13 +40,25 @@ export const DECISION_LABEL: Record<Decision, string> = {
 	shortlisted: "Shortlisted",
 	rejected: "Not a fit",
 };
-export type Requirement = {
+// What the old scorer found for one requirement it worked out from the description. Only CVs scored before the job
+// had its requirements keep these.
+export type LegacyRequirement = {
 	label: string;
 	requirement: string;
 	importance: "must" | "nice";
 	met: boolean;
 	// A verbatim quote from the CV. Empty when the requirement isn't met.
 	evidence: string;
+};
+// One of the job's requirements and what this CV shows for it, in the job's order. `level` is null while the CV
+// hasn't been checked against it; `quote` is verbatim from the CV, and empty unless the level is clear or partial.
+export type RequirementEvidence = {
+	id: string;
+	label: string;
+	detail: string;
+	weight: Weight;
+	level: EvidenceLevel | null;
+	quote: string;
 };
 // What the CV states about the candidate, read when it was scored. Whatever the CV doesn't state is absent.
 export type CandidateProfile = {
@@ -69,11 +83,18 @@ export type CandidateSummary = {
 	// Place among the job's scored CVs (1 is best); null until the CV is scored. It belongs to the CV, so filtering
 	// the list never renumbers it.
 	rank: number | null;
-	// Labels of met requirements (must-haves first, at most 4) and of unmet must-haves (at most 2).
+	// Labels of requirements with clear evidence (must-haves first, at most 4) and of must-haves with none or not
+	// checked yet (at most 2), as @lucid-hire/scoring works them out.
 	matches: string[];
 	gaps: string[];
-	// Every requirement of the job and whether the CV met it, for the row's "Show all requirements".
-	checks: { label: string; met: boolean; importance: "must" | "nice" }[];
+	// The job's requirements in its order, each with its weight and this CV's level (null while not checked). The
+	// row draws them as squares, and the job page re-scores and re-ranks from them when a weight changes. Empty for a
+	// CV that isn't scored, and for one scored before the job had requirements.
+	checks: Check[];
+	// Scored by the old scorer, before the job had requirements: it keeps its score and rank, and can be read again.
+	scoredBeforeRequirements: boolean;
+	// A "Check all" run for this CV is queued or under way. Its score and rank still show meanwhile.
+	checking: boolean;
 	// The AI's two sentences on the fit; the list searches them.
 	summary: string | null;
 	// Whether a recruiter has written a note on this CV.
@@ -94,7 +115,10 @@ export type CandidateSummary = {
 export type Candidate = Omit<CandidateSummary, "profile"> & {
 	// How many of the job's CVs are ranked, for "#2 of 7".
 	rankedCount: number;
-	requirements: Requirement[] | null;
+	// Null while the CV isn't scored, and for one scored before the job had requirements.
+	evidence: RequirementEvidence[] | null;
+	// What the old scorer found, only for a CV scored before the job had requirements.
+	legacyRequirements: LegacyRequirement[] | null;
 	fileSize: number;
 	note: string | null;
 	// When the decision last changed, and the Clerk user id of whoever changed it. Null while it is undecided.
@@ -106,10 +130,13 @@ export type CandidateList = { candidates: CandidateSummary[]; cvCount: number; c
 
 // Keyed by user, like the jobs. The list key is a prefix of every candidate's key.
 type Nullable = string | null | undefined;
-const listKey = (userId: Nullable, jobId: string) => ["candidates", userId, jobId] as const;
-const candidateKey = (userId: Nullable, jobId: string, id: string) => ["candidates", userId, jobId, id] as const;
+export const listKey = (userId: Nullable, jobId: string) => ["candidates", userId, jobId] as const;
+export const candidateKey = (userId: Nullable, jobId: string, id: string) => ["candidates", userId, jobId, id] as const;
 
 export const isWorking = ({ status }: { status: CandidateStatus }) => status === "queued" || status === "scoring";
+// Being read, or being checked against requirements added later: either way its row changes when that finishes.
+// `checking` is optional so a candidate from an older answer still reads as idle.
+const isBusy = (candidate: { status: CandidateStatus; checking?: boolean }) => isWorking(candidate) || candidate.checking === true;
 
 // Still being read after SLOW_READ_MS, counted from upload.
 export const isSlow = (candidate: Pick<CandidateSummary, "status" | "createdAt" | "updatedAt">, now = Date.now()) =>
@@ -153,7 +180,7 @@ function withQueued(list: CandidateList, candidate: CandidateSummary): Candidate
 
 // Every cached query that counts or lists CVs outside a job's own list: the candidates page, the overview (with the
 // sidebar's to-review badges), the jobs lists' pipeline counts (with the sidebar's live dots) and the palette's search.
-function invalidateAround(queryClient: QueryClient, userId: Nullable) {
+export function invalidateAround(queryClient: QueryClient, userId: Nullable) {
 	countsAskedAt.set(queryClient, Date.now());
 	for (const queryKey of [allCandidatesKey(userId), overviewKey(userId), jobsKey(userId), searchKey(userId)]) {
 		void queryClient.invalidateQueries({ queryKey });
@@ -165,14 +192,15 @@ function invalidateAround(queryClient: QueryClient, userId: Nullable) {
 const COUNTS_REFRESH_MS = 10_000;
 const countsAskedAt = new WeakMap<QueryClient, number>();
 
-// Whether a CV that was being read in `before` has been scored or has failed in `after`.
+// Whether a CV that was being read (or checked) in `before` has finished in `after`.
 function finishedReading(before: CandidateList, after: CandidateList) {
-	const working = new Set(before.candidates.filter(isWorking).map(({ id }) => id));
-	return working.size > 0 && after.candidates.some((row) => working.has(row.id) && !isWorking(row));
+	const working = new Set(before.candidates.filter(isBusy).map(({ id }) => id));
+	return working.size > 0 && after.candidates.some((row) => working.has(row.id) && !isBusy(row));
 }
 
-// Ranked best first, as the API orders it. Polls while any CV is still being read, and when a CV finishes, the counts
-// elsewhere catch up. That is checked in the fetch itself, so it happens once however many components show the list.
+// Ranked best first, as the API orders it. Polls while any CV is still being read or checked, and when a CV finishes,
+// the counts elsewhere catch up. That is checked in the fetch itself, so it happens once however many components show
+// the list. Requirement changes still on their way to the API are applied on top, so a poll never undoes them.
 export function useCandidates(jobId: string) {
 	const { userId, token } = useSession();
 	const queryClient = useQueryClient();
@@ -183,26 +211,35 @@ export function useCandidates(jobId: string) {
 			const before = queryClient.getQueryData<CandidateList>(queryKey);
 			const list = await apiGet<CandidateList>(`/jobs/${jobId}/candidates`, { token: await token(), signal });
 			if (before && finishedReading(before, list)) {
-				const stillReading = list.candidates.some(isWorking);
+				const stillReading = list.candidates.some(isBusy);
 				const askedAt = countsAskedAt.get(queryClient) ?? 0;
 				if (!stillReading || Date.now() - askedAt >= COUNTS_REFRESH_MS) invalidateAround(queryClient, userId);
 			}
-			return list;
+			const rubric = rubricQueue(queryClient, userId, jobId) && queryClient.getQueryData<Job>(jobKey(userId, jobId))?.rubric;
+			return rubric ? rescoreList(list, rubric) : list;
 		},
-		refetchInterval: ({ state }) => (state.data?.candidates.some(isWorking) ? CANDIDATE_POLL_MS : false),
+		refetchInterval: ({ state }) => (state.data?.candidates.some(isBusy) ? CANDIDATE_POLL_MS : false),
 	});
 }
 
-// `enabled` is off while the candidate is being deleted, so no poll can ask for it once it is gone.
+// `enabled` is off while the candidate is being deleted, so no poll can ask for it once it is gone. Like the list, it
+// shows requirement changes still on their way to the API.
 export function useCandidate(jobId: string, id: string, enabled = true) {
 	const { userId, token } = useSession();
+	const queryClient = useQueryClient();
 	return useQuery({
 		queryKey: candidateKey(userId, jobId, id),
 		enabled,
-		queryFn: async ({ signal }) =>
-			(await apiGet<{ candidate: Candidate }>(`/jobs/${jobId}/candidates/${id}`, { token: await token(), signal }))
-				.candidate,
-		refetchInterval: ({ state }) => (state.data && isWorking(state.data) ? CANDIDATE_POLL_MS : false),
+		queryFn: async ({ signal }) => {
+			const { candidate } = await apiGet<{ candidate: Candidate }>(`/jobs/${jobId}/candidates/${id}`, {
+				token: await token(),
+				signal,
+			});
+			const rubric = rubricQueue(queryClient, userId, jobId) && queryClient.getQueryData<Job>(jobKey(userId, jobId))?.rubric;
+			const list = queryClient.getQueryData<CandidateList>(listKey(userId, jobId));
+			return rubric ? rescoreCandidate(candidate, rubric, list) : candidate;
+		},
+		refetchInterval: ({ state }) => (state.data && isBusy(state.data) ? CANDIDATE_POLL_MS : false),
 		retry: (failures, error) => failures < 1 && !(error instanceof ApiError && error.status === 404),
 	});
 }

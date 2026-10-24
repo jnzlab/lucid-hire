@@ -22,3 +22,5 @@ export function useMediaQuery(query: string, fallback = false): boolean {
 export const DESKTOP_QUERY = "(min-width: 768px)";
 // Devices with a mouse or trackpad, where hover hints and keyboard hints make sense.
 export const HOVER_QUERY = "(hover: hover) and (pointer: fine)";
+// People who asked for less motion: animations rest finished (design system §2.6).
+export const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
