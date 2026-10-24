@@ -8,6 +8,13 @@ export const GEMINI_TEXT_MODEL = "gemini-3.5-flash-lite";
 
 export type AiResult<T> = { value: T; inputTokens: number | undefined; outputTokens: number | undefined };
 
+// For a Workflow step that calls Gemini, which often answers 503 "high demand" and takes 10 to 80 seconds, so the
+// call gets its own retries.
+export const GEMINI_STEP = {
+	retries: { limit: 3, delay: "15 seconds", backoff: "exponential" },
+	timeout: "3 minutes",
+} as const;
+
 export type DescriptionEnhancer = (
 	env: Env,
 	input: { title?: string; description: string },

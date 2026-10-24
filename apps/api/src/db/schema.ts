@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import type { EvidenceMap, RubricItem } from "@lucid-hire/scoring";
 
 const createdAt = () =>
 	integer("created_at", { mode: "timestamp_ms" })
@@ -62,6 +63,11 @@ export const members = sqliteTable(
 export const JOB_STATUSES = ["draft", "open", "closed"] as const;
 export type JobStatus = (typeof JOB_STATUSES)[number];
 
+// Where a job's list of requirements stands: none yet, being drafted by Gemini, ready to score against, or the last
+// draft failed (a later trigger drafts again).
+export const RUBRIC_STATUSES = ["none", "drafting", "ready", "failed"] as const;
+export type RubricStatus = (typeof RUBRIC_STATUSES)[number];
+
 // A role a company is hiring for. CVs attach to a job and are scored against its description.
 export const jobs = sqliteTable(
 	"jobs",
@@ -82,6 +88,13 @@ export const jobs = sqliteTable(
 		// CVs uploaded so far, including deleted ones: each upload spends a Gemini call, so deleting one
 		// doesn't give its slot back. Bumped by a single guarded UPDATE, which is what enforces the limit.
 		cvCount: integer("cv_count").notNull().default(0),
+		// The job's one list of requirements that every CV is checked against (@lucid-hire/scoring), removed ones
+		// included. Null until the first draft lands.
+		rubric: text("rubric", { mode: "json" }).$type<RubricItem[]>(),
+		rubricStatus: text("rubric_status", { enum: RUBRIC_STATUSES }).notNull().default("none"),
+		// Bumped by every write to the list (a draft starting, a recruiter's edit), so a draft that was overtaken can't
+		// land and two edits can't overwrite each other. A draft's Workflow instance is named after it.
+		rubricVersion: integer("rubric_version").notNull().default(0),
 		createdBy: text("created_by").notNull(),
 		createdAt: createdAt(),
 		updatedAt: integer("updated_at", { mode: "timestamp_ms" })
@@ -102,7 +115,12 @@ export type CandidateSource = (typeof CANDIDATE_SOURCES)[number];
 export const CANDIDATE_DECISIONS = ["undecided", "shortlisted", "rejected"] as const;
 export type Decision = (typeof CANDIDATE_DECISIONS)[number];
 
-// One checked requirement from the job, with the CV quote that shows it was met.
+// A "Check all" run reading a scored CV again for requirements added since: waiting for a reading slot, or being read.
+export const CHECK_STATES = ["queued", "checking"] as const;
+export type CheckState = (typeof CHECK_STATES)[number];
+
+// One checked requirement from the job, with the CV quote that shows it was met. What the scorer wrote before jobs had
+// a fixed list of requirements; only CVs scored back then still have it.
 export type Requirement = {
 	label: string;
 	requirement: string;
@@ -147,8 +165,16 @@ export const candidates = sqliteTable(
 		name: text("name"),
 		headline: text("headline"),
 		summary: text("summary"),
+		// Worked out from the job's current requirements and `evidence`, in SQL, whenever either changes. A CV scored
+		// before jobs had requirements (no evidence) keeps the score it got then.
 		score: integer("score"),
 		requirements: text("requirements", { mode: "json" }).$type<Requirement[]>(),
+		// What the CV shows for each of the job's requirements, by requirement id. Null until scored.
+		evidence: text("evidence", { mode: "json" }).$type<EvidenceMap>(),
+		// A "Check all" run for this scored CV, and the requirement ids it reads. Its queue position and heartbeat are
+		// `queue_priority_at` and `updated_at`, as for a scoring run.
+		checkState: text("check_state", { enum: CHECK_STATES }),
+		checkIds: text("check_ids", { mode: "json" }).$type<string[]>(),
 		// Where the CV came from, and the applicant's email when they applied through the public page. Null (never
 		// an empty string) when unknown, so the unique index below only ever compares real addresses.
 		source: text("source", { enum: CANDIDATE_SOURCES }).notNull().default("upload"),
@@ -173,8 +199,9 @@ export const candidates = sqliteTable(
 	(t) => [
 		index("candidates_job_score_idx").on(t.jobId, t.score),
 		index("candidates_org_idx").on(t.orgId),
-		// The reading queue counts and orders the few CVs that are queued or scoring.
+		// The reading queue counts and orders the few CVs that are queued or scoring, or queued or checking.
 		index("candidates_status_updated_idx").on(t.status, t.updatedAt),
+		index("candidates_check_updated_idx").on(t.checkState, t.updatedAt),
 		// One application per email and job. Stored lower case, so the comparison is case-insensitive.
 		uniqueIndex("candidates_job_email_unique")
 			.on(t.jobId, t.email)

@@ -71,6 +71,8 @@ beforeAll(async () => {
 				return { id: options.id };
 			},
 		},
+		// Opening a job starts drafting its requirements.
+		DRAFT_RUBRIC: { create: async (options: { id: string }) => ({ id: options.id }) },
 	} as unknown as Env;
 	db = getDb(testD1.d1);
 	orgId = (await createOrgForUser(db, "user_admin", "Sprite Labs")).org.id;
@@ -226,7 +228,7 @@ describe("POST /public/jobs/:slug/apply", () => {
 		expect(row.fileKey).toBe(`${orgId}/${job.id}/${row.id}.pdf`);
 		const stored = await bucket.get(row.fileKey);
 		expect(new Uint8Array(await stored!.arrayBuffer())).toEqual(PDF);
-		expect(creates).toEqual([{ id: row.id, params: { candidateId: row.id } }]);
+		expect(creates).toEqual([{ id: row.id, params: { candidateId: row.id, mode: "initial" } }]);
 		expect(captchaCalls).toEqual([{ token: "token-1", ip: "203.0.113.7" }]);
 		expect(rateKeys).toEqual([`203.0.113.7:${job.slug}`]);
 		const [counted] = await db.select({ cvCount: jobs.cvCount }).from(jobs).where(eq(jobs.id, job.id));

@@ -14,6 +14,8 @@ let dispose: () => Promise<void>;
 let allowAi: boolean;
 let enhanceCalls: number;
 let enhanceFails: boolean;
+let drafts: { id: string; params: unknown }[];
+let failDraft: boolean;
 
 // Tokens are "t:<userId>" in these tests.
 const verify: SessionVerifier = async (token) => {
@@ -37,6 +39,14 @@ beforeAll(async () => {
 		GOOGLE_GENERATIVE_AI_API_KEY: "unit",
 		DB: testD1.d1,
 		AI_RATE_LIMIT: { limit: async () => ({ success: allowAi }) },
+		// Records the drafts of a job's requirements it is asked to start.
+		DRAFT_RUBRIC: {
+			create: async (options: { id: string; params: unknown }) => {
+				if (failDraft) throw new Error("Workflows is down");
+				drafts.push(options);
+				return { id: options.id };
+			},
+		},
 	} as unknown as Env;
 	db = getDb(testD1.d1);
 
@@ -54,6 +64,8 @@ beforeEach(async () => {
 	allowAi = true;
 	enhanceCalls = 0;
 	enhanceFails = false;
+	drafts = [];
+	failDraft = false;
 });
 
 // Runs a request with a fake execution context and waits for its waitUntil work.
@@ -122,6 +134,68 @@ describe("POST /jobs", () => {
 		const res = await call("user_admin", "POST", "/jobs", "{not json");
 		expect(res.status).toBe(400);
 		expect(await res.json()).toMatchObject({ error: { code: "bad_request" } });
+	});
+});
+
+describe("drafting a job's requirements", () => {
+	const rowOf = async (id: string) => (await db.select().from(jobs).where(eq(jobs.id, id)))[0];
+
+	it("starts once the job is open, not while it is a draft", async () => {
+		const draft = await createAs("user_admin", { title: "Draft role", description: "Swift" });
+		expect(draft).toMatchObject({ rubric: null, rubricStatus: "none" });
+		expect(drafts).toEqual([]);
+
+		const open = await createAs("user_member", { title: "Open role", description: "Swift", status: "open" });
+		expect(open).toMatchObject({ rubric: null, rubricStatus: "drafting" });
+		expect(drafts).toEqual([{ id: `rubric-${open.id}-v1`, params: { jobId: open.id, version: 1, userId: "user_member" } }]);
+		expect(await rowOf(open.id)).toMatchObject({ rubricStatus: "drafting", rubricVersion: 1 });
+	});
+
+	it("starts when a draft job is opened, and not again while it has requirements", async () => {
+		const job = await createAs("user_admin", { title: "Later", description: "Swift" });
+		const opened = await call("user_admin", "PATCH", `/jobs/${job.id}`, { status: "open" });
+		expect(await opened.json()).toMatchObject({ job: { status: "open", rubricStatus: "drafting" } });
+		expect(drafts).toEqual([{ id: `rubric-${job.id}-v1`, params: { jobId: job.id, version: 1, userId: "user_admin" } }]);
+
+		// The draft lands; closing and reopening the job keeps the list.
+		const rubric = [{ id: "r1", label: "Swift", detail: "Swift", weight: "must" as const }];
+		await db.update(jobs).set({ rubric, rubricStatus: "ready" }).where(eq(jobs.id, job.id));
+		await call("user_admin", "PATCH", `/jobs/${job.id}`, { status: "closed" });
+		const reopened = await call("user_admin", "PATCH", `/jobs/${job.id}`, { status: "open" });
+		expect(await reopened.json()).toMatchObject({ job: { status: "open", rubric, rubricStatus: "ready" } });
+		// Neither does an edit to an open job, or a second "open".
+		await call("user_admin", "PATCH", `/jobs/${job.id}`, { title: "Later still", status: "open" });
+		expect(drafts).toHaveLength(1);
+	});
+
+	it("tries again on opening a job whose last draft failed", async () => {
+		const job = await createAs("user_admin", { title: "Retry", description: "Swift" });
+		await db.update(jobs).set({ rubricStatus: "failed", rubricVersion: 3 }).where(eq(jobs.id, job.id));
+		await call("user_admin", "PATCH", `/jobs/${job.id}`, { status: "open" });
+		expect(drafts).toEqual([{ id: `rubric-${job.id}-v4`, params: { jobId: job.id, version: 4, userId: "user_admin" } }]);
+	});
+
+	it("leaves the job open with the draft failed when the Workflow won't start", async () => {
+		failDraft = true;
+		const job = await createAs("user_admin", { title: "Unlucky", description: "Swift", status: "open" });
+		expect(job).toMatchObject({ status: "open", rubricStatus: "failed" });
+		expect(await rowOf(job.id)).toMatchObject({ status: "open", rubricStatus: "failed" });
+
+		const other = await createAs("user_admin", { title: "Unlucky too", description: "Swift" });
+		const opened = await call("user_admin", "PATCH", `/jobs/${other.id}`, { status: "open" });
+		expect(await opened.json()).toMatchObject({ job: { status: "open", rubricStatus: "failed" } });
+	});
+
+	it("sends the list on the job and leaves it out of the job list", async () => {
+		const job = await createAs("user_admin", { title: "Listed", description: "Swift" });
+		const rubric = [
+			{ id: "r1", label: "Swift", detail: "Swift", weight: "must" as const },
+			{ id: "r2", label: "Kotlin", detail: "Kotlin", weight: "nice" as const, removed: true as const },
+		];
+		await db.update(jobs).set({ rubric, rubricStatus: "ready" }).where(eq(jobs.id, job.id));
+		expect(await (await call("user_admin", "GET", `/jobs/${job.id}`)).json()).toMatchObject({ job: { rubric, rubricStatus: "ready" } });
+		const { jobs: list } = (await (await call("user_admin", "GET", "/jobs")).json()) as { jobs: Record<string, unknown>[] };
+		expect(list.find((row) => row.id === job.id)).not.toHaveProperty("rubric");
 	});
 });
 
@@ -372,7 +446,12 @@ describe("GET /jobs search, filter, sort and pages", () => {
 describe("POST /jobs/:id/duplicate", () => {
 	it("creates a new draft with (copy) after the title, the same description and no CVs", async () => {
 		const original = await createAs("user_admin", { title: "Staff Engineer", description: "Go and Rust", status: "open" });
-		await db.update(jobs).set({ cvCount: 7 }).where(eq(jobs.id, original.id));
+		const rubric = [
+			{ id: "r1", label: "Go", detail: "Go", weight: "must" as const },
+			{ id: "r2", label: "Python", detail: "Python", weight: "nice" as const, removed: true as const },
+			{ id: "r3", label: "Rust", detail: "Rust", weight: "off" as const },
+		];
+		await db.update(jobs).set({ cvCount: 7, rubric, rubricStatus: "ready" }).where(eq(jobs.id, original.id));
 		await db.insert(candidates).values({
 			id: crypto.randomUUID(),
 			orgId: (await db.select().from(jobs).where(eq(jobs.id, original.id)))[0].orgId,
@@ -388,6 +467,11 @@ describe("POST /jobs/:id/duplicate", () => {
 		const { job } = (await res.json()) as { job: { id: string; title: string; status: string; description: string; cvCount: number } };
 		expect(job).toMatchObject({ title: "Staff Engineer (copy)", status: "draft", description: "Go and Rust", cvCount: 0 });
 		expect(job.id).not.toBe(original.id);
+		// The copy starts with the original's requirements, ready, so it needs no draft of its own.
+		expect(job).toMatchObject({ rubric: [rubric[0], rubric[2]], rubricStatus: "ready" });
+		drafts = [];
+		await call("user_admin", "PATCH", `/jobs/${job.id}`, { status: "open" });
+		expect(drafts).toEqual([]);
 
 		const copyCandidates = await db.select().from(candidates).where(eq(candidates.jobId, job.id));
 		expect(copyCandidates).toHaveLength(0);

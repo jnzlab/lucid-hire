@@ -1,7 +1,8 @@
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { type RubricItem, visibleItems } from "@lucid-hire/scoring";
+import { type SQL, and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Db } from "./db/client.ts";
-import { JOB_STATUSES, type JobStatus, candidates, jobs } from "./db/schema.ts";
+import { JOB_STATUSES, type JobStatus, type RubricStatus, candidates, jobs } from "./db/schema.ts";
 import { countIf, isoOrNull, pipelineByJob, toCount } from "./pipeline.ts";
 import { limitSql } from "./plan-state.ts";
 import { monthPeriod, returnUnit, takeUnit } from "./usage.ts";
@@ -77,7 +78,13 @@ export type JobSummary = {
 	createdAt: Date;
 	updatedAt: Date;
 };
-export type Job = JobSummary & { description: string };
+export type Job = JobSummary & {
+	description: string;
+	// The requirements every CV of the job is checked against, removed ones included (with `removed: true`). Null
+	// until the first draft lands.
+	rubric: RubricItem[] | null;
+	rubricStatus: RubricStatus;
+};
 // What the list adds: the job's pipeline (counted as in pipeline.ts), its best scored CV and when its latest CV came in.
 export type JobListItem = JobSummary & {
 	scoredCount: number;
@@ -106,7 +113,12 @@ const summaryColumns = {
 	createdAt: jobs.createdAt,
 	updatedAt: jobs.updatedAt,
 };
-const jobColumns = { ...summaryColumns, description: jobs.description };
+export const jobColumns = {
+	...summaryColumns,
+	description: jobs.description,
+	rubric: jobs.rubric,
+	rubricStatus: jobs.rubricStatus,
+};
 
 const SLUG_BASE_MAX = 60;
 const SLUG_SUFFIX_LENGTH = 8;
@@ -238,22 +250,51 @@ export async function getJob(db: Db, orgId: string, id: string): Promise<Job | n
 	return job ?? null;
 }
 
-export async function createJob(
-	db: Db,
-	orgId: string,
-	userId: string,
-	input: z.output<typeof createJobInput>,
-): Promise<Job | "limit"> {
+// A job that opens gets its requirements drafted. These are the statuses that still need a draft.
+export const NEEDS_DRAFT: RubricStatus[] = ["none", "failed"];
+
+// A job claimed for a draft, and the version of its list the draft's Workflow is named after.
+export type ClaimedDraft = { job: Job; version: number };
+
+const claimedColumns = { ...jobColumns, version: jobs.rubricVersion };
+const toClaimed = ({ version, ...job }: Job & { version: number }): ClaimedDraft => ({ job, version });
+
+// Claims the job's next draft in ONE guarded UPDATE, so two triggers racing each other start one draft: the status
+// moves to drafting and the version on. Null when no job matches `where` with a status in `from`. `updated_at` is left
+// alone: a draft isn't a recruiter's edit.
+const claimDraftQuery = (db: Db, where: SQL | undefined, from: RubricStatus[]) =>
+	db
+		.update(jobs)
+		.set({ rubricStatus: "drafting", rubricVersion: sql`${jobs.rubricVersion} + 1`, updatedAt: sql`${jobs.updatedAt}` })
+		.where(and(where, inArray(jobs.rubricStatus, from)))
+		.returning(claimedColumns);
+
+export async function claimDraft(db: Db, where: SQL | undefined, from: RubricStatus[]): Promise<ClaimedDraft | null> {
+	const [claimed] = await claimDraftQuery(db, where, from);
+	return claimed ? toClaimed(claimed) : null;
+}
+
+// What a new job may start with: a copy brings its source's requirements.
+type NewJob = z.output<typeof createJobInput> & { rubric?: RubricItem[] | null };
+
+// A job created open is created drafting (version 1), so the caller only has to start the Workflow.
+export async function createJob(db: Db, orgId: string, userId: string, input: NewJob): Promise<Job | "limit"> {
 	const period = monthPeriod();
 	// The allowance is spent first, in one guarded statement, so two requests racing each other can't both take the
 	// last one. A job is never created without being counted.
 	if (!(await takeUnit(db, orgId, "jobs_month", period, limitSql(orgId, (plan) => plan.jobsPerMonth)))) {
 		return "limit";
 	}
+	const { rubric, ...fields } = input;
+	const rubricState = rubric
+		? { rubric, rubricStatus: "ready" as const }
+		: input.status === "open"
+			? { rubricStatus: "drafting" as const, rubricVersion: 1 }
+			: {};
 	try {
 		const [job] = await db
 			.insert(jobs)
-			.values({ id: crypto.randomUUID(), orgId, createdBy: userId, slug: newSlug(input.title), ...input })
+			.values({ id: crypto.randomUUID(), orgId, createdBy: userId, slug: newSlug(input.title), ...fields, ...rubricState })
 			.returning(jobColumns);
 		return job;
 	} catch (error) {
@@ -264,28 +305,42 @@ export async function createJob(
 
 const COPY_SUFFIX = " (copy)";
 
-// A new draft with the same title and description and no candidates. It goes through `createJob`, so
-// anything that limits new jobs applies to a copy too. The title is cut so "(copy)" still fits.
+// A new draft with the same title, description and requirements, and no candidates. The requirements come over ready,
+// without the removed ones, since no CV has evidence for them yet. It goes through `createJob`, so anything that
+// limits new jobs applies to a copy too. The title is cut so "(copy)" still fits.
 export async function duplicateJob(db: Db, orgId: string, userId: string, id: string): Promise<Job | "limit" | null> {
 	const source = await getJob(db, orgId, id);
 	if (!source) return null;
 	const room = JOB_TITLE_MAX - COPY_SUFFIX.length;
 	const base = source.title.length > room ? source.title.slice(0, room).trimEnd() : source.title;
+	const rubric = source.rubric ? visibleItems(source.rubric) : [];
 	return createJob(db, orgId, userId, {
 		title: `${base}${COPY_SUFFIX}`,
 		description: source.description,
 		status: "draft",
+		rubric: rubric.length > 0 ? rubric : null,
 	});
 }
 
+// Saves the edit. A job that becomes open while it has no requirements (or its last draft failed) is claimed for a
+// draft in the same batch, and `draft` comes back for the caller to start the Workflow.
 export async function updateJob(
 	db: Db,
 	orgId: string,
 	id: string,
 	patch: z.output<typeof updateJobInput>,
-): Promise<Job | null> {
-	const [job] = await db.update(jobs).set(patch).where(inOrg(orgId, id)).returning(jobColumns);
-	return job ?? null;
+): Promise<{ job: Job; draft: ClaimedDraft | null } | null> {
+	if (patch.status !== "open") {
+		const [job] = await db.update(jobs).set(patch).where(inOrg(orgId, id)).returning(jobColumns);
+		return job ? { job, draft: null } : null;
+	}
+	const [[edited], [claimed]] = await db.batch([
+		db.update(jobs).set(patch).where(inOrg(orgId, id)).returning(jobColumns),
+		claimDraftQuery(db, and(inOrg(orgId, id), eq(jobs.status, "open")), NEEDS_DRAFT),
+	]);
+	if (!edited) return null;
+	const draft = claimed ? toClaimed(claimed) : null;
+	return { job: draft?.job ?? edited, draft };
 }
 
 export const COVER_MAX_BYTES = 2 * 1024 * 1024;

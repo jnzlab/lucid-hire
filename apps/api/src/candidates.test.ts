@@ -1,8 +1,9 @@
+import type { EvidenceMap, RubricItem } from "@lucid-hire/scoring";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "./app.ts";
 import type { SessionVerifier } from "./auth.ts";
-import { CV_MAX_BYTES, NOTE_MAX, STALE_SCORING_MS, computeScore, deleteCvFiles } from "./candidates.ts";
+import { CV_MAX_BYTES, NOTE_MAX, STALE_SCORING_MS, deleteCvFiles } from "./candidates.ts";
 import { type Db, getDb } from "./db/client.ts";
 import { type Requirement, candidates, jobs, members, usageCounters } from "./db/schema.ts";
 import { createOrgForUser } from "./orgs.ts";
@@ -58,6 +59,8 @@ beforeAll(async () => {
 				return { id: options.id };
 			},
 		},
+		// Drafting a job's requirements is started by opening a job. These tests set the requirements themselves.
+		DRAFT_RUBRIC: { create: async (options: { id: string }) => ({ id: options.id }) },
 	} as unknown as Env;
 	db = getDb(testD1.d1);
 
@@ -143,7 +146,10 @@ type CandidateJson = {
 	error: string | null;
 	canRetry: boolean;
 	summary: string | null;
-	requirements: Requirement[] | null;
+	evidence: unknown[] | null;
+	legacyRequirements: Requirement[] | null;
+	scoredBeforeRequirements: boolean;
+	checking: boolean;
 	decision: string;
 	note: string | null;
 	decidedAt: string | null;
@@ -157,6 +163,7 @@ async function uploadOk(user: string, jobId: string, options?: UploadOptions) {
 	return ((await res.json()) as { candidate: CandidateJson }).candidate;
 }
 
+// A requirement as CVs were scored before jobs had a list of them.
 const req = (label: string, importance: "must" | "nice", met: boolean): Requirement => ({
 	label,
 	requirement: `Needs ${label}`,
@@ -164,6 +171,30 @@ const req = (label: string, importance: "must" | "nice", met: boolean): Requirem
 	met,
 	evidence: met ? `Worked with ${label}` : "",
 });
+
+type Level = "clear" | "partial" | "none" | null;
+
+// A job's requirements and one CV's evidence, from rows of [label, weight, level], numbered r1, r2... A null level is
+// a requirement the CV hasn't been checked against.
+function rubricOf(rows: [string, RubricItem["weight"], Level][]) {
+	const rubric: RubricItem[] = rows.map(([label, weight], i) => ({ id: `r${i + 1}`, label, detail: `Needs ${label}`, weight }));
+	const evidence: EvidenceMap = {};
+	rows.forEach(([label, , level], i) => {
+		if (level) evidence[`r${i + 1}`] = { level, quote: level === "none" ? "" : `Worked with ${label}` };
+	});
+	return { rubric, evidence };
+}
+
+// Gives a job a finished list of requirements, as a draft would.
+const setRubric = (jobId: string, rubric: RubricItem[]) =>
+	db.update(jobs).set({ rubric, rubricStatus: "ready" }).where(eq(jobs.id, jobId));
+
+// Sets the job's requirements and returns the CV's evidence against them, to seed a scored CV with.
+async function withRubric(jobId: string, rows: Parameters<typeof rubricOf>[0]) {
+	const { rubric, evidence } = rubricOf(rows);
+	await setRubric(jobId, rubric);
+	return { evidence };
+}
 
 // Inserts a candidate row directly, for states an upload can't produce on its own.
 async function seed(jobId: string, values: Partial<typeof candidates.$inferInsert> = {}, owner = orgId) {
@@ -180,6 +211,9 @@ async function seed(jobId: string, values: Partial<typeof candidates.$inferInser
 	});
 	return id;
 }
+
+const jobRubric = async (jobId: string) =>
+	(await db.select({ rubric: jobs.rubric }).from(jobs).where(eq(jobs.id, jobId)))[0].rubric ?? [];
 
 const keysUnder = async (prefix: string) => (await bucket.list({ prefix })).objects.map((o) => o.key);
 
@@ -219,7 +253,7 @@ describe("POST /jobs/:jobId/candidates", () => {
 		expect(putBodies).toHaveLength(1);
 		expect(putBodies[0]).toBeInstanceOf(ReadableStream);
 
-		expect(creates).toEqual([{ id: candidate.id, params: { candidateId: candidate.id } }]);
+		expect(creates).toEqual([{ id: candidate.id, params: { candidateId: candidate.id, mode: "initial" } }]);
 		const [row] = await db.select().from(candidates).where(eq(candidates.id, candidate.id));
 		expect(row).toMatchObject({ orgId, jobId, fileKey: key, status: "queued", runs: 1, createdBy: "user_member" });
 
@@ -470,8 +504,9 @@ describe("POST /jobs/:jobId/candidates", () => {
 
 // Every field of a CandidateSummary, which the list sends for each CV.
 const SUMMARY_KEYS = [
-	"canRetry", "checks", "createdAt", "decision", "email", "error", "fileName", "gaps", "hasNote", "headline", "id",
-	"matches", "name", "profile", "rank", "scoredAt", "score", "source", "status", "summary", "updatedAt",
+	"canRetry", "checking", "checks", "createdAt", "decision", "email", "error", "fileName", "gaps", "hasNote", "headline",
+	"id", "matches", "name", "profile", "rank", "scoredAt", "scoredBeforeRequirements", "score",
+	"source", "status", "summary", "updatedAt",
 ].sort();
 
 describe("GET /jobs/:jobId/candidates", () => {
@@ -485,21 +520,25 @@ describe("GET /jobs/:jobId/candidates", () => {
 	it("sends each CV exactly as the candidate page sums it up, though SQLite writes the list", async () => {
 		const jobId = await createJob();
 		const at = (minute: number) => new Date(Date.UTC(2026, 9, 22, 10, minute, 7, 89));
-		const requirements = [
-			req("Swift", "nice", true),
-			req("SwiftUI", "must", false),
-			req("Combine", "must", true),
-			req("Kotlin", "nice", false),
-			req("UIKit", "must", true),
-			req("Core Data", "must", false),
-			req("Testing", "must", false),
-			req("Metal", "nice", true),
-			req("Accessibility", "must", true),
-		];
+		const { rubric, evidence } = rubricOf([
+			["Swift", "nice", "clear"],
+			["SwiftUI", "must", "none"],
+			["Combine", "must", "clear"],
+			["Kotlin", "nice", "partial"],
+			["UIKit", "must", "clear"],
+			["Core Data", "must", null],
+			["Testing", "must", "partial"],
+			["Metal", "nice", "clear"],
+			["Accessibility", "must", "clear"],
+			["Jira", "off", "clear"],
+		]);
+		await setRubric(jobId, [...rubric, { id: "r11", label: "Combine old", detail: "Combine", weight: "must", removed: true }]);
 		const profile = { email: "cv@example.com", phone: "+44 1", links: [], skills: [], experience: [], education: [], certifications: [] };
-		await seed(jobId, { status: "scored", score: 71, scoredAt: at(3), requirements, profile, note: 'A "quoted"\nnote', name: "Zoë Ünal" });
-		await seed(jobId, { status: "scored", score: 71, scoredAt: at(3), requirements: [], email: "typed@example.com", source: "apply" });
-		await seed(jobId, { status: "scored", score: 40, scoredAt: at(9), requirements: null, profile: { ...profile, email: "" } });
+		await seed(jobId, { status: "scored", score: 71, scoredAt: at(3), evidence, profile, note: 'A "quoted"\nnote', name: "Zoë Ünal" });
+		await seed(jobId, { status: "scored", score: 71, scoredAt: at(3), evidence: {}, email: "typed@example.com", source: "apply" });
+		// Scored before jobs had requirements, and one of those being checked for new requirements.
+		await seed(jobId, { status: "scored", score: 40, scoredAt: at(9), requirements: [req("Swift", "must", true)], profile: { ...profile, email: "" } });
+		await seed(jobId, { status: "scored", score: 30, scoredAt: at(9), evidence: { r1: evidence.r1 }, checkState: "queued", checkIds: ["r2"] });
 		await seed(jobId, { status: "queued", createdAt: at(1), updatedAt: new Date(Date.now() - STALE_SCORING_MS - 1000) });
 		await seed(jobId, { status: "scoring", createdAt: at(2) });
 		await seed(jobId, { status: "failed", runs: 3, error: "Scoring failed.", createdAt: at(4) });
@@ -508,7 +547,7 @@ describe("GET /jobs/:jobId/candidates", () => {
 		const { candidates: list } = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates`)).json()) as {
 			candidates: Record<string, unknown>[];
 		};
-		expect(list).toHaveLength(7);
+		expect(list).toHaveLength(8);
 		for (const row of list) {
 			const { candidate } = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates/${row.id}`)).json()) as {
 				candidate: Record<string, unknown>;
@@ -525,7 +564,11 @@ describe("GET /jobs/:jobId/candidates", () => {
 			gaps: ["SwiftUI", "Core Data"],
 			hasNote: true,
 			profile: { email: "cv@example.com" },
+			scoredBeforeRequirements: false,
+			checking: false,
 		});
+		expect(list[2]).toMatchObject({ score: 40, scoredBeforeRequirements: true, checks: [], matches: [], gaps: [], canRetry: true });
+		expect(list[3]).toMatchObject({ score: 30, scoredBeforeRequirements: false, checking: true, canRetry: false });
 	});
 
 	it("lists scored CVs by score, then CVs being read, then failed ones, without caching", async () => {
@@ -625,7 +668,12 @@ describe("GET /jobs/:jobId/candidates", () => {
 			summary: "Strong Swift.",
 			note: "Call on Monday",
 			profile: { email: "ada@example.com", phone: "+44 7946 095 800", links: [], skills: ["Swift"], experience: [], education: [], certifications: [] },
-			requirements: [req("Swift", "must", true), req("Combine", "must", false), req("Figma", "nice", false)],
+			...(await withRubric(jobId, [
+				["Swift", "must", "clear"],
+				["Combine", "must", "none"],
+				["Figma", "nice", "partial"],
+				["Kotlin", "nice", null],
+			])),
 		});
 		const bare = await seed(jobId, { status: "queued" });
 
@@ -638,9 +686,10 @@ describe("GET /jobs/:jobId/candidates", () => {
 			// Only the email: the phone and the rest of the profile are for the candidate page.
 			profile: { email: "ada@example.com" },
 			checks: [
-				{ label: "Swift", met: true, importance: "must" },
-				{ label: "Combine", met: false, importance: "must" },
-				{ label: "Figma", met: false, importance: "nice" },
+				{ id: "r1", label: "Swift", weight: "must", level: "clear" },
+				{ id: "r2", label: "Combine", weight: "must", level: "none" },
+				{ id: "r3", label: "Figma", weight: "nice", level: "partial" },
+				{ id: "r4", label: "Kotlin", weight: "nice", level: null },
 			],
 		});
 		expect(list.find((c) => c.id === full)).not.toHaveProperty("note");
@@ -657,38 +706,40 @@ describe("GET /jobs/:jobId/candidates", () => {
 		expect(again.candidates.find((c) => c.id === full)?.hasNote).toBe(false);
 	});
 
-	it("shows met requirements as matches (must-haves first) and unmet must-haves as gaps, capped at 4 and 2", async () => {
+	it("shows clear requirements as matches (must-haves first) and must-haves not met as gaps, capped at 4 and 2", async () => {
 		const jobId = await createJob();
-		const many = await seed(jobId, {
-			status: "scored",
-			score: 50,
-			scoredAt: new Date(),
-			requirements: [
-				req("Figma", "nice", true),
-				req("Swift", "must", true),
-				req("SwiftUI", "must", true),
-				req("Combine", "must", false),
-				req("5+ years iOS", "must", true),
-				req("Jira", "nice", false),
-				req("Testing", "must", true),
-				req("CI/CD", "must", false),
-				req("Kotlin", "must", false),
-			],
-		});
+		const { rubric, evidence } = rubricOf([
+			["Figma", "nice", "clear"],
+			["Swift", "must", "clear"],
+			["SwiftUI", "must", "partial"],
+			["Combine", "must", "none"],
+			["5+ years iOS", "must", "clear"],
+			["Jira", "off", "clear"],
+			["Testing", "must", "clear"],
+			["CI/CD", "must", null],
+			["Kotlin", "must", "none"],
+			["UIKit", "must", "clear"],
+		]);
+		await setRubric(jobId, rubric);
+		const many = await seed(jobId, { status: "scored", score: 50, scoredAt: new Date(), evidence });
 		const few = await seed(jobId, {
 			status: "scored",
 			score: 40,
 			scoredAt: new Date(),
-			requirements: [req("Figma", "nice", true), req("Swift", "must", true), req("Jira", "nice", false)],
+			evidence: { r1: evidence.r1, r2: evidence.r2, r3: evidence.r3, r4: { level: "partial", quote: "Some Combine" }, r8: evidence.r1 },
 		});
 
 		const res = await send("user_admin", "GET", `/jobs/${jobId}/candidates`);
 		const { candidates: list } = (await res.json()) as { candidates: CandidateJson[] };
+		// Partial isn't a match, Off never is, and a must-have not yet checked is a gap.
 		expect(list.find((c) => c.id === many)).toMatchObject({
-			matches: ["Swift", "SwiftUI", "5+ years iOS", "Testing"],
+			matches: ["Swift", "5+ years iOS", "Testing", "UIKit"],
 			gaps: ["Combine", "CI/CD"],
 		});
-		expect(list.find((c) => c.id === few)).toMatchObject({ matches: ["Swift", "Figma"], gaps: [] });
+		expect(list.find((c) => c.id === few)).toMatchObject({
+			matches: ["Swift", "CI/CD", "Figma"],
+			gaps: ["5+ years iOS", "Testing"],
+		});
 	});
 });
 
@@ -710,10 +761,23 @@ describe("GET /jobs/:jobId/candidates/export.csv", () => {
 			decision: "shortlisted",
 			decidedAt: at(40),
 			profile: { email: "ada@example.com", phone: "+44 7946 095 800", links: [], skills: [], experience: [], education: [], certifications: [] },
-			requirements: [req("Swift", "must", true), req("Combine", "must", false)],
+			...(await withRubric(jobId, [
+				["Swift", "must", "clear"],
+				["Combine", "must", "none"],
+				["SwiftUI", "must", "partial"],
+				["Jira", "off", "clear"],
+				["Kotlin", "nice", null],
+			])),
 			summary: "Great, really.",
 		});
-		const next = await seed(jobId, { status: "scored", score: 60, scoredAt: at(6), name: "=Bob", note: "Maybe" });
+		const next = await seed(jobId, {
+			status: "scored",
+			score: 60,
+			scoredAt: at(6),
+			name: "=Bob",
+			note: "Maybe",
+			requirements: [req("Swift", "must", true), req("Figma", "nice", false)],
+		});
 		const rejected = await seed(jobId, { status: "scored", score: 30, scoredAt: at(7), name: "Cy", decision: "rejected" });
 		const failed = await seed(jobId, { status: "failed", error: "Scoring failed." });
 		const reading = await seed(jobId, { status: "scoring" });
@@ -746,11 +810,13 @@ describe("GET /jobs/:jobId/candidates/export.csv", () => {
 			"",
 			"2026-10-22T10:40:00.000Z",
 			"Great; really.",
-			"Swift",
-			"Combine",
+			"Swift; SwiftUI (partial)",
+			"Combine; Kotlin (not checked)",
 			"",
 		]);
 		expect(rows[2]).toContain("2,'=Bob,,,60,scored,Undecided,Maybe,");
+		// Bob was scored before the job had requirements, so his row lists what was read then.
+		expect(rows[2]).toMatch(/,Swift,Figma,$/);
 		expect(rows[3]).toContain("3,Cy,");
 		expect(rows[4]).toMatch(/^,seed\.pdf,,,,scoring,/);
 		expect(rows[5]).toMatch(/^,seed\.pdf,,,,failed,.*,Scoring failed\.$/);
@@ -815,9 +881,14 @@ describe("GET /jobs/:jobId/candidates/export.csv", () => {
 });
 
 describe("GET /jobs/:jobId/candidates/:id", () => {
-	it("returns the full candidate, with its requirements and evidence", async () => {
+	it("returns the full candidate, with the evidence for each requirement on the job", async () => {
 		const jobId = await createJob();
-		const requirements = [req("Swift", "must", true), req("Kotlin", "nice", false)];
+		const { evidence } = await withRubric(jobId, [
+			["Swift", "must", "clear"],
+			["Kotlin", "nice", "none"],
+			["Figma", "nice", null],
+		]);
+		await db.update(jobs).set({ rubric: [...(await jobRubric(jobId)), { id: "r4", label: "Old", detail: "Gone", weight: "must", removed: true }] }).where(eq(jobs.id, jobId));
 		const id = await seed(jobId, {
 			status: "scored",
 			score: 67,
@@ -825,7 +896,7 @@ describe("GET /jobs/:jobId/candidates/:id", () => {
 			name: "Ada Lovelace",
 			headline: "Senior iOS Engineer · London",
 			summary: "Strong Swift background. No Kotlin.",
-			requirements,
+			evidence: { ...evidence, r4: { level: "clear", quote: "Gone" } },
 			fileSize: 2048,
 			fileName: "ada.pdf",
 		});
@@ -840,13 +911,51 @@ describe("GET /jobs/:jobId/candidates/:id", () => {
 				headline: "Senior iOS Engineer · London",
 				score: 67,
 				summary: "Strong Swift background. No Kotlin.",
-				requirements,
+				evidence: [
+					{ id: "r1", label: "Swift", detail: "Needs Swift", weight: "must", level: "clear", quote: "Worked with Swift" },
+					{ id: "r2", label: "Kotlin", detail: "Needs Kotlin", weight: "nice", level: "none", quote: "" },
+					{ id: "r3", label: "Figma", detail: "Needs Figma", weight: "nice", level: null, quote: "" },
+				],
+				legacyRequirements: null,
+				scoredBeforeRequirements: false,
 				fileSize: 2048,
 				fileName: "ada.pdf",
 				matches: ["Swift"],
 				gaps: [],
 			},
 		});
+	});
+
+	it("sends what was read before the job had requirements, and keeps the CV's score and rank", async () => {
+		const jobId = await createJob();
+		await withRubric(jobId, [["Swift", "must", "clear"]]);
+		const requirements = [req("Swift", "must", true), req("Kotlin", "nice", false)];
+		const legacy = await seed(jobId, { status: "scored", score: 67, scoredAt: new Date(), requirements });
+		await seed(jobId, { status: "scored", score: 90, scoredAt: new Date(), evidence: { r1: { level: "clear", quote: "Swift" } } });
+
+		const { candidate } = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates/${legacy}`)).json()) as {
+			candidate: CandidateJson;
+		};
+		expect(candidate).toMatchObject({
+			score: 67,
+			rank: 2,
+			rankedCount: 2,
+			evidence: null,
+			legacyRequirements: requirements,
+			scoredBeforeRequirements: true,
+			checks: [],
+			canRetry: true,
+		});
+	});
+
+	it("sends no evidence for a CV not scored yet", async () => {
+		const jobId = await createJob();
+		await withRubric(jobId, [["Swift", "must", "clear"]]);
+		const id = await seed(jobId, { status: "scoring" });
+		const { candidate } = (await (await send("user_admin", "GET", `/jobs/${jobId}/candidates/${id}`)).json()) as {
+			candidate: CandidateJson;
+		};
+		expect(candidate).toMatchObject({ evidence: null, legacyRequirements: null, scoredBeforeRequirements: false, checks: [] });
 	});
 
 	it("404s for another company's candidate, a missing one, and the wrong job", async () => {
@@ -1230,15 +1339,18 @@ describe("POST /jobs/:jobId/candidates/:id/retry", () => {
 			{ status: "scoring" as const, updatedAt: new Date() },
 			{ status: "queued" as const, updatedAt: recent },
 			{ status: "scoring" as const, updatedAt: recent },
-			// Scored is final, however old.
-			{ status: "scored" as const, updatedAt: stale },
+			// Scored against the job's requirements is final, however old.
+			{ status: "scored" as const, updatedAt: stale, evidence: {} },
 		];
 		for (const row of rows) {
 			const id = await seed(jobId, row);
 			const res = await send("user_admin", "POST", `/jobs/${jobId}/candidates/${id}/retry`);
 			expect(res.status).toBe(409);
 			expect(await res.json()).toEqual({
-				error: { code: "not_failed", message: "Only a CV that failed or got stuck can be retried" },
+				error: {
+					code: "not_failed",
+					message: "Only a CV that failed, got stuck or was scored before requirements can be read again",
+				},
 			});
 		}
 		expect(creates).toEqual([]);
@@ -1261,7 +1373,7 @@ describe("POST /jobs/:jobId/candidates/:id/retry", () => {
 		expect(candidate).toMatchObject({ id: stuckScoring, status: "queued", error: null, canRetry: false });
 		// The page times "taking longer than usual" from updatedAt, so a retry restarts that clock.
 		expect(Date.now() - Date.parse(candidate.updatedAt)).toBeLessThan(60_000);
-		expect(creates).toEqual([{ id: `${stuckScoring}-2`, params: { candidateId: stuckScoring } }]);
+		expect(creates).toEqual([{ id: `${stuckScoring}-2`, params: { candidateId: stuckScoring, mode: "reread" } }]);
 
 		// The retry made the row fresh again, so a second click does nothing.
 		const again = await send("user_member", "POST", `/jobs/${jobId}/candidates/${stuckScoring}/retry`);
@@ -1310,18 +1422,45 @@ describe("POST /jobs/:jobId/candidates/:id/retry", () => {
 		const first = await retry();
 		expect(first.status).toBe(202);
 		expect(await first.json()).toMatchObject({ candidate: { id, status: "queued", error: null, canRetry: false } });
-		expect(creates).toEqual([{ id: `${id}-2`, params: { candidateId: id } }]);
+		expect(creates).toEqual([{ id: `${id}-2`, params: { candidateId: id, mode: "reread" } }]);
 
 		// It fails again; the last retry is the third run.
 		await db.update(candidates).set({ status: "failed" }).where(eq(candidates.id, id));
 		expect((await retry()).status).toBe(202);
-		expect(creates.at(-1)).toEqual({ id: `${id}-3`, params: { candidateId: id } });
+		expect(creates.at(-1)).toEqual({ id: `${id}-3`, params: { candidateId: id, mode: "reread" } });
 		const [row] = await db.select().from(candidates).where(eq(candidates.id, id));
 		expect(row.runs).toBe(3);
 
 		await db.update(candidates).set({ status: "failed" }).where(eq(candidates.id, id));
 		expect((await retry()).status).toBe(409);
 		expect(creates).toHaveLength(2);
+	});
+
+	it("re-reads a CV scored before the job had requirements, within the run limit", async () => {
+		const jobId = await createJob();
+		await withRubric(jobId, [["Swift", "must", "clear"]]);
+		const scoredAt = new Date(Date.now() - 86_400_000);
+		const legacy = await seed(jobId, { status: "scored", score: 64, scoredAt, runs: 1, requirements: [req("Swift", "must", true)] });
+		const checking = await seed(jobId, { status: "scored", score: 64, scoredAt, runs: 1, checkState: "queued", checkIds: ["r1"] });
+		const spent = await seed(jobId, { status: "scored", score: 50, scoredAt, runs: 3, requirements: [] });
+
+		const res = await send("user_member", "POST", `/jobs/${jobId}/candidates/${legacy}/retry`);
+		expect(res.status).toBe(202);
+		expect(await res.json()).toMatchObject({ candidate: { id: legacy, status: "queued", canRetry: false } });
+		expect(creates).toEqual([{ id: `${legacy}-2`, params: { candidateId: legacy, mode: "reread" } }]);
+		expect((await db.select().from(candidates).where(eq(candidates.id, legacy)))[0]).toMatchObject({ runs: 2 });
+
+		// A re-read drops any Check all run, which would read too little.
+		expect((await send("user_member", "POST", `/jobs/${jobId}/candidates/${checking}/retry`)).status).toBe(202);
+		expect((await db.select().from(candidates).where(eq(candidates.id, checking)))[0]).toMatchObject({
+			status: "queued",
+			checkState: null,
+			checkIds: null,
+		});
+
+		const limit = await send("user_member", "POST", `/jobs/${jobId}/candidates/${spent}/retry`);
+		expect(limit.status).toBe(409);
+		expect(await limit.json()).toMatchObject({ error: { code: "retry_limit" } });
 	});
 
 	it("fails the CV again, still answering 202, when the Workflow won't start", async () => {
@@ -1401,31 +1540,5 @@ describe("deleteCvFiles", () => {
 
 		const broken = { delete: async () => Promise.reject(new Error("R2 is down")) } as unknown as R2Bucket;
 		await expect(deleteCvFiles(broken, ["k"])).resolves.toBeUndefined();
-	});
-});
-
-describe("computeScore", () => {
-	it("counts must-haves double", () => {
-		expect(computeScore([req("a", "must", true), req("b", "must", true), req("c", "nice", true)])).toBe(100);
-		expect(computeScore([req("a", "must", false), req("b", "nice", false), req("c", "nice", false)])).toBe(0);
-		// 2 of 3 must-haves and 1 of 2 nice-to-haves: (2*2 + 1) / (2*3 + 2) = 5/8 = 62.5, rounded up.
-		expect(
-			computeScore([
-				req("a", "must", true),
-				req("b", "must", true),
-				req("c", "must", false),
-				req("d", "nice", true),
-				req("e", "nice", false),
-			]),
-		).toBe(63);
-		// An unmet must-have costs the same as two unmet nice-to-haves: both come to 4/6.
-		const unmetMust = [req("a", "must", false), req("b", "nice", true), req("c", "nice", true), req("d", "must", true)];
-		const unmetNice = [req("a", "must", true), req("b", "must", true), req("c", "nice", false), req("d", "nice", false)];
-		expect(computeScore(unmetMust)).toBe(67);
-		expect(computeScore(unmetNice)).toBe(67);
-	});
-
-	it("is 0 with no requirements instead of dividing by zero", () => {
-		expect(computeScore([])).toBe(0);
 	});
 });

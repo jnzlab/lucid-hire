@@ -71,6 +71,13 @@
       "when": 1792700802418,
       "tag": "0009_scoring_queue",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1792840634551,
+      "tag": "0010_rubric",
+      "breakpoints": true
     }
   ]
 }
