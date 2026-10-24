@@ -432,7 +432,7 @@ export function Story() {
 					</h2>
 					<div className="side">
 						<p>Six short scenes with sample candidates. Scroll at your own pace, or jump with the chapter bar.</p>
-						<a href="#how">Skip the story</a>
+						<a href="#try">Skip the story</a>
 					</div>
 				</div>
 
