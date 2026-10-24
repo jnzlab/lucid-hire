@@ -23,18 +23,37 @@ Free, 100 on Pro and 1,000 on Max, 5 MB each. Each CV can carry a name and an
 email the recruiter types, which win over what is read from the CV. The API
 streams each file into the private R2 bucket `lucidhire-cvs`.
 
-Each CV starts its own Workflow (`lucidhire-score-cv`). It first waits for a
-reading slot: at most 5 CVs per company and 10 in all read at once, and Pro
-and Max CVs count as queued 5 and 30 minutes earlier, so they go first. Then
-it sends the PDF to gemini-3.5-flash-lite through the Gemini Files API, in one
-call. Gemini returns every requirement of the job as met or not met, with a
-quote from the CV as evidence.
+Every job has one fixed list of requirements, and every CV is checked against
+that same list. When a job opens, a second Workflow (`lucidhire-draft-rubric`)
+asks gemini-3.5-flash-lite to turn the description into 4 to 15 atomic checks,
+splitting compound ones ("VoiceOver and Dynamic Type" becomes two). Recruiters
+can then mark each one Must, Nice or Off, rename or remove it, add their own,
+or redraft the list from the description.
 
-LucidHire computes the score itself, and must-haves count double. So the
-same CV always gets the same score, and every point traces back to a quote.
-The job page polls while CVs are scoring. SQLite writes that list as JSON and
-flattens the CSV export, so the Worker only joins rows: about 4 ms of CPU for
-250 CVs, where shaping them in JavaScript took 16 to 25 ms.
+Each CV starts its own Workflow (`lucidhire-score-cv`). It waits for the job's
+list if it is still being drafted, then for a reading slot: at most 5 CVs per
+company and 10 in all read at once, and Pro and Max CVs count as queued 5 and
+30 minutes earlier, so they go first. Then it sends the PDF to
+gemini-3.5-flash-lite through the Gemini Files API, in one call. For each
+requirement Gemini answers clear, partial or none, with a verbatim quote from
+the CV for clear and partial.
+
+LucidHire computes the score itself with `@lucid-hire/scoring`: a must-have
+counts three times a nice-to-have, an Off requirement doesn't count, and
+partial evidence counts half. Since the score comes from the weights and the
+stored evidence, changing a weight re-ranks the job at once, in the browser,
+with no new AI read; the API recalculates every score in one SQL statement. A
+requirement added later shows as not checked on each CV until "Check all"
+reads just that requirement. The job page polls while CVs are being read.
+SQLite writes that list as JSON and flattens the CSV export, so the Worker only
+joins rows: about 4 ms of CPU for 250 CVs, where shaping them in JavaScript
+took 16 to 25 ms.
+
+`pnpm --filter @lucid-hire/api bench:scoring` measures how steady this is. It
+scores the four fictional sample CVs five times each against one drafted list
+with the production code, and reports the spread of each score, the rank order
+of each run, which levels moved between identical runs, and whether every quote
+is in the CV.
 
 Recruiters mark each candidate Shortlisted, Rejected or Undecided, keep a
 shared note, and open the original PDF. The ranked list shows each decision and
@@ -42,8 +61,8 @@ can be filtered by it.
 
 On a scored candidate, "Write questions" asks gemini-3.5-flash-lite for 5 to 8
 interview questions. They're built from the scoring's evidence, so the CV isn't
-sent again. There's one for each unmet must-have, then a few that ask for
-detail on the candidate's strongest claims.
+sent again. There's one for each must-have the CV doesn't clearly show, then a
+few that ask for detail on the candidate's strongest claims.
 
 ## TestSprite coverage
 
