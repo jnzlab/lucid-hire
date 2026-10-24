@@ -6,6 +6,7 @@
     "dev": "cf dev",
     "build": "cf build",
     "test": "vitest run",
+    "bench:scoring": "node bench/scoring.mts",
     "check": "cf workers types && tsc && oxlint && vitest run",
     "deploy": "cf deploy",
     "db:generate": "drizzle-kit generate",
