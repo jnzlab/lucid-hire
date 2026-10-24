@@ -176,6 +176,7 @@ describe("scoreCvWithGemini", () => {
 			expect(instructions).toContain(rule);
 		}
 		expect(instructions).toContain("things the candidate wants to learn are not work they did");
+		expect(instructions).toContain("Quote the work that earns the level, never a goal");
 		const schema = JSON.stringify(request.generationConfig.responseJsonSchema ?? request.generationConfig.responseSchema);
 		expect(schema).toContain('["r1","r2","r4"]');
 		expect(schema).toContain('["clear","partial","none"]');

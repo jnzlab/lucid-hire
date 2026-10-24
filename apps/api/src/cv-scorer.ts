@@ -80,7 +80,8 @@ const SCORE_INSTRUCTIONS = [
 	"If yes, it is partial, even when the CV also says the work was small, unfinished or not the exact tool. Goals,",
 	"plans, interests and things the candidate wants to learn are not work they did: on their own they are none.",
 	`The quote is copied verbatim from the CV, never paraphrased, and at most ${QUOTE_MAX} characters. Clear and partial`,
-	"need a quote that shows them; none has an empty quote.",
+	"need a quote that shows them; none has an empty quote. Quote the work that earns the level, never a goal, plan or",
+	"interest, even one that names the requirement more closely than the work does.",
 	"Never invent evidence. A requirement the CV does not show is none, even if the candidate probably has it.",
 ].join("\n");
 

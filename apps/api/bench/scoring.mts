@@ -1,6 +1,7 @@
 // How steady and how right is the CV scorer? Scores each sample CV several times against the sample job's list of
 // requirements with the production code, and reports the spread, the rank order, which levels moved between identical
-// runs, how many levels match the answer key, and whether every quote really is in the CV. It also drafts the job's
+// runs, how many levels match the answer key, and whether every quote really is in the CV and shows work rather than a
+// goal. It also drafts the job's
 // list a few times and reports how much the drafts agree.
 //
 // The CVs are scored against a fixed list (the job's own lines, as the landing demo shows them) rather than a fresh
@@ -43,6 +44,12 @@ const ANSWER_KEY: Record<string, EvidenceLevel[]> = {
 	"kenji-tanaka": ["clear", "clear", "partial", "partial", "clear", "none"],
 	"lucas-becker": ["clear", "partial", "partial", "partial", "none", "none"],
 	"amelia-nguyen": ["partial", "partial", "none", "clear", "clear", "none"],
+};
+
+// The sentences in the sample CVs that only state a goal. A level is earned by work, so none of them is ever a quote.
+const GOALS: Record<string, string[]> = {
+	"kenji-tanaka": ["Looking to go deeper on performance tuning and accessibility in a senior role."],
+	"lucas-becker": ["keen to grow into a senior role."],
 };
 
 const vars = readFileSync(join(root, "apps/api/.dev.vars"), "utf8");
@@ -196,6 +203,18 @@ for (const r of runs) {
 console.log(`  ${quotes - misses.length} of ${quotes} found word for word`);
 for (const miss of misses) console.log(miss);
 
+console.log("\nQuotes that are a goal rather than work");
+const goalQuotes: string[] = [];
+for (const r of runs) {
+	const goals = (GOALS[r.name] ?? []).map((goal) => norm(goal).replace(/\.$/, ""));
+	for (const [id, { level, quote }] of Object.entries(r.evidence)) {
+		if (level === "none") continue;
+		const q = norm(quote).replace(/^["']|["'.,;:]$/g, "").trim();
+		if (goals.some((goal) => goal.includes(q) || q.includes(goal))) goalQuotes.push(`  ${r.name} run ${r.run + 1} ${id} (${level}): "${quote}"`);
+	}
+}
+console.log(goalQuotes.length ? goalQuotes.join("\n") : "  none");
+
 const ms = runs.map((r) => r.ms);
 console.log(`\nLatency: mean ${(mean(ms) / 1000).toFixed(1)} s, max ${(Math.max(...ms) / 1000).toFixed(1)} s`);
 console.log("\nTargets");
@@ -203,4 +222,5 @@ console.log(`  ${exact === RUNS ? "PASS" : "FAIL"}  written order in every run (
 console.log(`  ${worstSpread <= MAX_SPREAD ? "PASS" : "FAIL"}  no CV moves more than ${MAX_SPREAD} points (worst ${worstSpread})`);
 console.log(`  ${misses.length === 0 ? "PASS" : "FAIL"}  every quote is in the CV (${quotes - misses.length}/${quotes})`);
 console.log(`  ${wrong.length === 0 ? "PASS" : "FAIL"}  every level matches the answer key (${right}/${right + wrong.length})`);
+console.log(`  ${goalQuotes.length === 0 ? "PASS" : "FAIL"}  every quote shows work, not a goal (${quotes - goalQuotes.length}/${quotes})`);
 console.log(`\nRaw results: ${out}`);
