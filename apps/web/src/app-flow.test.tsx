@@ -1,3 +1,4 @@
+import { type RubricItem, type Weight, gapLabels, matchLabels, scoreChecks, visibleItems } from "@lucid-hire/scoring";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createBrowserHistory, createMemoryHistory } from "@tanstack/react-router";
 import { act, cleanup, configure, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
@@ -10,6 +11,7 @@ import {
 	type Decision,
 	useDecideCandidate,
 } from "./lib/candidates.ts";
+import type { RubricStatus } from "./lib/rubric.ts";
 import { createAppRouter } from "./router.ts";
 import { stubXhr } from "./test/fake-xhr.ts";
 
@@ -49,6 +51,8 @@ type FakeJob = {
 	hasCover?: boolean;
 	createdAt: string;
 	updatedAt: string;
+	rubric?: RubricItem[] | null;
+	rubricStatus?: RubricStatus;
 };
 type FakeCandidate = Candidate & { jobId: string };
 let org: Org | null;
@@ -67,8 +71,83 @@ let teamMembers: { userId: string; role: string; name: string | null; email: str
 const notFound = () => Response.json({ error: { message: "That job doesn't exist or isn't yours" } }, { status: 404 });
 const apiError = (status: number, code: string, message: string) =>
 	Response.json({ error: { code, message } }, { status });
-// What the API sends for a job: the CV count is always there.
-const withCount = (job: FakeJob) => ({ ...job, slug: `${job.id}-slug`, hasCover: job.hasCover ?? false, cvCount: job.cvCount ?? 0 });
+// What the API sends for a job: the CV count and the requirements' state are always there.
+const withCount = (job: FakeJob) => ({
+	...job,
+	slug: `${job.id}-slug`,
+	hasCover: job.hasCover ?? false,
+	cvCount: job.cvCount ?? 0,
+	rubric: job.rubric ?? null,
+	rubricStatus: job.rubricStatus ?? "none",
+});
+// What the requirements endpoints answer next, when a test wants them to refuse.
+let rubricRefusal: Response | null = null;
+
+// What the API does to a job's CVs when its requirements change: each CV's evidence follows the requirements (by id,
+// a new one not checked), and its score, matches and gaps are worked out again with the shared formula. CVs scored
+// before the job had requirements keep theirs.
+function rescoreJob(job: FakeJob) {
+	for (const candidate of candidates) {
+		if (candidate.jobId !== job.id || !candidate.evidence || candidate.scoredBeforeRequirements) continue;
+		const found = new Map(candidate.evidence.map((entry) => [entry.id, entry]));
+		candidate.evidence = visibleItems(job.rubric ?? []).map(({ id, label, detail, weight }) => ({
+			id,
+			label,
+			detail,
+			weight,
+			level: found.get(id)?.level ?? null,
+			quote: found.get(id)?.quote ?? "",
+		}));
+		const checks = candidate.evidence.map(({ id, label, weight, level }) => ({ id, label, weight, level }));
+		Object.assign(candidate, { score: scoreChecks(checks), matches: matchLabels(checks), gaps: gapLabels(checks) });
+	}
+}
+
+// The requirements endpoints (PATCH /jobs/:id/rubric and the three POSTs), enough of them for the Requirements tab.
+function fakeRubric(job: FakeJob, path: string, method: string, body: unknown): Response | null {
+	if (!path.includes("/rubric")) return null;
+	if (rubricRefusal) return rubricRefusal.clone();
+	if (path.endsWith("/rubric/draft") && method === "POST") {
+		if (job.rubricStatus === "drafting") return apiError(409, "rubric_drafting", "The requirements are already being drafted.");
+		job.rubricStatus = "drafting";
+		return Response.json({ job: withCount(job) }, { status: 202 });
+	}
+	if (job.rubricStatus !== "ready" || !job.rubric) return apiError(409, "rubric_not_ready", "The requirements aren't ready.");
+	if (path.endsWith("/rubric") && method === "PATCH") {
+		const { changes } = body as { changes: { id: string; weight?: Weight; label?: string; removed?: true }[] };
+		job.rubric = job.rubric.map((item) => {
+			const change = changes.find(({ id }) => id === item.id);
+			if (!change) return item;
+			return {
+				...item,
+				...(change.weight && { weight: change.weight }),
+				...(change.label !== undefined && { label: change.label.trim() }),
+				...(change.removed && { removed: true as const }),
+			};
+		});
+		rescoreJob(job);
+		return Response.json({ job: withCount(job) });
+	}
+	if (path.endsWith("/rubric/requirements") && method === "POST") {
+		const { label, detail, weight } = body as { label: string; detail: string; weight: Weight };
+		const item = { id: `r${job.rubric.length + 1}`, label, detail, weight };
+		job.rubric = [...job.rubric, item];
+		rescoreJob(job);
+		return Response.json({ job: withCount(job), item }, { status: 201 });
+	}
+	if (path.endsWith("/rubric/check") && method === "POST") {
+		const due = candidates.filter(
+			(c) =>
+				c.jobId === job.id &&
+				c.status === "scored" &&
+				!c.scoredBeforeRequirements &&
+				(c.evidence ?? []).some(({ level }) => level === null),
+		);
+		for (const candidate of due) candidate.checking = true;
+		return Response.json({ started: due.length }, { status: 202 });
+	}
+	return null;
+}
 
 // The jobs API, enough of it for the pages: list, create, read, edit, delete and the AI rewrite.
 function fakeJobs(path: string, method: string, body: Record<string, string>, query = new URLSearchParams()): Response {
@@ -165,6 +244,8 @@ function fakeJobs(path: string, method: string, body: Record<string, string>, qu
 		return Response.json({ description: `What you need:\n- ${body.description}` });
 	}
 	if (!job) return notFound();
+	const rubricAnswer = fakeRubric(job, path, method, body);
+	if (rubricAnswer) return rubricAnswer;
 	if (path.endsWith("/cover")) {
 		if (method === "GET") return new Response(new Blob(["png"], { type: "image/png" }));
 		job.hasCover = method === "PUT";
@@ -182,11 +263,12 @@ function fakeJobs(path: string, method: string, body: Record<string, string>, qu
 	return notFound();
 }
 
-// A candidate as the list shows it, without the fields only the candidate page needs.
+// A candidate as the list shows it, without the fields only the candidate page needs. Its checks come from its evidence.
 const summary = ({
 	jobId: _jobId,
 	rankedCount: _rankedCount,
-	requirements,
+	evidence,
+	legacyRequirements: _legacy,
 	fileSize: _size,
 	note,
 	decidedAt: _decidedAt,
@@ -197,7 +279,7 @@ const summary = ({
 	...rest,
 	hasNote: note !== null,
 	profile: profile?.email ? { email: profile.email } : null,
-	checks: (requirements ?? []).map(({ label, met, importance }) => ({ label, met, importance })),
+	checks: (evidence ?? []).map(({ id, label, weight, level }) => ({ id, label, weight, level })),
 });
 // The page also gets the place among the job's scored CVs, ordered by score as the list is.
 const forPage = ({ jobId, ...rest }: FakeCandidate): Candidate => {
@@ -265,8 +347,10 @@ function fakeCandidates(url: URL, init: RequestInit | undefined): Response {
 	const found = candidates.find((candidate) => candidate.id === id && candidate.jobId === jobId);
 	if (!found) return apiError(404, "candidate_not_found", "That candidate doesn't exist or isn't yours");
 	if (action === "retry") {
-		// A CV that failed can be retried while it has runs left; so can one stuck in the queue.
-		if (found.status === "scored") return apiError(409, "not_failed", "Only a CV that failed can be retried");
+		// A CV that failed can be retried while it has runs left; so can one stuck in the queue, and one scored before
+		// the job had requirements (to read it against them).
+		if (found.status === "scored" && !found.scoredBeforeRequirements)
+			return apiError(409, "not_failed", "Only a CV that failed can be retried");
 		if (!found.canRetry) {
 			return found.status === "failed"
 				? apiError(409, "retry_limit", "We've tried this CV 3 times. It may not be a readable PDF.")
@@ -319,7 +403,10 @@ function fakeCandidate(fields: Partial<FakeCandidate> & { id: string }): FakeCan
 		createdAt: "2026-10-22T12:00:00Z",
 		scoredAt: null,
 		summary: null,
-		requirements: null,
+		evidence: null,
+		legacyRequirements: null,
+		scoredBeforeRequirements: false,
+		checking: false,
 		fileSize: 120_000,
 		note: null,
 		decidedAt: null,
@@ -334,6 +421,7 @@ beforeAll(() => import("./components/markdown.tsx"), 60_000);
 
 beforeEach(() => {
 	session.signedIn = true;
+	rubricRefusal = null;
 	jobsUsed = 0;
 	jobsLimit = 10;
 	cvLimit = 10;
@@ -2081,23 +2169,25 @@ describe("candidates", () => {
 			gaps: ["Kotlin MP"],
 			summary: "Six years of SwiftUI at a bank. No Kotlin shown.",
 			scoredAt: "2026-10-22T12:05:00Z",
-			requirements: [
-				{ label: "Kotlin MP", requirement: "Kotlin Multiplatform", importance: "must", met: false, evidence: "" },
+			evidence: [
+				{ id: "r1", label: "Kotlin MP", detail: "Kotlin Multiplatform", weight: "must", level: "none", quote: "" },
 				{
+					id: "r2",
 					label: "SwiftUI",
-					requirement: "Shipped SwiftUI apps",
-					importance: "must",
-					met: true,
-					evidence: "Built the SwiftUI app used by 2M customers",
+					detail: "Shipped SwiftUI apps",
+					weight: "must",
+					level: "clear",
+					quote: "Built the SwiftUI app used by 2M customers",
 				},
 				{
+					id: "r3",
 					label: "Instruments",
-					requirement: "Profiling with Instruments",
-					importance: "nice",
-					met: true,
-					evidence: "Cut launch time 40% using Instruments",
+					detail: "Profiling with Instruments",
+					weight: "nice",
+					level: "clear",
+					quote: "Cut launch time 40% using Instruments",
 				},
-				{ label: "Accessibility", requirement: "Accessibility work", importance: "nice", met: false, evidence: "" },
+				{ id: "r4", label: "Accessibility", detail: "Accessibility work", weight: "nice", level: "none", quote: "" },
 			],
 			...fields,
 		});
@@ -4280,5 +4370,381 @@ describe("candidates", () => {
 			cleanup();
 			expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:cv-1");
 		});
+	});
+});
+
+describe("requirements", () => {
+	const swift = { id: "r1", label: "Swift", detail: "Several years of Swift in production", weight: "must" } as const;
+	const swiftUi = { id: "r2", label: "SwiftUI", detail: "Shipped a live app built with SwiftUI", weight: "must" } as const;
+	const kotlin = { id: "r3", label: "Kotlin MP", detail: "Code shared with Android", weight: "nice" } as const;
+	const rubric = (): RubricItem[] => [{ ...swift }, { ...swiftUi }, { ...kotlin }];
+	const requirementsJob = (fields: Partial<FakeJob> = {}): FakeJob => ({
+		id: "job_1",
+		title: "Senior iOS Engineer",
+		description: "Swift, SwiftUI, 5 years.",
+		status: "open",
+		cvCount: 3,
+		createdAt: "2026-10-22T12:00:00Z",
+		updatedAt: "2026-10-22T12:00:00Z",
+		rubric: rubric(),
+		rubricStatus: "ready",
+		...fields,
+	});
+	type Level = "clear" | "partial" | "none" | null;
+	// A scored CV with its level for Swift, SwiftUI and Kotlin MP, scored by the shared formula as the API does.
+	const cv = (id: string, name: string, levels: [Level, Level, Level], fields: Partial<FakeCandidate> = {}) => {
+		const evidence = rubric().map(({ id: requirement, label, detail, weight }, index) => ({
+			id: requirement,
+			label,
+			detail,
+			weight,
+			level: levels[index],
+			quote: levels[index] === "clear" || levels[index] === "partial" ? `${name} on ${label}` : "",
+		}));
+		const checks = evidence.map(({ id: requirement, label, weight, level }) => ({ id: requirement, label, weight, level }));
+		return fakeCandidate({
+			id,
+			name,
+			fileName: `${id}.pdf`,
+			evidence,
+			score: scoreChecks(checks),
+			matches: matchLabels(checks),
+			gaps: gapLabels(checks),
+			scoredAt: `2026-10-22T12:0${candidates.length}:00Z`,
+			...fields,
+		});
+	};
+	// With Kotlin MP as a nice-to-have: Grace 86, Kenji 79, Rayan 36. As a must-have: Kenji 83, Grace 67, Rayan 50.
+	const threeCvs = () => [
+		cv("cand_grace", "Grace Turner", ["clear", "clear", "none"]),
+		cv("cand_kenji", "Kenji Sato", ["clear", "partial", "clear"]),
+		cv("cand_rayan", "Rayan Haddad", ["partial", "none", "clear"]),
+	];
+	// The names in the live ranking beside the requirements, best first.
+	const ranking = () =>
+		within(screen.getByRole("list", { name: "Ranking" }))
+			.getAllByRole("listitem")
+			.map((row) => within(row).getByRole("link").textContent?.replace(/^Rank \d+:\s*/, ""));
+	const weightOf = async (label: string) => within(await screen.findByRole("radiogroup", { name: label }));
+	const isRubricPatch = (url: string, init?: RequestInit) => init?.method === "PATCH" && url.endsWith("/jobs/job_1/rubric");
+	const patches = () =>
+		fetchMock.mock.calls
+			.filter(([url, init]) => isRubricPatch(url, init))
+			.map(([, init]) => JSON.parse(String(init?.body)) as { changes: unknown[] });
+
+	beforeEach(() => {
+		org = { id: "org_1", name: "Sprite Labs", role: "admin" };
+		jobs = [requirementsJob()];
+		candidates = threeCvs();
+	});
+
+	it("puts the requirements in their own tab, with the weights explained and the ranking beside them", async () => {
+		renderAt("/dashboard/jobs/job_1");
+		fireEvent.click(await screen.findByRole("tab", { name: /^Requirements\s*3$/ }));
+
+		const list = within(await screen.findByRole("list", { name: "Requirements" }));
+		expect(list.getAllByRole("listitem").map((item) => item.querySelector("[id]")?.textContent)).toEqual([
+			"Swift",
+			"SwiftUI",
+			"Kotlin MP",
+		]);
+		expect(list.getByText("Code shared with Android")).toBeTruthy();
+		expect((await weightOf("Kotlin MP")).getByRole("radio", { name: "Nice" })).toHaveProperty("checked", true);
+		expect(screen.getByText(/Must counts three times as much as Nice, and Off doesn't count/)).toBeTruthy();
+		expect(screen.getByText(/re-ranks at once: no AI, no waiting/)).toBeTruthy();
+		expect(screen.getByText("3 of 15 requirements · 2 must · 1 nice · 0 off")).toBeTruthy();
+		expect(ranking()).toEqual(["Grace Turner", "Kenji Sato", "Rayan Haddad"]);
+		expect(screen.getByText("Grace Turner leads with 86.")).toBeTruthy();
+		// Partial is explained once, in the key.
+		expect(screen.getByText("Partial: the CV shows part of it")).toBeTruthy();
+	});
+
+	it("re-ranks every CV the moment a weight changes, before the API answers", async () => {
+		renderAt("/dashboard/jobs/job_1?tab=requirements");
+		const kotlinWeight = await weightOf("Kotlin MP");
+		const held = hold(isRubricPatch);
+
+		fireEvent.click(kotlinWeight.getByRole("radio", { name: "Must" }));
+		expect(ranking()).toEqual(["Kenji Sato", "Grace Turner", "Rayan Haddad"]);
+		expect(screen.getByText("Kenji Sato leads with 83.")).toBeTruthy();
+		await waitFor(() => expect(kotlinWeight.getByRole("radio", { name: "Must" })).toHaveProperty("checked", true));
+		expect(held.pending()).toBe(1);
+		expect(patches()).toEqual([{ changes: [{ id: "r3", weight: "must" }] }]);
+
+		held.release();
+		await waitFor(() => expect(jobs[0].rubric?.[2].weight).toBe("must"));
+		await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url.endsWith("/jobs/job_1/candidates")).length).toBeGreaterThan(1));
+		expect(ranking()).toEqual(["Kenji Sato", "Grace Turner", "Rayan Haddad"]);
+
+		// The Candidates tab has the same order, and the scores to match.
+		fireEvent.click(screen.getByRole("tab", { name: /^Candidates/ }));
+		const rows = within(await screen.findByRole("list", { name: "Candidates" })).getAllByRole("link");
+		expect(rows.map((row) => row.textContent?.match(/(Grace Turner|Kenji Sato|Rayan Haddad)/)?.[1])).toEqual([
+			"Kenji Sato",
+			"Grace Turner",
+			"Rayan Haddad",
+		]);
+		expect(rows[0].textContent).toMatch(/Score 83$/);
+	});
+
+	it("puts the order back and says why when the API refuses a change", async () => {
+		renderAt("/dashboard/jobs/job_1?tab=requirements");
+		const kotlinWeight = await weightOf("Kotlin MP");
+		const held = hold(isRubricPatch);
+		rubricRefusal = apiError(409, "rubric_not_ready", "The requirements aren't ready.");
+
+		fireEvent.click(kotlinWeight.getByRole("radio", { name: "Must" }));
+		expect(ranking()).toEqual(["Kenji Sato", "Grace Turner", "Rayan Haddad"]);
+		await waitFor(() => expect(held.pending()).toBe(1));
+
+		held.release();
+		expect(await screen.findByText("wasn't saved")).toBeTruthy();
+		expect(screen.getByText(/can't be changed right now/)).toBeTruthy();
+		expect(ranking()).toEqual(["Grace Turner", "Kenji Sato", "Rayan Haddad"]);
+		expect(screen.getByText("Grace Turner leads with 86.")).toBeTruthy();
+		await waitFor(() => expect(kotlinWeight.getByRole("radio", { name: "Nice" })).toHaveProperty("checked", true));
+	});
+
+	it("folds quick clicks into one more request, so the API ends where the page does", async () => {
+		renderAt("/dashboard/jobs/job_1?tab=requirements");
+		const kotlinWeight = await weightOf("Kotlin MP");
+		const swiftWeight = await weightOf("Swift");
+		const held = hold(isRubricPatch);
+
+		fireEvent.click(kotlinWeight.getByRole("radio", { name: "Must" }));
+		await waitFor(() => expect(held.pending()).toBe(1));
+		fireEvent.click(kotlinWeight.getByRole("radio", { name: "Off" }));
+		fireEvent.click(swiftWeight.getByRole("radio", { name: "Nice" }));
+		fireEvent.click(kotlinWeight.getByRole("radio", { name: "Nice" }));
+		expect(patches()).toHaveLength(1);
+
+		held.release();
+		await waitFor(() => expect(held.pending()).toBe(1));
+		expect(patches()[1]).toEqual({
+			changes: [
+				{ id: "r3", weight: "nice" },
+				{ id: "r1", weight: "nice" },
+			],
+		});
+		// The first answer (Kotlin MP as a must-have) doesn't flash back while the second is on its way.
+		expect(kotlinWeight.getByRole("radio", { name: "Nice" })).toHaveProperty("checked", true);
+
+		held.release();
+		await waitFor(() => expect(jobs[0].rubric?.map(({ weight }) => weight)).toEqual(["nice", "must", "nice"]));
+		await waitFor(() => expect(swiftWeight.getByRole("radio", { name: "Nice" })).toHaveProperty("checked", true));
+		expect(kotlinWeight.getByRole("radio", { name: "Nice" })).toHaveProperty("checked", true);
+		expect(patches()).toHaveLength(2);
+	});
+
+	it("adds a requirement that every CV shows as not checked, then checks them all", async () => {
+		renderAt("/dashboard/jobs/job_1?tab=requirements");
+		fireEvent.click(await screen.findByRole("button", { name: "Add requirement" }));
+		const dialog = within(await screen.findByRole("dialog", { name: "Add a requirement" }));
+		expect(dialog.getByText(/starts as not checked on every CV/)).toBeTruthy();
+		expect(dialog.getByText(/This job has 3 of 15/)).toBeTruthy();
+
+		// The same rules as the API, before anything is sent.
+		fireEvent.click(dialog.getByRole("button", { name: "Add requirement" }));
+		expect(await dialog.findByText("✕ Enter a name for this requirement")).toBeTruthy();
+		fireEvent.change(dialog.getByLabelText("Name"), { target: { value: "Accessibility" } });
+		expect(dialog.getByText("13 / 40")).toBeTruthy();
+		fireEvent.change(dialog.getByLabelText("What a CV should show"), { target: { value: "VoiceOver and Dynamic Type work" } });
+		fireEvent.click(within(dialog.getByRole("radiogroup", { name: "How much it counts" })).getByRole("radio", { name: "Must" }));
+		fireEvent.click(dialog.getByRole("button", { name: "Add requirement" }));
+
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		expect(await screen.findByText(/Added “Accessibility”/)).toBeTruthy();
+		expect(jobs[0].rubric?.at(-1)).toMatchObject({ label: "Accessibility", detail: "VoiceOver and Dynamic Type work", weight: "must" });
+		const rows = within(screen.getByRole("list", { name: "Ranking" })).getAllByRole("listitem");
+		for (const row of rows) expect(within(row).getByRole("img", { name: "Accessibility: not checked" })).toBeTruthy();
+		expect(await screen.findByText("3 CVs not checked against all requirements.")).toBeTruthy();
+
+		fireEvent.click(screen.getByRole("button", { name: "Check all" }));
+		const confirm = within(await screen.findByRole("alertdialog", { name: "Check 3 CVs against every requirement?" }));
+		expect(confirm.getByText(/one AI read per CV/)).toBeTruthy();
+		fireEvent.click(confirm.getByRole("button", { name: "Check all CVs" }));
+
+		expect(await screen.findByText(/Checking 3 CVs against every requirement…/)).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Check all" })).toHaveProperty("disabled", true);
+		expect(fetchMock.mock.calls.some(([url, init]) => init?.method === "POST" && url.endsWith("/rubric/check"))).toBe(true);
+		fireEvent.click(screen.getByRole("tab", { name: /^Candidates/ }));
+		expect(await screen.findAllByText("Checking…")).toHaveLength(3);
+	});
+
+	it("renames a requirement in place and removes one after asking, from the keyboard", async () => {
+		renderAt("/dashboard/jobs/job_1?tab=requirements");
+		fireEvent.click(await screen.findByRole("button", { name: "Rename SwiftUI" }));
+		const field = screen.getByRole("textbox", { name: "New name for SwiftUI" });
+		expect(document.activeElement).toBe(field);
+		fireEvent.change(field, { target: { value: "  " } });
+		fireEvent.submit(field);
+		expect(await screen.findByText("✕ Enter a name for this requirement")).toBeTruthy();
+		fireEvent.change(field, { target: { value: "SwiftUI apps" } });
+		fireEvent.submit(field);
+		await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "Rename SwiftUI apps" })));
+		await waitFor(() => expect(jobs[0].rubric?.[1].label).toBe("SwiftUI apps"));
+
+		// Escape puts the name back.
+		fireEvent.click(screen.getByRole("button", { name: "Rename Swift" }));
+		fireEvent.change(screen.getByRole("textbox", { name: "New name for Swift" }), { target: { value: "Objective-C" } });
+		fireEvent.keyDown(screen.getByRole("textbox", { name: "New name for Swift" }), { key: "Escape" });
+		expect(screen.getByRole("button", { name: "Rename Swift" })).toBeTruthy();
+
+		fireEvent.click(screen.getByRole("button", { name: "Remove Kotlin MP" }));
+		const confirm = within(await screen.findByRole("alertdialog", { name: "Remove “Kotlin MP”?" }));
+		fireEvent.click(confirm.getByRole("button", { name: "Remove requirement" }));
+		await waitFor(() => expect(screen.getAllByRole("radiogroup")).toHaveLength(2));
+		expect(await screen.findByText(/Removed “Kotlin MP”/)).toBeTruthy();
+		expect(screen.getByText("Grace Turner leads with 100.")).toBeTruthy();
+		await waitFor(() => expect(jobs[0].rubric?.[2]).toMatchObject({ id: "r3", removed: true }));
+		expect(screen.getByRole("tab", { name: /^Requirements\s*2$/ })).toBeTruthy();
+	});
+
+	it("asks before redrafting, saying new requirements will need checking", async () => {
+		renderAt("/dashboard/jobs/job_1?tab=requirements");
+		fireEvent.click(await screen.findByRole("button", { name: "Redraft from description" }));
+		const confirm = within(await screen.findByRole("alertdialog", { name: "Redraft the requirements?" }));
+		expect(confirm.getByText(/new ones start as not checked, so the CVs will need checking against them/)).toBeTruthy();
+		fireEvent.click(confirm.getByRole("button", { name: "Redraft" }));
+
+		expect(await screen.findByText("Drafting requirements from the description…")).toBeTruthy();
+		expect(jobs[0].rubricStatus).toBe("drafting");
+	});
+
+	it("offers to set requirements up, says so while they draft, and shows them when they land", async () => {
+		jobs = [requirementsJob({ rubric: null, rubricStatus: "none" })];
+		renderAt("/dashboard/jobs/job_1?tab=requirements");
+		expect(await screen.findByRole("heading", { name: "Set up this job's requirements" })).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Set up requirements" }));
+
+		expect(await screen.findByText("Drafting requirements from the description…")).toBeTruthy();
+		// The draft lands; the job is asked again every few seconds while it drafts.
+		jobs[0].rubric = rubric();
+		jobs[0].rubricStatus = "ready";
+		expect(await screen.findByRole("list", { name: "Requirements" }, { timeout: 8000 })).toBeTruthy();
+	}, 15_000);
+
+	it("shows the failed state when the draft couldn't even start, and says so if trying again fails too", async () => {
+		jobs = [requirementsJob({ rubric: null, rubricStatus: "none" })];
+		const answer = fetchMock.getMockImplementation()!;
+		fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+			if (init?.method !== "POST" || !url.endsWith("/rubric/draft")) return answer(url, init);
+			jobs[0].rubricStatus = "failed";
+			return Response.json({ job: withCount(jobs[0]) }, { status: 202 });
+		});
+		renderAt("/dashboard/jobs/job_1?tab=requirements");
+		fireEvent.click(await screen.findByRole("button", { name: "Set up requirements" }));
+		expect(await screen.findByText("✕ We couldn't draft the requirements")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+		expect(await screen.findByText("✕ It didn't start this time either. Try again in a minute.")).toBeTruthy();
+	});
+
+	it("says when the draft failed, and tries again", async () => {
+		jobs = [requirementsJob({ rubric: null, rubricStatus: "failed" })];
+		renderAt("/dashboard/jobs/job_1?tab=requirements");
+		expect(await screen.findByText("✕ We couldn't draft the requirements")).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+		expect(await screen.findByText("Drafting requirements from the description…")).toBeTruthy();
+	});
+
+	it("says in plain words when the hour's AI requests have run out", async () => {
+		jobs = [requirementsJob({ rubric: null, rubricStatus: "none" })];
+		rubricRefusal = apiError(429, "rate_limited", "That's 10 AI requests this minute. Try again in a minute.");
+		renderAt("/dashboard/jobs/job_1?tab=requirements");
+		fireEvent.click(await screen.findByRole("button", { name: "Set up requirements" }));
+		expect(await screen.findByText("✕ That's 10 AI requests this minute. Try again in a minute.")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "Set up requirements" })).toBeTruthy();
+		expect(jobs[0].rubricStatus).toBe("none");
+	});
+
+	it("shows a square per requirement on each row, named for screen readers, and dims an Off one", async () => {
+		jobs = [requirementsJob({ rubric: [{ ...swift }, { ...swiftUi }, { ...kotlin, weight: "off" }] })];
+		candidates = threeCvs().map((candidate) => ({
+			...candidate,
+			evidence: candidate.evidence?.map((entry) => (entry.id === "r3" ? { ...entry, weight: "off" as const } : entry)) ?? null,
+		}));
+		renderAt("/dashboard/jobs/job_1");
+		const list = within(await screen.findByRole("list", { name: "Candidates" }));
+		const kenji = list.getAllByRole("listitem").find((row) => row.textContent?.includes("Kenji Sato"));
+		const squares = within(kenji!).getAllByRole("img");
+		expect(squares.map((square) => square.getAttribute("aria-label"))).toEqual([
+			"Swift: clear",
+			"SwiftUI: partial",
+			"Kotlin MP: clear, off",
+		]);
+		expect(squares[2].className).toMatch(/opacity-30/);
+	});
+
+	it("tags a CV scored before the job had requirements and keeps its score, leaving Re-read to its page", async () => {
+		candidates = [
+			...threeCvs(),
+			fakeCandidate({ id: "cand_old", name: "Ola Berg", score: 80, scoredBeforeRequirements: true, canRetry: true, scoredAt: "2026-10-21T12:00:00Z" }),
+		];
+		renderAt("/dashboard/jobs/job_1");
+		const list = within(await screen.findByRole("list", { name: "Candidates" }));
+		const old = list.getAllByRole("listitem").find((row) => row.textContent?.includes("Ola Berg"))!;
+		expect(within(old).getByText("Scored before requirements were set")).toBeTruthy();
+		expect(within(old).queryAllByRole("img")).toHaveLength(0);
+		expect(within(old).getByRole("link").textContent).toMatch(/Score 80$/);
+
+		expect(within(old).queryByRole("button")).toBeNull();
+	});
+
+	it("shows each requirement on the candidate page with its weight, level and the line from the CV", async () => {
+		jobs = [requirementsJob({ rubric: [...rubric(), { id: "r4", label: "GraphQL", detail: "Has used GraphQL", weight: "off" }] })];
+		candidates = [
+			cv("cand_kenji", "Kenji Sato", ["clear", "partial", null], {
+				rank: 2,
+				rankedCount: 3,
+				evidence: [
+					{ id: "r1", label: "Swift", detail: "Several years of Swift in production", weight: "must", level: "clear", quote: "Six years of Swift" },
+					{ id: "r2", label: "SwiftUI", detail: "Shipped a live app built with SwiftUI", weight: "must", level: "partial", quote: "A SwiftUI prototype" },
+					{ id: "r3", label: "Kotlin MP", detail: "Code shared with Android", weight: "nice", level: null, quote: "" },
+					{ id: "r4", label: "GraphQL", detail: "Has used GraphQL", weight: "off", level: "none", quote: "" },
+				],
+			}),
+		];
+		renderAt("/dashboard/jobs/job_1/candidates/cand_kenji");
+
+		const must = within(await screen.findByRole("region", { name: "Must-haves" }));
+		expect(must.getByText("Clear")).toBeTruthy();
+		expect(must.getByText("“Six years of Swift”")).toBeTruthy();
+		expect(must.getByText("Partial")).toBeTruthy();
+		expect(must.getByText("“A SwiftUI prototype”")).toBeTruthy();
+		const nice = within(screen.getByRole("region", { name: "Nice to have" }));
+		expect(nice.getByText("Not checked")).toBeTruthy();
+		expect(nice.getByText(/Not checked yet/)).toBeTruthy();
+		const off = within(screen.getByRole("region", { name: "Off, not counted" }));
+		expect(off.getByText("None")).toBeTruthy();
+		expect(off.getByText("GraphQL").className).toMatch(/text-ink-muted/);
+		expect(screen.getByText("Must-haves 1 of 2, 1 partial · Nice to have 0 of 1")).toBeTruthy();
+		expect(screen.getByText("1 of 3 requirements met · 1 partly")).toBeTruthy();
+	});
+
+	it("says on the candidate page when a CV was scored before the requirements, with what it was scored on", async () => {
+		candidates = [
+			fakeCandidate({
+				id: "cand_old",
+				name: "Ola Berg",
+				score: 80,
+				rank: 1,
+				rankedCount: 1,
+				scoredBeforeRequirements: true,
+				canRetry: true,
+				legacyRequirements: [
+					{ label: "Swift", requirement: "Swift in production", importance: "must", met: true, evidence: "Five years of Swift" },
+					{ label: "Kotlin MP", requirement: "Kotlin Multiplatform", importance: "nice", met: false, evidence: "" },
+				],
+			}),
+		];
+		renderAt("/dashboard/jobs/job_1/candidates/cand_old");
+
+		expect(await screen.findByRole("heading", { name: "Scored before this job's requirements were set" })).toBeTruthy();
+		expect(screen.getByText(/keeps its score and place until you re-read it/)).toBeTruthy();
+		expect(within(screen.getByRole("region", { name: "Must-haves" })).getByText("“Five years of Swift”")).toBeTruthy();
+		expect(within(screen.getByRole("region", { name: "Nice to have" })).getByText("✕ Kotlin MP")).toBeTruthy();
+		expect(screen.getByText("1 of 2 requirements met")).toBeTruthy();
+		fireEvent.click(screen.getAllByRole("button", { name: "Re-read" })[0]);
+		await waitFor(() => expect(candidates[0].status).toBe("queued"));
 	});
 });

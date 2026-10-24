@@ -18,6 +18,8 @@ function candidate(fields: Partial<CandidateSummary> & { id: string }): Candidat
 		matches: [],
 		gaps: [],
 		checks: [],
+		scoredBeforeRequirements: false,
+		checking: false,
 		summary: null,
 		hasNote: false,
 		source: "upload",
@@ -52,6 +54,7 @@ describe("validateJobSearch", () => {
 			q: "swift",
 			sort: "name",
 		});
+		expect(validateJobSearch({ tab: "requirements" }).tab).toBe("requirements");
 		expect(validateJobSearch({ tab: "candidates", show: "all", sort: "best", q: "   " })).toEqual({
 			tab: undefined,
 			c: undefined,

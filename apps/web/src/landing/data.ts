@@ -1,7 +1,8 @@
 import { PLANS as PLAN_CONFIG, type PlanKey as PlanKeyOf, planForCvs } from "@lucid-hire/plans";
+import { weightedScore } from "@lucid-hire/scoring";
 
-// Sample data and the toy scoring behind the landing page demos. The real scoring reads the whole
-// CV; here a must-have counts three times a nice-to-have.
+// Sample data behind the landing page demos, scored with the app's own formula: a must-have counts three times a
+// nice-to-have, and partial evidence counts half, as the "Your turn" note says.
 
 export type Weight = 0 | 1 | 3;
 
@@ -35,12 +36,7 @@ export type PresetKey = keyof typeof PRESETS;
 
 // Match scores out of 100, or null for everyone when every requirement is off.
 export function scoreCandidates(weights: readonly number[]): (number | null)[] {
-	const total = weights.reduce((sum, w) => sum + w, 0);
-	return CANDIDATES.map(({ evidence }) => {
-		if (!total) return null;
-		const earned = evidence.reduce<number>((sum, e, k) => sum + (weights[k] ?? 0) * e, 0);
-		return Math.round((100 * earned) / total);
-	});
+	return CANDIDATES.map(({ evidence }) => weightedScore(evidence.map((value, k) => ({ weight: weights[k] ?? 0, value }))));
 }
 
 // Candidate indexes from first to last: highest score first, then whoever applied earlier.

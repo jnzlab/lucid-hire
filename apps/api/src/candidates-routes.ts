@@ -26,6 +26,7 @@ import { buildCsv, exportFileName, exportQuery } from "./candidates-export.ts";
 import { type Db, getDb } from "./db/client.ts";
 import { getJob } from "./jobs.ts";
 import { peekPdf } from "./pdf-stream.ts";
+import type { ScoreMode } from "./scoring.ts";
 import { hasApplied, normalizeEmail } from "./public.ts";
 import { UPGRADE_URL, getEffectivePlan } from "./plan-state.ts";
 import type { AppEnv } from "./types.ts";
@@ -59,9 +60,16 @@ function cvDisposition(fileName: string): string {
 
 // Starts a scoring run. If the Workflow won't start, the CV is failed with a retryable message
 // instead of sitting queued forever, and the caller still gets the candidate back.
-async function startScoring(env: Env, db: Db, requestId: string, candidate: Candidate, instanceId: string) {
+async function startScoring(
+	env: Env,
+	db: Db,
+	requestId: string,
+	candidate: Candidate,
+	instanceId: string,
+	mode: ScoreMode,
+) {
 	try {
-		await env.SCORE_CV.create({ id: instanceId, params: { candidateId: candidate.id } });
+		await env.SCORE_CV.create({ id: instanceId, params: { candidateId: candidate.id, mode } });
 		return candidate;
 	} catch (error) {
 		console.error(`[${requestId}] scoring did not start for ${candidate.id}`, error);
@@ -199,7 +207,7 @@ export function candidateRoutes() {
 			throw error;
 		}
 
-		candidate = await startScoring(c.env, db, c.get("requestId"), candidate, id);
+		candidate = await startScoring(c.env, db, c.get("requestId"), candidate, id, "initial");
 		return c.json({ candidate }, 201);
 	});
 
@@ -237,7 +245,8 @@ export function candidateRoutes() {
 		});
 	});
 
-	// Another scoring run for a CV that failed or got stuck, at most MAX_SCORING_RUNS in all.
+	// Another scoring run for a CV that failed or got stuck, or a Re-read of one scored before jobs had requirements, at
+	// most MAX_SCORING_RUNS in all. It reads every requirement and replaces the CV's evidence.
 	routes.post("/:id/retry", async (c) => {
 		const db = getDb(c.env.DB);
 		const id = c.req.param("id");
@@ -246,7 +255,12 @@ export function candidateRoutes() {
 			if (retry.reason === "candidate_not_found") return c.json(candidateNotFound, 404);
 			if (retry.reason === "not_failed") {
 				return c.json(
-					{ error: { code: "not_failed", message: "Only a CV that failed or got stuck can be retried" } },
+					{
+						error: {
+							code: "not_failed",
+							message: "Only a CV that failed, got stuck or was scored before requirements can be read again",
+						},
+					},
 					409,
 				);
 			}
@@ -262,7 +276,7 @@ export function candidateRoutes() {
 		}
 
 		// Each run is its own Workflow instance, because an instance id can only be used once.
-		const candidate = await startScoring(c.env, db, c.get("requestId"), retry.candidate, `${id}-${retry.runs}`);
+		const candidate = await startScoring(c.env, db, c.get("requestId"), retry.candidate, `${id}-${retry.runs}`, "reread");
 		return c.json({ candidate }, 202);
 	});
 

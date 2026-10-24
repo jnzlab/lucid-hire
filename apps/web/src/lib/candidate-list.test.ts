@@ -17,6 +17,8 @@ function candidate(fields: Partial<CandidateSummary> & { id: string }): Candidat
 		matches: [],
 		gaps: [],
 		checks: [],
+		scoredBeforeRequirements: false,
+		checking: false,
 		summary: null,
 		hasNote: false,
 		source: "upload",

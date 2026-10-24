@@ -1,4 +1,14 @@
-import { type SQL, and, asc, desc, eq, inArray, isNotNull, lt, ne, or, sql } from "drizzle-orm";
+import {
+	type Check,
+	type EvidenceLevel,
+	type RubricItem,
+	type Weight,
+	gapLabels,
+	matchLabels,
+	toChecks,
+	visibleItems,
+} from "@lucid-hire/scoring";
+import { type SQL, and, asc, desc, eq, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { SQLiteColumn } from "drizzle-orm/sqlite-core";
 import { z } from "zod";
 import type { Db } from "./db/client.ts";
@@ -14,6 +24,7 @@ import {
 import type { ExportRow } from "./candidates-export.ts";
 import { inOrg } from "./jobs.ts";
 import { limitSql } from "./plan-state.ts";
+import { requirementRows } from "./rubric.ts";
 
 export { CANDIDATE_DECISIONS, type Decision };
 
@@ -45,11 +56,17 @@ export type CandidateSummary = {
 	// Place among the job's scored CVs (1 is best), or null while the CV has no score. The list, the candidate page
 	// and the CSV export all take it from rankOrder.
 	rank: number | null;
-	// Labels of met requirements (must-haves first, at most 4) and of unmet must-haves (at most 2).
+	// Labels of requirements the CV clearly meets (must-haves first, at most 4) and of must-haves it shows no evidence
+	// for (at most 2): matchLabels() and gapLabels() of `checks`.
 	matches: string[];
 	gaps: string[];
-	// Every requirement of the job with whether the CV met it, for the row's "show all requirements".
-	checks: { label: string; met: boolean; importance: "must" | "nice" }[];
+	// The job's requirements in order, each with the CV's level (null while not checked), so the browser can re-score
+	// and re-rank as weights change. Empty unless the CV is scored against them.
+	checks: Check[];
+	// Scored before jobs had requirements: it keeps that score and rank until it is read again.
+	scoredBeforeRequirements: boolean;
+	// A "Check all" run for this CV is queued or under way. Its score and rank still show.
+	checking: boolean;
 	// The AI's two sentences on the fit, so the list can be searched by them.
 	summary: string | null;
 	// Whether a recruiter has written a note. The note itself stays on the candidate.
@@ -67,10 +84,22 @@ export type CandidateSummary = {
 	updatedAt: Date;
 	scoredAt: Date | null;
 };
+// One requirement of the job with what the CV shows for it. The quote is empty while not checked or when none.
+export type CandidateEvidence = {
+	id: string;
+	label: string;
+	detail: string;
+	weight: Weight;
+	level: EvidenceLevel | null;
+	quote: string;
+};
 export type Candidate = Omit<CandidateSummary, "profile"> & {
 	// How many CVs of the job are ranked, for "#2 of 7".
 	rankedCount: number;
-	requirements: Requirement[] | null;
+	// The job's requirements in order with the CV's evidence. Null unless the CV is scored against them.
+	evidence: CandidateEvidence[] | null;
+	// What the old scorer found, only for a CV scored before jobs had requirements.
+	legacyRequirements: Requirement[] | null;
 	// What the CV states about the candidate. Null for a CV that hasn't been read.
 	profile: CandidateProfile | null;
 	fileSize: number;
@@ -91,7 +120,8 @@ const summaryColumns = {
 	name: candidates.name,
 	headline: candidates.headline,
 	score: candidates.score,
-	requirements: candidates.requirements,
+	evidence: candidates.evidence,
+	checkState: candidates.checkState,
 	summary: candidates.summary,
 	hasNote: sql<number>`${candidates.note} is not null`,
 	source: candidates.source,
@@ -105,6 +135,7 @@ const summaryColumns = {
 };
 const candidateColumns = {
 	...summaryColumns,
+	requirements: candidates.requirements,
 	profile: candidates.profile,
 	fileSize: candidates.fileSize,
 	note: candidates.note,
@@ -118,19 +149,30 @@ type SummaryRow = Pick<typeof candidates.$inferSelect, Exclude<keyof typeof summ
 	email: string | null;
 	cvEmail: string | null;
 };
-type CandidateRow = SummaryRow & Pick<typeof candidates.$inferSelect, "profile" | "fileSize" | "note" | "decidedAt" | "decidedBy">;
+type CandidateRow = SummaryRow &
+	Pick<typeof candidates.$inferSelect, "requirements" | "profile" | "fileSize" | "note" | "decidedAt" | "decidedBy">;
 
-const isMust = (r: Requirement) => Number(r.importance === "must");
-const mustFirst = (a: Requirement, b: Requirement) => isMust(b) - isMust(a);
+// Scored by the old scorer, before jobs had requirements: there is no evidence to score against them.
+const isScoredBefore = (row: Pick<SummaryRow, "status" | "evidence">) => row.status === "scored" && row.evidence === null;
 
-// A failed CV can be retried, and so can one stuck in queued or scoring; fresh ones are still being worked on.
-function isRetryable(status: CandidateStatus, updatedAt: Date): boolean {
+// A failed CV can be retried, and so can one stuck in queued or scoring; fresh ones are still being worked on. A CV
+// scored before jobs had requirements can be read again against them.
+function isRetryable(row: Pick<SummaryRow, "status" | "evidence" | "updatedAt">): boolean {
+	const { status, updatedAt } = row;
 	const stuck = (status === "queued" || status === "scoring") && Date.now() - updatedAt.getTime() > STALE_SCORING_MS;
-	return status === "failed" || stuck;
+	return status === "failed" || stuck || isScoredBefore(row);
 }
 
-function toSummary(row: SummaryRow, rank: number | null = null): CandidateSummary {
-	const requirements = row.requirements ?? [];
+// A "Check all" run whose Workflow has gone quiet this long is dead, like a stuck scoring run.
+const isChecking = (row: Pick<SummaryRow, "checkState" | "updatedAt">) =>
+	row.checkState !== null && Date.now() - row.updatedAt.getTime() <= STALE_SCORING_MS;
+
+// The CV's checks against the job's current requirements, when it has been scored against them.
+const checksOf = (row: SummaryRow, rubric: RubricItem[] | null): Check[] =>
+	row.status === "scored" && row.evidence && rubric ? toChecks(rubric, row.evidence) : [];
+
+function toSummary(row: SummaryRow, rubric: RubricItem[] | null, rank: number | null = null): CandidateSummary {
+	const checks = checksOf(row, rubric);
 	return {
 		id: row.id,
 		fileName: row.fileName,
@@ -140,51 +182,49 @@ function toSummary(row: SummaryRow, rank: number | null = null): CandidateSummar
 		headline: row.headline,
 		score: row.score,
 		rank,
-		matches: requirements
-			.filter((r) => r.met)
-			.sort(mustFirst)
-			.slice(0, 4)
-			.map((r) => r.label),
-		gaps: requirements
-			.filter((r) => r.importance === "must" && !r.met)
-			.slice(0, 2)
-			.map((r) => r.label),
-		checks: requirements.map(({ label, met, importance }) => ({ label, met, importance })),
+		matches: matchLabels(checks),
+		gaps: gapLabels(checks),
+		checks,
+		scoredBeforeRequirements: isScoredBefore(row),
+		checking: isChecking(row),
 		summary: row.summary,
 		hasNote: Boolean(row.hasNote),
 		source: row.source,
 		email: row.email,
 		profile: row.cvEmail ? { email: row.cvEmail } : null,
 		error: row.error,
-		canRetry: isRetryable(row.status, row.updatedAt) && row.runs < MAX_SCORING_RUNS,
+		canRetry: isRetryable(row) && row.runs < MAX_SCORING_RUNS,
 		createdAt: row.createdAt,
 		updatedAt: row.updatedAt,
 		scoredAt: row.scoredAt,
 	};
 }
 
-const toCandidate = (row: CandidateRow, rank: number | null = null, rankedCount = 0): Candidate => ({
-	...toSummary(row, rank),
+// The job's requirements with the CV's evidence, for the candidate page.
+function evidenceOf(row: CandidateRow, rubric: RubricItem[] | null): CandidateEvidence[] | null {
+	const evidence = row.evidence;
+	if (row.status !== "scored" || !evidence || !rubric) return null;
+	return visibleItems(rubric).map(({ id, label, detail, weight }) => ({
+		id,
+		label,
+		detail,
+		weight,
+		level: evidence[id]?.level ?? null,
+		quote: evidence[id]?.quote ?? "",
+	}));
+}
+
+const toCandidate = (row: CandidateRow, rubric: RubricItem[] | null, rank: number | null = null, rankedCount = 0): Candidate => ({
+	...toSummary(row, rubric, rank),
 	rankedCount,
-	requirements: row.requirements,
+	evidence: evidenceOf(row, rubric),
+	legacyRequirements: isScoredBefore(row) ? (row.requirements ?? []) : null,
 	profile: row.profile,
 	fileSize: row.fileSize,
 	note: row.note,
 	decidedAt: row.decidedAt,
 	decidedBy: row.decidedBy,
 });
-
-// The score is ours, not the model's: must-haves count double, so it is deterministic and explainable.
-export function computeScore(requirements: Requirement[]): number {
-	let earned = 0;
-	let total = 0;
-	for (const { importance, met } of requirements) {
-		const weight = importance === "must" ? 2 : 1;
-		total += weight;
-		if (met) earned += weight;
-	}
-	return total === 0 ? 0 : Math.round((100 * earned) / total);
-}
 
 // Every candidate query is scoped to the company and the job in the URL.
 const inJob = (orgId: string, jobId: string) => and(eq(candidates.orgId, orgId), eq(candidates.jobId, jobId));
@@ -216,11 +256,21 @@ async function rankedIds(db: Db, orgId: string, jobId: string): Promise<string[]
 const isoSql = (column: SQLiteColumn) => sql`(strftime('%Y-%m-%dT%H:%M:%S', CAST(${column} AS INTEGER) / 1000, 'unixepoch')
 	|| '.' || printf('%03d', CAST(${column} AS INTEGER) % 1000) || 'Z')`;
 const jsonBool = (condition: SQL) => sql`json(CASE WHEN ${condition} THEN 'true' ELSE 'false' END)`;
-const met = sql`coalesce(json_extract(r.value, '$.met'), 0)`;
-const isMustSql = sql`(json_extract(r.value, '$.importance') = 'must')`;
+
+// The SQL twins of isScoredBefore, isChecking and checksOf above.
+const scoredBeforeSql = sql`(${candidates.status} = 'scored' AND ${candidates.evidence} IS NULL)`;
+const hasEvidenceSql = sql`(${candidates.status} = 'scored' AND ${candidates.evidence} IS NOT NULL)`;
+const checkingSql = (now: number) =>
+	sql`(${candidates.checkState} IS NOT NULL AND ${now} - ${candidates.updatedAt} <= ${STALE_SCORING_MS})`;
+// The CV's checks as rows `q` (requirementRows), for a query that has the job joined: none unless it was scored
+// against the job's requirements.
+const checkRows = (where: SQL = sql`1`) => sql`(${requirementRows(jobs.rubric, candidates.evidence)}) q
+	WHERE ${hasEvidenceSql} AND ${where}`;
 
 // One CandidateSummary (what toSummary() makes) as JSON, built by SQLite. A Max job holds 1,000 CVs, and parsing
-// every CV's requirements on the Worker and writing the list back out costs far more than its 10 ms of CPU.
+// every CV's evidence on the Worker and writing the list back out costs far more than its 10 ms of CPU. matches and
+// gaps follow matchLabels() and gapLabels(): clear levels whose weight counts, must-haves first, at most 4; must-haves
+// with no evidence or not checked, at most 2.
 const summaryJsonSql = (now: number) => sql`json_object(
 	'id', ${candidates.id}, 'fileName', ${candidates.fileName}, 'status', ${candidates.status},
 	'decision', ${candidates.decision}, 'name', ${candidates.name}, 'headline', ${candidates.headline},
@@ -229,21 +279,21 @@ const summaryJsonSql = (now: number) => sql`json_object(
 		PARTITION BY ${candidates.status} = 'scored' AND ${candidates.score} IS NOT NULL
 		ORDER BY ${candidates.score} DESC, ${candidates.scoredAt}, ${candidates.createdAt}, ${candidates.id}) END,
 	'matches', json((SELECT json_group_array(label ORDER BY must DESC, k) FROM (
-		SELECT json_extract(r.value, '$.label') AS label, ${isMustSql} AS must, r.key AS k
-		FROM json_each(${candidates.requirements}) r WHERE ${met} ORDER BY must DESC, k LIMIT 4))),
+		SELECT q.label AS label, q.weight = 'must' AS must, q.k AS k
+		FROM ${checkRows(sql`q.weight != 'off' AND q.level = 'clear'`)} ORDER BY must DESC, k LIMIT 4))),
 	'gaps', json((SELECT json_group_array(label ORDER BY k) FROM (
-		SELECT json_extract(r.value, '$.label') AS label, r.key AS k
-		FROM json_each(${candidates.requirements}) r WHERE ${isMustSql} AND NOT ${met} ORDER BY k LIMIT 2))),
-	'checks', json((SELECT json_group_array(json_object(
-			'label', json_extract(r.value, '$.label'), 'met', ${jsonBool(met)},
-			'importance', json_extract(r.value, '$.importance')) ORDER BY r.key)
-		FROM json_each(${candidates.requirements}) r)),
+		SELECT q.label AS label, q.k AS k
+		FROM ${checkRows(sql`q.weight = 'must' AND coalesce(q.level, 'none') = 'none'`)} ORDER BY k LIMIT 2))),
+	'checks', json((SELECT json_group_array(json_object('id', q.id, 'label', q.label, 'weight', q.weight, 'level', q.level)
+		ORDER BY q.k) FROM ${checkRows()})),
+	'scoredBeforeRequirements', ${jsonBool(scoredBeforeSql)},
+	'checking', ${jsonBool(checkingSql(now))},
 	'summary', ${candidates.summary}, 'hasNote', ${jsonBool(sql`${candidates.note} IS NOT NULL`)},
 	'source', ${candidates.source}, 'email', ${summaryColumns.email},
 	'profile', CASE WHEN nullif(${summaryColumns.cvEmail}, '') IS NOT NULL THEN json_object('email', ${summaryColumns.cvEmail}) END,
 	'error', ${candidates.error},
 	'canRetry', ${jsonBool(sql`(${candidates.status} = 'failed' OR (${candidates.status} IN ('queued', 'scoring')
-		AND ${now} - ${candidates.updatedAt} > ${STALE_SCORING_MS})) AND ${candidates.runs} < ${MAX_SCORING_RUNS}`)},
+		AND ${now} - ${candidates.updatedAt} > ${STALE_SCORING_MS}) OR ${scoredBeforeSql}) AND ${candidates.runs} < ${MAX_SCORING_RUNS}`)},
 	'createdAt', ${isoSql(candidates.createdAt)}, 'updatedAt', ${isoSql(candidates.updatedAt)},
 	'scoredAt', ${isoSql(candidates.scoredAt)})`;
 
@@ -254,17 +304,33 @@ export async function listCandidatesJson(db: Db, orgId: string, jobId: string, n
 	const rows = await db
 		.select({ json: sql<string>`${summaryJsonSql(now)}` })
 		.from(candidates)
+		.innerJoin(jobs, eq(jobs.id, candidates.jobId))
 		.where(inJob(orgId, jobId))
 		.orderBy(sql`case ${candidates.status} when 'scored' then 0 when 'failed' then 2 else 1 end`, ...rankOrder);
 	return `[${rows.map(({ json }) => json).join(",")}]`;
 }
 
-// The candidate with its place among the job's scored CVs.
-async function ranked(db: Db, orgId: string, jobId: string, row: CandidateRow): Promise<Candidate> {
-	if (row.status !== "scored" || row.score === null) return toCandidate(row);
-	const ids = await rankedIds(db, orgId, jobId);
+async function jobRubric(db: Db, jobId: string): Promise<RubricItem[] | null> {
+	const [job] = await db.select({ rubric: jobs.rubric }).from(jobs).where(eq(jobs.id, jobId)).limit(1);
+	return job?.rubric ?? null;
+}
+
+// The candidate with its place among the job's scored CVs, and its checks against the job's requirements (looked up
+// when the caller doesn't have them).
+async function ranked(
+	db: Db,
+	orgId: string,
+	jobId: string,
+	row: CandidateRow,
+	rubric?: RubricItem[] | null,
+): Promise<Candidate> {
+	if (row.status !== "scored") return toCandidate(row, null);
+	const [ids, requirements] = await Promise.all([
+		row.score === null ? ([] as string[]) : rankedIds(db, orgId, jobId),
+		rubric === undefined ? jobRubric(db, jobId) : rubric,
+	]);
 	const index = ids.indexOf(row.id);
-	return toCandidate(row, index === -1 ? null : index + 1, ids.length);
+	return toCandidate(row, requirements, index === -1 ? null : index + 1, ids.length);
 }
 
 // Everything the CSV export holds, ranked as the list is. Ranks count the whole job, so they don't change with the
@@ -275,8 +341,19 @@ export async function listForExport(
 	jobId: string,
 	decision: Decision | "all",
 ): Promise<ExportRow[]> {
-	const labels = (which: SQL) => sql<string | null>`(SELECT group_concat(json_extract(r.value, '$.label'), '; ' ORDER BY r.key)
+	// From the evidence: clear and partial requirements whose weight counts are matching (partial ones marked), and
+	// those with no evidence or not checked yet are missing. A CV scored before jobs had requirements lists what the old
+	// scorer found.
+	const counted = sql`q.weight != 'off'`;
+	const legacy = (which: SQL) => sql`(SELECT group_concat(json_extract(r.value, '$.label'), '; ' ORDER BY r.key)
 		FROM json_each(${candidates.requirements}) r WHERE ${which})`;
+	const met = sql`coalesce(json_extract(r.value, '$.met'), 0)`;
+	const matching = sql<string | null>`CASE WHEN ${hasEvidenceSql} THEN (SELECT group_concat(q.label
+		|| CASE q.level WHEN 'partial' THEN ' (partial)' ELSE '' END, '; ' ORDER BY q.k)
+		FROM ${checkRows(sql`${counted} AND q.level IN ('clear', 'partial')`)}) ELSE ${legacy(met)} END`;
+	const missing = sql<string | null>`CASE WHEN ${hasEvidenceSql} THEN (SELECT group_concat(q.label
+		|| CASE WHEN q.level IS NULL THEN ' (not checked)' ELSE '' END, '; ' ORDER BY q.k)
+		FROM ${checkRows(sql`${counted} AND coalesce(q.level, 'none') = 'none'`)}) ELSE ${legacy(sql`NOT ${met}`)} END`;
 	const rows = await db
 		.select({
 			name: candidates.name,
@@ -290,11 +367,12 @@ export async function listForExport(
 			decidedAt: candidates.decidedAt,
 			createdAt: candidates.createdAt,
 			summary: candidates.summary,
-			matching: labels(met),
-			missing: labels(sql`NOT ${met}`),
+			matching,
+			missing,
 			error: candidates.error,
 		})
 		.from(candidates)
+		.innerJoin(jobs, eq(jobs.id, candidates.jobId))
 		.where(inJob(orgId, jobId))
 		.orderBy(sql`case ${candidates.status} when 'scored' then 0 when 'failed' then 2 else 1 end`, ...rankOrder);
 	let rank = 0;
@@ -304,8 +382,15 @@ export async function listForExport(
 }
 
 export async function getCandidate(db: Db, orgId: string, jobId: string, id: string): Promise<Candidate | null> {
-	const [row] = await db.select(candidateColumns).from(candidates).where(inJobById(orgId, jobId, id)).limit(1);
-	return row ? ranked(db, orgId, jobId, row) : null;
+	const [found] = await db
+		.select({ ...candidateColumns, rubric: jobs.rubric })
+		.from(candidates)
+		.innerJoin(jobs, eq(jobs.id, candidates.jobId))
+		.where(inJobById(orgId, jobId, id))
+		.limit(1);
+	if (!found) return null;
+	const { rubric, ...row } = found;
+	return ranked(db, orgId, jobId, row, rubric);
 }
 
 export type SlotResult = { ok: true } | { ok: false; reason: "job_not_found" | "job_not_open" | "cv_limit" };
@@ -370,7 +455,7 @@ type NewCandidate = {
 
 export async function createCandidate(db: Db, input: NewCandidate): Promise<Candidate> {
 	const [row] = await db.insert(candidates).values(input).returning(candidateColumns);
-	return toCandidate(row);
+	return toCandidate(row, null);
 }
 
 // For a scoring run that could not be started at all, so the CV doesn't sit queued forever.
@@ -380,39 +465,82 @@ export async function markStartFailed(db: Db, id: string): Promise<Candidate | n
 		.set({ status: "failed", error: START_FAILED_MESSAGE })
 		.where(and(eq(candidates.id, id), eq(candidates.status, "queued")))
 		.returning(candidateColumns);
-	return row ? toCandidate(row) : null;
+	return row ? toCandidate(row, null) : null;
 }
 
 export type RetryResult =
 	| { ok: true; candidate: Candidate; runs: number }
 	| { ok: false; reason: "candidate_not_found" | "not_failed" | "retry_limit" };
 
-// Queues another scoring run for a failed or stuck CV, in one statement so a double click can't start two.
+// Queues another scoring run for a failed or stuck CV, or reads a CV scored before jobs had requirements again, in one
+// statement so a double click can't start two. A "Check all" run still waiting is dropped: this run reads everything.
 export async function startRetry(db: Db, orgId: string, jobId: string, id: string): Promise<RetryResult> {
 	const staleBefore = new Date(Date.now() - STALE_SCORING_MS);
 	const [row] = await db
 		.update(candidates)
-		.set({ runs: sql`${candidates.runs} + 1`, status: "queued", error: null })
+		.set({ runs: sql`${candidates.runs} + 1`, status: "queued", error: null, checkState: null, checkIds: null })
 		.where(
 			and(
 				inJobById(orgId, jobId, id),
 				or(
 					eq(candidates.status, "failed"),
 					and(inArray(candidates.status, ["queued", "scoring"]), lt(candidates.updatedAt, staleBefore)),
+					and(eq(candidates.status, "scored"), isNull(candidates.evidence)),
 				),
 				lt(candidates.runs, MAX_SCORING_RUNS),
 			),
 		)
 		.returning(candidateColumns);
-	if (row) return { ok: true, candidate: toCandidate(row), runs: row.runs };
+	if (row) return { ok: true, candidate: toCandidate(row, null), runs: row.runs };
 
 	const [current] = await db
-		.select({ status: candidates.status, updatedAt: candidates.updatedAt })
+		.select({ status: candidates.status, evidence: candidates.evidence, updatedAt: candidates.updatedAt })
 		.from(candidates)
 		.where(inJobById(orgId, jobId, id))
 		.limit(1);
 	if (!current) return { ok: false, reason: "candidate_not_found" };
-	return { ok: false, reason: isRetryable(current.status, current.updatedAt) ? "retry_limit" : "not_failed" };
+	return { ok: false, reason: isRetryable(current) ? "retry_limit" : "not_failed" };
+}
+
+// The job's scored CVs that miss evidence for any of its requirements (Off ones included), claimed for a "Check all"
+// run in ONE statement: each gets the ids it misses, in the job's order, and its run's clock starts. A CV already being
+// checked is skipped, unless that run went quiet long ago. CVs scored before jobs had requirements aren't checked:
+// they are read again whole. Returns the claimed ids, for the caller to start their Workflows.
+export async function startChecks(db: Db, orgId: string, jobId: string, now: number = Date.now()): Promise<string[]> {
+	const rows = (where: SQL) => sql`(${requirementRows(sql`(SELECT ${jobs.rubric} FROM ${jobs} WHERE ${jobs.id} = ${jobId})`, candidates.evidence)}) q WHERE ${where}`;
+	const unchecked = sql`q.level IS NULL`;
+	const claimed = await db
+		.update(candidates)
+		.set({
+			checkState: "queued",
+			checkIds: sql`(SELECT json_group_array(q.id ORDER BY q.k) FROM ${rows(unchecked)})`,
+			updatedAt: new Date(now),
+		})
+		.where(
+			and(
+				inJob(orgId, jobId),
+				eq(candidates.status, "scored"),
+				isNotNull(candidates.evidence),
+				or(isNull(candidates.checkState), lt(candidates.updatedAt, new Date(now - STALE_SCORING_MS))),
+				sql`EXISTS (SELECT 1 FROM ${rows(unchecked)})`,
+			),
+		)
+		.returning({ id: candidates.id });
+	return claimed.map(({ id }) => id);
+}
+
+// Drops "Check all" runs whose Workflow never started, so the CVs don't look busy and can be checked again. It never
+// throws: the runs that did start are already under way.
+export async function cancelChecks(db: Db, ids: string[]): Promise<void> {
+	if (ids.length === 0) return;
+	try {
+		await db
+			.update(candidates)
+			.set({ checkState: null, checkIds: null, updatedAt: sql`${candidates.updatedAt}` })
+			.where(and(sql`${candidates.id} in (select value from json_each(${JSON.stringify(ids)}))`, eq(candidates.checkState, "queued")));
+	} catch (error) {
+		console.error("check runs not cancelled", error);
+	}
 }
 
 const noteInput = z

@@ -1,20 +1,18 @@
+import type { EvidenceMap, RubricItem } from "@lucid-hire/scoring";
 import { AISDKError, APICallError, RetryError } from "ai";
 import { desc, eq, gt } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import {
-	type CvScore,
-	type CvScoreInput,
-	type CvScorer,
-	cvScoreSchema,
-	isUnreadableFileError,
-	tidyCvScore,
-} from "./cv-scorer.ts";
+import { type CvScore, type CvScoreInput, type CvScorer, isUnreadableFileError } from "./cv-scorer.ts";
 import { GEMINI_TEXT_MODEL } from "./ai.ts";
 import { type Db, getDb } from "./db/client.ts";
 import { aiUsage, candidates, jobs, organizations, usageCounters } from "./db/schema.ts";
 import { createOrgForUser } from "./orgs.ts";
 import {
+	type DraftLauncher,
 	PermanentScoringError,
+	RUBRIC_FAILED_MESSAGE,
+	RUBRIC_MAX_POLLS,
+	RubricUnavailableError,
 	SCORING_FAILED_MESSAGE,
 	UNREADABLE_MESSAGE,
 	failureMessage,
@@ -22,12 +20,18 @@ import {
 	QUEUE_FULL_MESSAGE,
 	QueueTimeoutError,
 	WAITER_LIVE_MS,
+	endCheck,
 	enterQueue,
+	prepareRubric,
+	readRubric,
+	runScoreCv,
 	takeSlot,
 	saveScore,
 	scoreCandidate,
 } from "./scoring.ts";
+import type { DraftRubricParams } from "./rubric.ts";
 import { createTestD1 } from "./test/d1.ts";
+import { fakeStep, nonRetryable } from "./test/steps.ts";
 import { RENEWAL_GRACE_MS } from "./plan-state.ts";
 
 let db: Db;
@@ -40,17 +44,28 @@ let scorerError: unknown;
 
 const PDF = new TextEncoder().encode("%PDF-1.4 a small CV");
 
+// The job's requirements. Combine was removed, so it is neither read nor scored.
+const RUBRIC: RubricItem[] = [
+	{ id: "r1", label: "Swift", detail: "5+ years of Swift", weight: "must" },
+	{ id: "r2", label: "SwiftUI", detail: "SwiftUI", weight: "must" },
+	{ id: "r3", label: "Figma", detail: "Figma is a plus", weight: "nice" },
+	{ id: "r4", label: "Kotlin", detail: "Kotlin", weight: "nice" },
+	{ id: "r5", label: "Combine", detail: "Combine", weight: "must", removed: true },
+];
+const VISIBLE = RUBRIC.filter((item) => !item.removed).map(({ id, detail }) => ({ id, detail }));
+
+const evidence: EvidenceMap = {
+	r1: { level: "clear", quote: "Six years of Swift" },
+	r2: { level: "partial", quote: "Prototyped a screen in SwiftUI" },
+	r3: { level: "partial", quote: "Worked next to designers" },
+	r4: { level: "none", quote: "" },
+};
+
 const score: CvScore = {
 	name: "Ada Lovelace",
 	headline: "Senior iOS Engineer · London",
-	summary: "Ada has six years of Swift and ships SwiftUI apps. She has no Combine experience.",
-	requirements: [
-		{ label: "Swift", requirement: "5+ years of Swift", importance: "must", met: true, evidence: "Six years of Swift" },
-		{ label: "SwiftUI", requirement: "SwiftUI", importance: "must", met: true, evidence: "Built the app in SwiftUI" },
-		{ label: "Combine", requirement: "Combine", importance: "must", met: false, evidence: "" },
-		{ label: "Figma", requirement: "Figma", importance: "nice", met: true, evidence: "Handed off designs in Figma" },
-		{ label: "Kotlin", requirement: "Kotlin", importance: "nice", met: false, evidence: "" },
-	],
+	summary: "Ada has six years of Swift and some SwiftUI. She has no Kotlin experience.",
+	evidence,
 	profile: {
 		email: "ada@example.com",
 		location: "London, UK",
@@ -62,10 +77,15 @@ const score: CvScore = {
 	},
 };
 
+// Answers with `score`, or with clear evidence for exactly the requirements a run asks about.
+let scorerAnswer: "fixed" | "asked";
 const scorer: CvScorer = async (input) => {
 	scorerCalls.push(input);
 	if (scorerError) throw scorerError;
-	return { value: score, inputTokens: 1200, outputTokens: 340 };
+	if (scorerAnswer === "fixed") return { value: score, inputTokens: 1200, outputTokens: 340 };
+	const ids = input.onlyIds ?? input.rubric.map(({ id }) => id);
+	const asked = Object.fromEntries(ids.map((id) => [id, { level: "clear" as const, quote: `Shows ${id}` }]));
+	return { value: { ...score, evidence: asked }, inputTokens: 100, outputTokens: 20 };
 };
 
 beforeAll(async () => {
@@ -80,27 +100,43 @@ beforeAll(async () => {
 		orgId,
 		createdBy: "user_admin",
 		title: "Senior iOS Engineer",
-		description: "Swift 5+ years, SwiftUI, Combine. Figma is a plus.",
+		description: "Swift 5+ years, SwiftUI. Figma is a plus.",
 		status: "open",
+		rubric: RUBRIC,
+		rubricStatus: "ready",
 	});
 });
 
 afterAll(() => dispose());
 
 beforeEach(async () => {
-	// Every test starts with a fresh monthly job allowance.
+	// Every test starts with a fresh monthly job allowance, and the job with its requirements as above.
 	await db.delete(usageCounters);
+	await db.update(jobs).set({ rubric: RUBRIC, rubricStatus: "ready" }).where(eq(jobs.id, jobId));
 	scorerCalls = [];
 	scorerError = undefined;
+	scorerAnswer = "fixed";
 });
 
 // A queued candidate, with its PDF in R2 unless `withFile` is false.
-async function seedCandidate({ withFile = true, name }: { withFile?: boolean; name?: string } = {}) {
+async function seedCandidate({
+	withFile = true,
+	name,
+	...values
+}: { withFile?: boolean; name?: string } & Partial<typeof candidates.$inferInsert> = {}) {
 	const id = crypto.randomUUID();
 	const fileKey = `${orgId}/${jobId}/${id}.pdf`;
-	await db
-		.insert(candidates)
-		.values({ id, orgId, jobId, fileKey, fileName: "ada.pdf", fileSize: PDF.byteLength, createdBy: "user_admin", name });
+	await db.insert(candidates).values({
+		id,
+		orgId,
+		jobId,
+		fileKey,
+		fileName: "ada.pdf",
+		fileSize: PDF.byteLength,
+		createdBy: "user_admin",
+		name,
+		...values,
+	});
 	if (withFile) await bucket.put(fileKey, PDF);
 	return id;
 }
@@ -110,72 +146,6 @@ const rowOf = async (id: string) => (await db.select().from(candidates).where(eq
 // ai_usage rows are shared by every test here, so each test looks only at the rows written after it began.
 const usageMark = async () => (await db.select().from(aiUsage).orderBy(desc(aiUsage.id)).limit(1))[0]?.id ?? 0;
 const usageSince = (mark: number) => db.select().from(aiUsage).where(gt(aiUsage.id, mark));
-
-describe("cvScoreSchema", () => {
-	it("accepts a realistic result", () => {
-		expect(cvScoreSchema.safeParse(score).success).toBe(true);
-		// A CV with no name is allowed: the model answers with an empty string.
-		expect(cvScoreSchema.safeParse({ ...score, name: "" }).success).toBe(true);
-	});
-
-	it("leaves the cap of 12 requirements to tidyCvScore, so a 13th doesn't cost the whole response", () => {
-		const thirteen = Array.from({ length: 13 }, () => score.requirements[0]);
-		expect(cvScoreSchema.safeParse({ ...score, requirements: thirteen }).success).toBe(true);
-	});
-
-	it("rejects results the model got wrong", () => {
-		const [first, ...rest] = score.requirements;
-		const bad = [
-			{ ...score, requirements: [{ ...first, importance: "maybe" }, ...rest] },
-			{ ...score, requirements: [{ ...first, met: "yes" }, ...rest] },
-			{ ...score, requirements: [{ label: "Swift", requirement: "Swift", importance: "must", met: true }, ...rest] },
-			{ ...score, requirements: [] },
-			{ name: "Ada", headline: "x", summary: "x" },
-		];
-		for (const value of bad) expect(cvScoreSchema.safeParse(value).success).toBe(false);
-	});
-});
-
-describe("tidyCvScore", () => {
-	it("clips long text, and drops evidence for unmet requirements", () => {
-		const long = "x".repeat(500);
-		const tidy = tidyCvScore({
-			name: `  ${score.name} `,
-			headline: score.headline,
-			summary: score.summary,
-			requirements: [
-				{ ...score.requirements[0], evidence: long },
-				{ ...score.requirements[2], evidence: "Combine was never mentioned" },
-				score.requirements[3],
-			],
-		});
-		expect(tidy.name).toBe("Ada Lovelace");
-		expect(tidy.requirements[0].evidence).toHaveLength(200);
-		expect(tidy.requirements[1].evidence).toBe("");
-		expect(tidy.requirements[2]).toEqual(score.requirements[3]);
-	});
-
-	it("keeps at most 12 requirements", () => {
-		const thirteen = Array.from({ length: 13 }, (_, i) => ({ ...score.requirements[0], label: `Skill ${i}` }));
-		const tidy = tidyCvScore({ ...score, requirements: thirteen });
-		expect(tidy.requirements).toHaveLength(12);
-		expect(tidy.requirements.at(-1)?.label).toBe("Skill 11");
-	});
-
-	it("counts a requirement as met only when it comes with a quote", () => {
-		const [first, second] = score.requirements;
-		const tidy = tidyCvScore({
-			...score,
-			requirements: [
-				{ ...first, met: true, evidence: "" },
-				{ ...second, met: true, evidence: "   " },
-				{ ...second, met: true, evidence: "Built the app in SwiftUI" },
-			],
-		});
-		expect(tidy.requirements.map((r) => r.met)).toEqual([false, false, true]);
-		expect(tidy.requirements.map((r) => r.evidence)).toEqual(["", "", "Built the app in SwiftUI"]);
-	});
-});
 
 const apiError = (statusCode: number, message = `Gemini answered ${statusCode}`, responseBody?: string) =>
 	new APICallError({ message, url: "https://gemini.test", requestBodyValues: {}, statusCode, responseBody });
@@ -376,7 +346,7 @@ describe("the reading queue", () => {
 });
 
 describe("scoreCandidate", () => {
-	it("reads the PDF from R2, scores it against the job and returns small JSON", async () => {
+	it("reads the PDF from R2 against the job's requirements still on it, and returns small JSON", async () => {
 		const id = await seedCandidate();
 		const output = await scoreCandidate(db, bucket, scorer, id);
 
@@ -384,11 +354,39 @@ describe("scoreCandidate", () => {
 		expect(scorerCalls).toHaveLength(1);
 		expect(scorerCalls[0]).toMatchObject({
 			jobTitle: "Senior iOS Engineer",
-			jobDescription: "Swift 5+ years, SwiftUI, Combine. Figma is a plus.",
+			jobDescription: "Swift 5+ years, SwiftUI. Figma is a plus.",
+			rubric: VISIBLE,
 		});
+		expect(scorerCalls[0]).not.toHaveProperty("onlyIds");
 		expect(scorerCalls[0].pdf).toEqual(PDF);
 		// Reading the CV doesn't change the candidate.
 		expect((await rowOf(id)).status).toBe("queued");
+	});
+
+	it("reads a re-read against every requirement too", async () => {
+		const id = await seedCandidate({ status: "scoring", evidence: { r1: { level: "none", quote: "" } } });
+		await scoreCandidate(db, bucket, scorer, id, "reread");
+		expect(scorerCalls[0].rubric).toEqual(VISIBLE);
+		expect(scorerCalls[0]).not.toHaveProperty("onlyIds");
+	});
+
+	it("reads only the requirements a Check all run was missing, leaving out any removed since", async () => {
+		const id = await seedCandidate({ status: "scored", evidence: {}, checkState: "checking", checkIds: ["r3", "r5", "r4"] });
+		await scoreCandidate(db, bucket, scorer, id, "check");
+		expect(scorerCalls[0]).toMatchObject({ rubric: VISIBLE, onlyIds: ["r3", "r4"] });
+	});
+
+	it("makes no Gemini call for a Check all run with nothing left to read", async () => {
+		const id = await seedCandidate({ status: "scored", evidence: {}, checkState: "checking", checkIds: ["r5"] });
+		const output = await scoreCandidate(db, bucket, scorer, id, "check");
+		expect(output).toMatchObject({ result: { evidence: {} }, usage: null });
+		expect(scorerCalls).toEqual([]);
+	});
+
+	it("stops quietly when a Check all run was dropped", async () => {
+		const id = await seedCandidate({ status: "queued", evidence: null, checkState: null });
+		await expect(scoreCandidate(db, bucket, scorer, id, "check")).resolves.toBeNull();
+		expect(scorerCalls).toEqual([]);
 	});
 
 	it("turns missing token counts into nulls, so the step output is plain JSON", async () => {
@@ -435,13 +433,13 @@ describe("scoreCandidate", () => {
 });
 
 describe("saveScore", () => {
-	it("stores the result with the score we computed, and records the usage", async () => {
+	it("stores the evidence with the score worked out in SQL from the job's requirements, and records the usage", async () => {
 		const id = await seedCandidate();
 		await takeSlot(db, id);
 		const mark = await usageMark();
 		await saveScore(db, id, { result: score, usage: { inputTokens: 1200, outputTokens: 340 } });
 
-		// 2 of 3 must-haves (4 points) and 1 of 2 nice-to-haves (1 point) out of 8: 62.5, rounded up.
+		// Swift clear (3), SwiftUI partial (1.5), Figma partial (0.5) and Kotlin none, out of 8: 62.5, rounded up.
 		const row = await rowOf(id);
 		expect(row).toMatchObject({
 			status: "scored",
@@ -450,8 +448,9 @@ describe("saveScore", () => {
 			headline: "Senior iOS Engineer · London",
 			summary: score.summary,
 			error: null,
-			requirements: score.requirements,
+			evidence,
 			profile: score.profile,
+			checkState: null,
 		});
 		expect(row.scoredAt).toBeInstanceOf(Date);
 
@@ -467,6 +466,55 @@ describe("saveScore", () => {
 				outputTokens: 340,
 			},
 		]);
+	});
+
+	it("scores against the weights as they are at save time, so a change made while Gemini was reading counts", async () => {
+		const id = await seedCandidate();
+		await scoreCandidate(db, bucket, scorer, id);
+		// The recruiter turns Kotlin into a must-have and Figma off while the CV is being read.
+		const changed = RUBRIC.map((item) =>
+			item.id === "r4" ? { ...item, weight: "must" as const } : item.id === "r3" ? { ...item, weight: "off" as const } : item,
+		);
+		await db.update(jobs).set({ rubric: changed }).where(eq(jobs.id, jobId));
+		await saveScore(db, id, { result: score, usage: null });
+		// Swift 3 + SwiftUI 1.5 + Kotlin 0, out of 9: 50.
+		expect((await rowOf(id)).score).toBe(50);
+	});
+
+	it("replaces the evidence on a re-read, dropping what was read before", async () => {
+		const id = await seedCandidate({ status: "scoring", evidence: { r5: { level: "clear", quote: "Combine" }, r1: { level: "none", quote: "" } } });
+		await saveScore(db, id, { result: score, usage: null }, "reread");
+		expect((await rowOf(id)).evidence).toEqual(evidence);
+	});
+
+	it("adds a Check all run's evidence to the CV's, leaves the rest of the CV alone and ends the run", async () => {
+		const scoredAt = new Date(Date.now() - 3_600_000);
+		const id = await seedCandidate({
+			status: "scored",
+			score: 60,
+			scoredAt,
+			name: "Ada",
+			summary: "Kept.",
+			evidence: { r1: evidence.r1, r2: evidence.r2 },
+			checkState: "checking",
+			checkIds: ["r3", "r4"],
+		});
+		const mark = await usageMark();
+		const checked = { ...score, name: "", headline: "", summary: "", evidence: { r3: evidence.r3, r4: evidence.r4 } };
+		await saveScore(db, id, { result: checked, usage: { inputTokens: 10, outputTokens: 2 } }, "check");
+
+		const row = await rowOf(id);
+		expect(row).toMatchObject({ status: "scored", score: 63, name: "Ada", summary: "Kept.", evidence, checkState: null, checkIds: null });
+		expect(row.scoredAt).toEqual(scoredAt);
+		expect(await usageSince(mark)).toMatchObject([{ operation: "cv_score", ok: true, inputTokens: 10 }]);
+	});
+
+	it("drops a Check all run's evidence once the run was dropped, but still books the call", async () => {
+		const id = await seedCandidate({ status: "queued", evidence: { r1: evidence.r1 }, checkState: null });
+		const mark = await usageMark();
+		await saveScore(db, id, { result: { ...score, evidence: { r2: evidence.r2 } }, usage: { inputTokens: 1, outputTokens: 1 } }, "check");
+		expect(await rowOf(id)).toMatchObject({ status: "queued", evidence: { r1: evidence.r1 } });
+		expect(await usageSince(mark)).toMatchObject([{ ok: true }]);
 	});
 
 	it("clears an earlier failure and keeps a missing name and headline as null", async () => {
@@ -487,6 +535,7 @@ describe("saveScore", () => {
 		const mark = await usageMark();
 		const usage = { inputTokens: 1, outputTokens: 1 };
 		await expect(saveScore(db, "deleted", { result: score, usage })).resolves.toBeUndefined();
+		await expect(saveScore(db, "deleted", { result: score, usage }, "check")).resolves.toBeUndefined();
 		expect(await usageSince(mark)).toEqual([]);
 	});
 });
@@ -517,5 +566,323 @@ describe("failureMessage", () => {
 
 		expect(failureMessage(new Error("high demand"))).toBe("Scoring failed. Try again.");
 		expect(failureMessage("not even an error")).toBe("Scoring failed. Try again.");
+	});
+
+	it("asks for another try when the job's requirements couldn't be drafted", () => {
+		expect(failureMessage(new RubricUnavailableError("x"))).toBe("We couldn't set up this job's requirements. Try again.");
+	});
+});
+
+describe("Check all runs in the reading queue", () => {
+	let otherOrg: string;
+
+	beforeAll(async () => {
+		otherOrg = (await createOrgForUser(db, "user_check", "Checkers")).org.id;
+		await db.insert(jobs).values({
+			id: `job-${otherOrg}`,
+			orgId: otherOrg,
+			createdBy: "user_check",
+			title: "Role",
+			description: "A role description that is long enough",
+			status: "open",
+		});
+	});
+
+	beforeEach(async () => {
+		await db.delete(candidates);
+	});
+
+	// A scored CV with a "Check all" run, or a scoring run, in the given state.
+	async function seedRun(
+		org: string,
+		run: { checkState?: "queued" | "checking"; status?: "queued" | "scoring" | "scored" },
+		{ priorityAt = Date.now(), updatedAt = new Date() } = {},
+	) {
+		const id = crypto.randomUUID();
+		await db.insert(candidates).values({
+			id,
+			orgId: org,
+			jobId: org === orgId ? jobId : `job-${org}`,
+			fileKey: `${org}/${id}.pdf`,
+			fileName: "cv.pdf",
+			fileSize: 1,
+			createdBy: "user_admin",
+			status: run.status ?? "scored",
+			evidence: run.status && run.status !== "scored" ? null : { r1: evidence.r1 },
+			checkState: run.checkState ?? null,
+			queuePriorityAt: new Date(priorityAt),
+			updatedAt,
+		});
+		return id;
+	}
+
+	it("moves check_state to checking and leaves the CV scored", async () => {
+		const id = await seedRun(orgId, { checkState: "queued" });
+		expect(await enterQueue(db, id, Date.now(), "check")).toBe(true);
+		expect(await takeSlot(db, id, Date.now(), "check")).toBe("started");
+		expect(await rowOf(id)).toMatchObject({ status: "scored", checkState: "checking" });
+		// A retried step finds it already checking and still succeeds.
+		expect(await takeSlot(db, id, Date.now(), "check")).toBe("started");
+	});
+
+	it("says gone when the run was dropped, even though the CV is still there", async () => {
+		const id = await seedRun(orgId, {});
+		expect(await enterQueue(db, id, Date.now(), "check")).toBe(false);
+		expect(await takeSlot(db, id, Date.now(), "check")).toBe("gone");
+		// And a CV being scored has no Check all run to take a slot for.
+		const scoring = await seedRun(orgId, { status: "queued" });
+		expect(await takeSlot(db, scoring, Date.now(), "check")).toBe("gone");
+	});
+
+	it("counts CVs being checked against the company's five", async () => {
+		for (let i = 0; i < 3; i++) await seedRun(orgId, { status: "scoring" });
+		for (let i = 0; i < 2; i++) await seedRun(orgId, { checkState: "checking" });
+		const upload = await seedRun(orgId, { status: "queued" });
+		const check = await seedRun(orgId, { checkState: "queued" });
+		expect(await takeSlot(db, upload)).toBe("waiting");
+		expect(await takeSlot(db, check, Date.now(), "check")).toBe("waiting");
+		expect(await rowOf(check)).toMatchObject({ status: "scored", checkState: "queued" });
+		// Another company is not held up by them.
+		expect(await takeSlot(db, await seedRun(otherOrg, { checkState: "queued" }), Date.now(), "check")).toBe("started");
+	});
+
+	it("counts CVs being checked against the ten overall", async () => {
+		for (let i = 0; i < 5; i++) await seedRun(orgId, { checkState: "checking" });
+		for (let i = 0; i < 5; i++) await seedRun(otherOrg, { status: "scoring" });
+		const third = (await createOrgForUser(db, `user_${crypto.randomUUID()}`, "Third")).org.id;
+		await db.insert(jobs).values({ id: `job-${third}`, orgId: third, createdBy: "u", title: "Role", description: "Role" });
+		expect(await takeSlot(db, await seedRun(third, { status: "queued" }))).toBe("waiting");
+	});
+
+	it("serves Check all runs and new CVs in one order", async () => {
+		// Nine reading, one slot left: an earlier check run goes before a later upload, and the other way round.
+		for (let i = 0; i < 5; i++) await seedRun(orgId, { status: "scoring" });
+		for (let i = 0; i < 4; i++) await seedRun(otherOrg, { checkState: "checking" });
+		const now = Date.now();
+		const third = (await createOrgForUser(db, `user_${crypto.randomUUID()}`, "Third")).org.id;
+		await db.insert(jobs).values({ id: `job-${third}`, orgId: third, createdBy: "u", title: "Role", description: "Role" });
+		const earlyCheck = await seedRun(otherOrg, { checkState: "queued" }, { priorityAt: now - 300_000 });
+		const lateUpload = await seedRun(third, { status: "queued" }, { priorityAt: now });
+		expect(await takeSlot(db, lateUpload)).toBe("waiting");
+		expect(await takeSlot(db, earlyCheck, now, "check")).toBe("started");
+
+		await endCheck(db, earlyCheck);
+		const lateCheck = await seedRun(otherOrg, { checkState: "queued" }, { priorityAt: now + 60_000 });
+		expect(await takeSlot(db, lateCheck, now, "check")).toBe("waiting");
+		expect(await takeSlot(db, lateUpload)).toBe("started");
+	});
+
+	it("frees the slot of a check run that went quiet", async () => {
+		const quiet = new Date(Date.now() - 21 * 60_000);
+		for (let i = 0; i < 5; i++) await seedRun(orgId, { checkState: "checking" }, { updatedAt: quiet });
+		expect(await takeSlot(db, await seedRun(orgId, { status: "queued" }))).toBe("started");
+	});
+
+	it("ends a failed check run without touching the CV's score or status", async () => {
+		const id = await seedRun(orgId, { checkState: "checking" });
+		await db.update(candidates).set({ score: 70 }).where(eq(candidates.id, id));
+		await endCheck(db, id);
+		expect(await rowOf(id)).toMatchObject({ status: "scored", score: 70, error: null, checkState: null, checkIds: null });
+	});
+});
+
+describe("the job's requirements before a run", () => {
+	let launches: { params: DraftRubricParams; claimed: boolean }[];
+	let launchWorks: boolean;
+	const launch: DraftLauncher = async (params, { claimed }) => {
+		launches.push({ params, claimed });
+		return launchWorks;
+	};
+
+	beforeEach(() => {
+		launches = [];
+		launchWorks = true;
+	});
+
+	const setRubric = (values: Partial<typeof jobs.$inferInsert>) => db.update(jobs).set(values).where(eq(jobs.id, jobId));
+	const versionOf = async () => (await db.select({ v: jobs.rubricVersion }).from(jobs).where(eq(jobs.id, jobId)))[0].v;
+
+	it("goes ahead when they are ready, and starts nothing", async () => {
+		const id = await seedCandidate();
+		expect(await prepareRubric(db, launch, id)).toBe("ready");
+		expect(launches).toEqual([]);
+	});
+
+	it("claims a draft for a job that has none, or whose last draft failed, and starts it", async () => {
+		for (const status of ["none", "failed"] as const) {
+			launches = [];
+			await setRubric({ rubric: null, rubricStatus: status });
+			const before = await versionOf();
+			const id = await seedCandidate();
+			expect(await prepareRubric(db, launch, id)).toBe("drafting");
+			expect(await versionOf()).toBe(before + 1);
+			expect(launches).toEqual([{ params: { jobId, version: before + 1, userId: "user_admin" }, claimed: true }]);
+		}
+	});
+
+	it("makes sure a draft under way has its Workflow, without claiming another", async () => {
+		await setRubric({ rubricStatus: "drafting" });
+		const before = await versionOf();
+		const id = await seedCandidate();
+		expect(await prepareRubric(db, launch, id)).toBe("drafting");
+		expect(await versionOf()).toBe(before);
+		expect(launches).toEqual([{ params: { jobId, version: before, userId: "user_admin" }, claimed: false }]);
+	});
+
+	it("reports a draft that could not start as failed", async () => {
+		await setRubric({ rubric: null, rubricStatus: "none" });
+		launchWorks = false;
+		expect(await prepareRubric(db, launch, await seedCandidate())).toBe("failed");
+	});
+
+	it("says gone for a deleted candidate and a dropped Check all run", async () => {
+		expect(await prepareRubric(db, launch, "deleted")).toBe("gone");
+		const id = await seedCandidate({ status: "scored", checkState: null });
+		expect(await prepareRubric(db, launch, id, "check")).toBe("gone");
+		expect(await readRubric(db, id, "check")).toBe("gone");
+		expect(await readRubric(db, id)).toBe("ready");
+	});
+});
+
+describe("runScoreCv", () => {
+	let launches: { params: DraftRubricParams; claimed: boolean }[];
+	const launchDraft: DraftLauncher = async (params, { claimed }) => {
+		launches.push({ params, claimed });
+		return true;
+	};
+	const deps = () => ({ db, bucket, scorer, launchDraft, nonRetryable });
+	const setRubric = (values: Partial<typeof jobs.$inferInsert>) => db.update(jobs).set(values).where(eq(jobs.id, jobId));
+
+	beforeEach(async () => {
+		await db.delete(candidates);
+		launches = [];
+		scorerAnswer = "asked";
+	});
+
+	it("reads a new CV against the job's requirements and saves it scored", async () => {
+		const id = await seedCandidate();
+		const { step, names } = fakeStep();
+		await runScoreCv(step, deps(), { candidateId: id, mode: "initial" });
+
+		expect(names).toEqual(["rubric", "enter", "slot-0", "score", "save"]);
+		expect(scorerCalls[0].rubric).toEqual(VISIBLE);
+		const row = await rowOf(id);
+		expect(row).toMatchObject({ status: "scored", score: 100, error: null });
+		expect(Object.keys(row.evidence ?? {})).toEqual(["r1", "r2", "r3", "r4"]);
+	});
+
+	it("treats a run started before modes existed as a new CV", async () => {
+		const id = await seedCandidate();
+		await runScoreCv(fakeStep().step, deps(), { candidateId: id });
+		expect(await rowOf(id)).toMatchObject({ status: "scored", score: 100 });
+	});
+
+	it("waits while the job's requirements are drafted, then reads against them", async () => {
+		await setRubric({ rubric: null, rubricStatus: "none" });
+		const id = await seedCandidate();
+		let sleeps = 0;
+		const { step, names } = fakeStep({
+			onSleep: async () => {
+				if (++sleeps === 3) await setRubric({ rubric: RUBRIC, rubricStatus: "ready" });
+			},
+		});
+		await runScoreCv(step, deps(), { candidateId: id, mode: "initial" });
+
+		expect(launches).toMatchObject([{ claimed: true, params: { jobId } }]);
+		expect(names.slice(0, 7)).toEqual(["rubric", "rubric-wait-0", "rubric-0", "rubric-wait-1", "rubric-1", "rubric-wait-2", "rubric-2"]);
+		expect(names.slice(7)).toEqual(["enter", "slot-0", "score", "save"]);
+		expect((await rowOf(id)).status).toBe("scored");
+	});
+
+	it("fails the CV with a message to try again when the draft fails", async () => {
+		await setRubric({ rubricStatus: "drafting" });
+		const id = await seedCandidate();
+		const { step, names } = fakeStep({ onSleep: () => setRubric({ rubricStatus: "failed" }).then(() => undefined) });
+		await expect(runScoreCv(step, deps(), { candidateId: id, mode: "initial" })).rejects.toBeInstanceOf(RubricUnavailableError);
+
+		expect(names).toEqual(["rubric", "rubric-wait-0", "rubric-0", "fail"]);
+		expect(scorerCalls).toEqual([]);
+		expect(await rowOf(id)).toMatchObject({ status: "failed", error: RUBRIC_FAILED_MESSAGE });
+	});
+
+	it("gives up on a draft that takes longer than five minutes", async () => {
+		await setRubric({ rubricStatus: "drafting" });
+		const id = await seedCandidate();
+		const { step, names } = fakeStep();
+		await expect(runScoreCv(step, deps(), { candidateId: id, mode: "initial" })).rejects.toBeInstanceOf(RubricUnavailableError);
+		expect(names.filter((name) => name.startsWith("rubric-wait-"))).toHaveLength(RUBRIC_MAX_POLLS);
+		expect(names.length).toBeLessThan(1024);
+		expect(await rowOf(id)).toMatchObject({ status: "failed", error: RUBRIC_FAILED_MESSAGE });
+	});
+
+	it("re-reads a CV against every requirement and replaces its evidence", async () => {
+		const id = await seedCandidate({
+			status: "queued",
+			runs: 2,
+			score: 40,
+			evidence: { r1: { level: "none", quote: "" }, r5: { level: "clear", quote: "Combine" } },
+		});
+		await runScoreCv(fakeStep().step, deps(), { candidateId: id, mode: "reread" });
+		const row = await rowOf(id);
+		expect(row).toMatchObject({ status: "scored", score: 100 });
+		expect(Object.keys(row.evidence ?? {})).toEqual(["r1", "r2", "r3", "r4"]);
+	});
+
+	it("checks a scored CV for the requirements it misses, keeping it scored throughout", async () => {
+		const id = await seedCandidate({
+			status: "scored",
+			score: 75,
+			name: "Ada",
+			evidence: { r1: evidence.r1, r2: { level: "clear", quote: "SwiftUI apps" } },
+			checkState: "queued",
+			checkIds: ["r3", "r4"],
+		});
+		const { step, names } = fakeStep();
+		await runScoreCv(step, deps(), { candidateId: id, mode: "check" });
+
+		expect(names).toEqual(["rubric", "enter", "slot-0", "score", "save"]);
+		expect(scorerCalls[0].onlyIds).toEqual(["r3", "r4"]);
+		const row = await rowOf(id);
+		expect(row).toMatchObject({ status: "scored", score: 100, name: "Ada", checkState: null, checkIds: null });
+		expect(row.evidence).toMatchObject({ r1: evidence.r1, r3: { level: "clear" }, r4: { level: "clear" } });
+	});
+
+	it("makes a Check all run wait for a reading slot like any CV", async () => {
+		for (let i = 0; i < 5; i++) await seedCandidate({ withFile: false, status: "scoring" });
+		const id = await seedCandidate({ status: "scored", evidence: { r1: evidence.r1 }, checkState: "queued", checkIds: ["r2"] });
+		const { step, names } = fakeStep({
+			// The company's other five CVs finish while this one waits.
+			onSleep: () => db.update(candidates).set({ status: "scored" }).where(eq(candidates.status, "scoring")).then(() => undefined),
+		});
+		await runScoreCv(step, deps(), { candidateId: id, mode: "check" });
+		expect(names).toEqual(["rubric", "enter", "slot-0", "wait-0", "slot-1", "score", "save"]);
+		expect((await rowOf(id)).checkState).toBeNull();
+	});
+
+	it("ends a failed Check all run without failing the CV", async () => {
+		const id = await seedCandidate({ status: "scored", score: 38, evidence: { r1: evidence.r1 }, checkState: "queued", checkIds: ["r2"] });
+		scorerError = apiError(503);
+		const { step, names } = fakeStep();
+		await expect(runScoreCv(step, deps(), { candidateId: id, mode: "check" })).rejects.toBe(scorerError);
+		// The Gemini step had its four tries.
+		expect(names.filter((name) => name === "score")).toHaveLength(4);
+		expect(names.at(-1)).toBe("fail");
+		expect(await rowOf(id)).toMatchObject({ status: "scored", score: 38, error: null, checkState: null });
+	});
+
+	it("stops quietly when a Check all run was dropped before it began", async () => {
+		const id = await seedCandidate({ status: "queued", checkState: null });
+		const { step, names } = fakeStep();
+		await runScoreCv(step, deps(), { candidateId: id, mode: "check" });
+		expect(names).toEqual(["rubric"]);
+		expect((await rowOf(id)).status).toBe("queued");
+	});
+
+	it("blames the file, without retrying, when it is missing", async () => {
+		const id = await seedCandidate({ withFile: false });
+		const { step, names } = fakeStep();
+		await expect(runScoreCv(step, deps(), { candidateId: id, mode: "initial" })).rejects.toMatchObject({ name: "NonRetryableError" });
+		expect(names.filter((name) => name === "score")).toHaveLength(1);
+		expect(await rowOf(id)).toMatchObject({ status: "failed", error: UNREADABLE_MESSAGE });
 	});
 });

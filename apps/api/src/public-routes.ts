@@ -47,7 +47,7 @@ function applicantFileName(raw: string | undefined): string {
 // sitting queued forever, and the applicant still hears that their CV arrived.
 async function startScoring(env: Env, db: ReturnType<typeof getDb>, requestId: string, candidate: Candidate) {
 	try {
-		await env.SCORE_CV.create({ id: candidate.id, params: { candidateId: candidate.id } });
+		await env.SCORE_CV.create({ id: candidate.id, params: { candidateId: candidate.id, mode: "initial" } });
 	} catch (error) {
 		console.error(`[${requestId}] scoring did not start for applicant ${candidate.id}`, error);
 		await markStartFailed(db, candidate.id).catch(() => null);

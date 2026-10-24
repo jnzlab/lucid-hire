@@ -4,10 +4,12 @@ import { GEMINI_TEXT_MODEL } from "./ai.ts";
 import { createApp } from "./app.ts";
 import type { SessionVerifier } from "./auth.ts";
 import { type Db, getDb } from "./db/client.ts";
+import type { RubricItem } from "@lucid-hire/scoring";
 import { type Requirement, aiUsage, candidates, interviewQuestions, jobs, members, usageCounters } from "./db/schema.ts";
 import {
 	type InterviewQuestion,
 	type QuestionInput,
+	type QuestionRequirement,
 	type QuestionWriter,
 	tidyQuestions,
 	writeQuestionsWithGemini,
@@ -84,6 +86,7 @@ async function call(user: string | null, method: string, path: string) {
 	return res;
 }
 
+// A requirement as CVs were scored before jobs had a list of them.
 const req = (label: string, importance: "must" | "nice", met: boolean): Requirement => ({
 	label,
 	requirement: `Needs ${label}`,
@@ -92,11 +95,44 @@ const req = (label: string, importance: "must" | "nice", met: boolean): Requirem
 	evidence: met ? `Worked with ${label}` : "",
 });
 
+const item = (id: string, label: string, weight: RubricItem["weight"]): RubricItem => ({ id, label, detail: `Needs ${label}`, weight });
+
+// Every job here has these requirements. Figma is Off, so the questions leave it out.
+const RUBRIC = [
+	item("r1", "Swift", "must"),
+	item("r2", "Combine", "must"),
+	item("r3", "GraphQL", "nice"),
+	item("r4", "Figma", "off"),
+	item("r5", "Kotlin", "nice"),
+	{ ...item("r6", "UIKit", "must"), removed: true as const },
+];
+
+// What the writer gets for the default candidate below: Kotlin hasn't been checked yet.
+const asked = (label: string, weight: "must" | "nice", level: QuestionRequirement["level"], quote = ""): QuestionRequirement => ({
+	label,
+	detail: `Needs ${label}`,
+	weight,
+	level,
+	quote,
+});
+const ASKED = [
+	asked("Swift", "must", "clear", "Six years of Swift"),
+	asked("Combine", "must", "none"),
+	asked("GraphQL", "nice", "partial", "Read about GraphQL"),
+	asked("Kotlin", "nice", null),
+];
+
 async function seedJob(owner = orgId, user = "user_admin") {
 	const id = crypto.randomUUID();
-	await db
-		.insert(jobs)
-		.values({ id, orgId: owner, title: "iOS Engineer", description: "Swift, SwiftUI, Combine", createdBy: user });
+	await db.insert(jobs).values({
+		id,
+		orgId: owner,
+		title: "iOS Engineer",
+		description: "Swift, SwiftUI, Combine",
+		createdBy: user,
+		rubric: RUBRIC,
+		rubricStatus: "ready",
+	});
 	return id;
 }
 
@@ -116,7 +152,13 @@ async function seedCandidate(jobId: string, values: Partial<typeof candidates.$i
 		name: "Ada Lovelace",
 		headline: "Senior iOS Engineer · London",
 		summary: "Ada has six years of Swift and no Combine.",
-		requirements: [req("Swift", "must", true), req("Combine", "must", false), req("GraphQL", "nice", true)],
+		evidence: {
+			r1: { level: "clear", quote: "Six years of Swift" },
+			r2: { level: "none", quote: "" },
+			r3: { level: "partial", quote: "Read about GraphQL" },
+			r4: { level: "clear", quote: "Figma" },
+			r6: { level: "clear", quote: "UIKit" },
+		},
 		scoredAt: new Date(),
 		...values,
 	});
@@ -192,7 +234,7 @@ describe("POST /jobs/:jobId/candidates/:id/questions", () => {
 				name: "Ada Lovelace",
 				headline: "Senior iOS Engineer · London",
 				summary: "Ada has six years of Swift and no Combine.",
-				requirements: [req("Swift", "must", true), req("Combine", "must", false), req("GraphQL", "nice", true)],
+				requirements: ASKED,
 			},
 		]);
 
@@ -327,10 +369,21 @@ describe("POST /jobs/:jobId/candidates/:id/questions", () => {
 
 	it("passes on what the scoring has, even when that is little", async () => {
 		const jobId = await seedJob();
-		const id = await seedCandidate(jobId, { name: null, headline: null, summary: null, requirements: null });
+		const id = await seedCandidate(jobId, { name: null, headline: null, summary: null, evidence: null, requirements: null });
 
 		expect((await call("user_admin", "POST", path(jobId, id))).status).toBe(200);
 		expect(writerCalls[0]).toMatchObject({ name: null, headline: null, summary: null, requirements: [] });
+	});
+
+	it("asks about what was read for a CV scored before the job had requirements", async () => {
+		const jobId = await seedJob();
+		const id = await seedCandidate(jobId, { evidence: null, requirements: [req("Swift", "must", true), req("Combine", "nice", false)] });
+
+		expect((await call("user_admin", "POST", path(jobId, id))).status).toBe(200);
+		expect(writerCalls[0].requirements).toEqual([
+			{ label: "Swift", detail: "Needs Swift", weight: "must", level: "clear", quote: "Worked with Swift" },
+			{ label: "Combine", detail: "Needs Combine", weight: "nice", level: "none", quote: "" },
+		]);
 	});
 });
 
@@ -388,7 +441,12 @@ describe("writeQuestionsWithGemini", () => {
 		name: "Ada Lovelace",
 		headline: "Senior iOS Engineer · London",
 		summary: "Six years of Swift. No Combine.",
-		requirements: [req("Swift", "must", true), req("Combine", "must", false), req("GraphQL", "nice", true)],
+		requirements: [
+			asked("Swift", "must", "clear", "Worked with Swift"),
+			asked("Combine", "must", "none"),
+			asked("GraphQL", "nice", "partial", "Read about GraphQL"),
+			asked("Kotlin", "nice", null),
+		],
 	};
 	let requests: { url: string; body: Record<string, unknown> }[];
 	let answer: unknown;
@@ -426,8 +484,13 @@ describe("writeQuestionsWithGemini", () => {
 		expect(prompt).toContain("Swift 5+ years, SwiftUI, Combine.");
 		expect(prompt).toContain("Ada Lovelace");
 		expect(prompt).toContain("Six years of Swift. No Combine.");
-		expect(prompt).toContain("Combine (must-have, not met)");
-		expect(prompt).toContain('GraphQL (nice to have, met). CV says: \\"Worked with GraphQL\\"');
+		expect(prompt).toContain("Combine: Needs Combine (must-have, none)");
+		expect(prompt).toContain('GraphQL: Needs GraphQL (nice to have, partial). CV says: \\"Read about GraphQL\\"');
+		expect(prompt).toContain("Kotlin: Needs Kotlin (nice to have, not checked yet)");
+		// The instructions say what each level means for the questions.
+		const instructions = JSON.stringify(body.systemInstruction);
+		expect(instructions).toContain("partial");
+		expect(instructions).toContain("not checked");
 		// No PDF goes with it.
 		expect(prompt).not.toContain("fileData");
 		expect(prompt).not.toContain("inlineData");

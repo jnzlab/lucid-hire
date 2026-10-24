@@ -509,3 +509,22 @@ classes live in `apps/web/src/index.css`.
   .16s (4px rise), dialog pop-in .2s, toast rise .25s (8px), drawers and
   sheets slide .28s. All use `animation-fill-mode: backwards` and are
   complete at rest under reduced motion (the global rule cuts them).
+
+### 9.5 Requirements and live ranking (derived, 2026-10-24)
+
+The job page's Requirements tab (`apps/web/src/jobs/workspace/`) and the
+evidence on candidate rows and the candidate page. Built from the tokens
+above and the landing page's demo; nothing here adds a colour, font, radius
+or easing.
+
+| Part | Spec |
+|---|---|
+| **Evidence square** | 12px (14px `md`), 3px radius, 1.5px border, 3px apart, one per requirement in the job's order. Clear: `ink` fill. Partial: `sheet` with the left half `ink`. None: `sheet`, `ink` border. Not checked: a dotted `ink-muted` border. An Off requirement's square drops to 30% opacity. Each square is named for screen readers ("SwiftUI: partial", "GraphQL: clear, off"); the key under the ranking and on the candidate page's Evidence tab explains them, "Partial: the CV shows part of it" included. |
+| **Must / Nice / Off** | The compact segmented control (§4), one per requirement, as a radio group named by its label. Chosen Must: `ink` fill, `paper` text. Chosen Nice: `marker` fill, `on-marker` text, `ink` border. Chosen Off: the plain chosen segment. An Off requirement's label goes `ink-muted`. |
+| **Requirement row** | Number (mono 12px `ink-faint`), label 750 16px with a Rename icon button, detail 14px `ink-muted`, then the weight control and a Remove icon button; from 700px they sit on one line. Rename turns the label into a field with Save and Cancel (Enter and Escape) and a "n / 40 characters" count. |
+| **Live ranking** | A `sheet` card beside the requirements from 1100px (sticky, 340–420px wide), under them below. The top 10 scored CVs: rank, name, squares, score in Archivo 800 26px at 62% stretch; the leader on the `.rank-band`. Above them one polite live line: "Grace Turner leads with 86." |
+| **Move mark** | "↑2" mono 11px on `marker` with `on-marker` text, or "↓1" in `gap-ink`, beside the name of each CV that moved in the last re-rank, on the Requirements tab and the Candidates tab. Shown for 2.4s, then fades over .3s. Hidden from screen readers: the rank says it. |
+| **Re-rank motion** | Rows slide to their new places (FLIP, `.flip-move`: `transform` .6s `--ease-in-out`). Scores count to their new value over 450ms, easing out (cubic). Under reduced motion both rest finished. |
+| **Check all prompt** | A `sheet` strip with a 1.5px `line` border and 8px radius above the list: "3 CVs not checked against all requirements." and a small Check all button. While a run is going: the live dot and "Checking 3 CVs against every requirement…", and the button is disabled. Rows being checked say "Checking…" with the live dot. |
+| **Scored before requirements** | On a row: one quiet line in mono 11.5px `ink-muted` (`on-marker` on the band), "Scored before requirements were set", where the squares would be, and no button, so a long list of them stays calm. On the candidate page: a bordered note with Re-read and the old requirements under it. |
+| **Candidate page evidence** | Grouped as Must-haves, Nice to have, then "Off, not counted". Each requirement: its label (clear on `.mk`, none on `.mk-gap` with ✕, partial and not checked plain), a square and its level in words (Clear, Partial, None, Not checked), the detail, and the quote with a 3px `ink` rule. Off requirements lose their marks and go `ink-muted`, rather than fading, so the text keeps its contrast. |

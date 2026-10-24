@@ -8,6 +8,7 @@ import type { Capacity } from "../jobs/workspace/capacity.ts";
 import { CandidateRow } from "../jobs/workspace/candidate-row.tsx";
 import { FilterBar } from "../jobs/workspace/filter-bar.tsx";
 import { useArrowsLive } from "../jobs/workspace/use-arrows-live.ts";
+import type { MovesState } from "../jobs/workspace/use-moves.ts";
 import type { StatusChange } from "../jobs/workspace/use-status-change.ts";
 import {
 	type JobSearch,
@@ -54,12 +55,15 @@ export function CandidatesSection({
 	capacity,
 	status,
 	onUpload,
+	moves,
 }: {
 	job: Job;
 	candidates: UseQueryResult<CandidateList>;
 	capacity: Capacity;
 	status: StatusChange;
 	onUpload: () => void;
+	// The arrows of the last re-rank, if it was moments ago.
+	moves?: MovesState;
 }) {
 	const list = candidates.data?.candidates;
 
@@ -84,7 +88,13 @@ export function CandidatesSection({
 			) : !list || list.length === 0 ? (
 				<NoCandidates job={job} canTake={capacity.note === null} onUpload={onUpload} />
 			) : (
-				<Workspace job={job} list={list} refreshFailed={candidates.isError} onRetry={() => void candidates.refetch()} />
+				<Workspace
+					job={job}
+					list={list}
+					refreshFailed={candidates.isError}
+					onRetry={() => void candidates.refetch()}
+					moves={moves}
+				/>
 			)}
 		</section>
 	);
@@ -96,11 +106,13 @@ function Workspace({
 	list,
 	refreshFailed,
 	onRetry,
+	moves,
 }: {
 	job: Job;
 	list: CandidateList["candidates"];
 	refreshFailed: boolean;
 	onRetry: () => void;
+	moves?: MovesState;
 }) {
 	const org = useOrg();
 	const router = useRouter();
@@ -294,6 +306,8 @@ function Workspace({
 										onCheckRange={() => (bulk.toggleRange ?? bulk.toggle)(candidate.id)}
 										onActivate={() => (split ? select(candidate.id) : open(candidate.id))}
 										onOpen={split ? () => open(candidate.id) : null}
+										move={moves?.moves.get(candidate.id)}
+										fresh={moves?.fresh}
 									/>
 								))}
 							</ol>

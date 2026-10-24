@@ -25,6 +25,8 @@ import {
 	updateJobInput,
 } from "./jobs.ts";
 import { questionRoutes } from "./questions-routes.ts";
+import { startDraft } from "./rubric.ts";
+import { rubricRoutes } from "./rubric-routes.ts";
 import type { AppEnv } from "./types.ts";
 import { validJson, validQuery } from "./validation.ts";
 
@@ -61,11 +63,17 @@ export function jobRoutes({ auth, enhance, writeQuestions }: JobRouteOptions) {
 		return c.json({ jobs, total, page: query.page, pageSize: JOBS_PAGE_SIZE, counts }, 200, { "Cache-Control": "no-store" });
 	});
 
+	// A job created open is created drafting its requirements, and the draft's Workflow starts here. If it won't start,
+	// the job comes back with the draft failed, and opening the job or reading a CV for it tries again.
 	routes.post("/", validJson(createJobInput), async (c) => {
 		const db = getDb(c.env.DB);
 		const org = c.get("org");
-		const job = await createJob(db, org.id, c.get("userId"), c.req.valid("json"));
+		const userId = c.get("userId");
+		const job = await createJob(db, org.id, userId, c.req.valid("json"));
 		if (job === "limit") return c.json(await jobLimitError(db, org.id), 403);
+		if (job.rubricStatus === "drafting" && !(await startDraft(c.env.DRAFT_RUBRIC, db, { jobId: job.id, version: 1, userId }, { claimed: true }))) {
+			job.rubricStatus = "failed";
+		}
 		return c.json({ job }, 201);
 	});
 
@@ -120,9 +128,17 @@ export function jobRoutes({ auth, enhance, writeQuestions }: JobRouteOptions) {
 		return job ? c.json({ job }, 201) : c.json(notFound, 404);
 	});
 
+	// Opening a job that has no requirements yet (or whose last draft failed) starts drafting them.
 	routes.patch("/:id", validJson(updateJobInput), async (c) => {
-		const job = await updateJob(getDb(c.env.DB), c.get("org").id, c.req.param("id"), c.req.valid("json"));
-		return job ? c.json({ job }) : c.json(notFound, 404);
+		const db = getDb(c.env.DB);
+		const updated = await updateJob(db, c.get("org").id, c.req.param("id"), c.req.valid("json"));
+		if (!updated) return c.json(notFound, 404);
+		const { job, draft } = updated;
+		if (draft) {
+			const params = { jobId: job.id, version: draft.version, userId: c.get("userId") };
+			if (!(await startDraft(c.env.DRAFT_RUBRIC, db, params, { claimed: true }))) job.rubricStatus = "failed";
+		}
+		return c.json({ job });
 	});
 
 	// The optional cover image. The body is the raw image; what it is comes from its first bytes, not from the
@@ -198,6 +214,7 @@ export function jobRoutes({ auth, enhance, writeQuestions }: JobRouteOptions) {
 
 	routes.route("/", candidateRoutes());
 	routes.route("/", questionRoutes({ write: writeQuestions }));
+	routes.route("/", rubricRoutes());
 
 	return routes;
 }

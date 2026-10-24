@@ -15,6 +15,8 @@ const job: Job = {
 	hasCover: false,
 	createdAt: "2026-10-20T10:00:00Z",
 	updatedAt: "2026-10-20T10:00:00Z",
+	rubric: null,
+	rubricStatus: "none",
 };
 const url = "https://lucidhire.io/jobs/ios-dev-abcd1234";
 

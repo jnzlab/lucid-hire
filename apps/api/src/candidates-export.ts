@@ -54,7 +54,8 @@ export type ExportRow = {
 	decidedAt: Date | null;
 	createdAt: Date;
 	summary: string | null;
-	// Labels of the met and the unmet requirements, joined with "; ".
+	// Labels of the requirements the CV meets (clear, or marked partial) and of those it doesn't or wasn't checked
+	// against yet (marked), joined with "; ". A CV scored before jobs had requirements has what the old scorer found.
 	matching: string | null;
 	missing: string | null;
 	error: string | null;

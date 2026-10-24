@@ -8,8 +8,12 @@ export default defineConfig({
 		compatibilityDate: "2026-10-19",
 		entrypoint,
 		observability: { enabled: true },
-		// Scores one uploaded CV with Gemini. The retries and the 10 ms CPU cap per step are why it is a Workflow.
-		exports: { ScoreCvWorkflow: exports.workflow({ name: "lucidhire-score-cv" }) },
+		// Scores one uploaded CV with Gemini, and drafts a job's requirements with Gemini. The retries and the 10 ms CPU
+		// cap per step are why they are Workflows.
+		exports: {
+			ScoreCvWorkflow: exports.workflow({ name: "lucidhire-score-cv" }),
+			DraftRubricWorkflow: exports.workflow({ name: "lucidhire-draft-rubric" }),
+		},
 		env: {
 			CLERK_SECRET_KEY: bindings.secret(),
 			// Gemini, for every AI call (gemini-3.5-flash-lite text, gemini-embedding-2 embeddings).
@@ -27,11 +31,18 @@ export default defineConfig({
 			APPLY_RATE_LIMIT: bindings.rateLimit({ namespace: "1002", simple: { limit: 5, period: 60 } }),
 			// Private bucket for uploaded CVs, keyed `<orgId>/<jobId>/<candidateId>.pdf`.
 			CVS: bindings.r2({ name: "lucidhire-cvs" }),
-			// Starts one scoring run per CV (ScoreCvWorkflow above, in this same Worker).
+			// Starts each reading run of a CV: its first scoring, a retry or Re-read, and a "Check all" run
+			// (ScoreCvWorkflow above, in this same Worker).
 			SCORE_CV: bindings.workflow({
 				name: "lucidhire-score-cv",
 				worker: "lucidhire-api",
 				exportName: "ScoreCvWorkflow",
+			}),
+			// Starts one draft of a job's requirements per version of the list (DraftRubricWorkflow, in this same Worker).
+			DRAFT_RUBRIC: bindings.workflow({
+				name: "lucidhire-draft-rubric",
+				worker: "lucidhire-api",
+				exportName: "DraftRubricWorkflow",
 			}),
 		},
 		domains: ["api.lucidhire.io"],

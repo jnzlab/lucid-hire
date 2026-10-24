@@ -4,14 +4,17 @@ import { Check } from "../components/icons.tsx";
 export type Segment<T extends string> = {
 	value: T;
 	label: ReactNode;
-	// How the chosen segment is drawn: on the yellow marker for a match, on the pink one for a no.
-	mark?: "yes" | "no";
+	// How the chosen segment is drawn: on the yellow marker for a match, on the pink one for a no. `ink` (filled in
+	// ink, like the primary button) and `marker` (yellow, no glyph) rank choices by strength, as Must and Nice do.
+	mark?: "yes" | "no" | "ink" | "marker";
 };
 
 const CHOSEN = {
 	plain: "border-ink bg-sheet text-ink shadow-card",
 	yes: "border-ink bg-marker text-on-marker",
 	no: "border-ink bg-gap text-on-marker",
+	ink: "border-ink bg-ink text-paper",
+	marker: "border-ink bg-marker text-on-marker",
 };
 
 // A row of real radio buttons drawn as one segmented control (design system §4: chip or toggle), so the arrow

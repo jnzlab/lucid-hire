@@ -3,7 +3,7 @@ import { SORTS, type SortKey, visibleCandidates } from "../../lib/candidate-list
 import { type CandidateSummary, isWorking } from "../../lib/candidates.ts";
 
 // What the job page's Candidates tab is showing, kept in the address so a link, a reload or Back brings back the same
-// view: the tab, the selected candidate (`c`), the filter (`show`), the search (`q`) and the sort. Defaults are left
+// view: the tab (Candidates by default, or Requirements or Description), the selected candidate (`c`), the filter (`show`), the search (`q`) and the sort. Defaults are left
 // out of the address. The candidate page reads `show`, `q` and `sort` too, so its previous and next follow the list
 // the recruiter came from.
 
@@ -40,8 +40,11 @@ export const SORT_LABEL = Object.fromEntries(SORTS.map(({ value, label }) => [va
 export const CANDIDATE_QUERY_MAX = 100;
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,80}$/;
 
+export const JOB_TABS = ["requirements", "description"] as const;
+export type JobTab = "candidates" | (typeof JOB_TABS)[number];
+
 export type JobSearch = {
-	tab?: "description";
+	tab?: Exclude<JobTab, "candidates">;
 	c?: string;
 	show?: Exclude<ShowFilter, "all">;
 	q?: string;
@@ -57,7 +60,7 @@ export function validateJobSearch(search: Record<string, unknown>): JobSearch {
 	const q = text(search.q).trim().slice(0, CANDIDATE_QUERY_MAX);
 	const c = text(search.c);
 	return {
-		tab: search.tab === "description" ? "description" : undefined,
+		tab: JOB_TABS.find((tab) => tab === search.tab),
 		c: ID_PATTERN.test(c) ? c : undefined,
 		show: SHOW_FILTERS.find((show) => show !== "all" && show === search.show) as JobSearch["show"],
 		q: q || undefined,

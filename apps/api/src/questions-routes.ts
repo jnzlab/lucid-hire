@@ -2,7 +2,13 @@ import { Hono } from "hono";
 import { type AiResult, recordAiUsage } from "./ai.ts";
 import { getCandidate } from "./candidates.ts";
 import { getDb } from "./db/client.ts";
-import { type InterviewQuestion, type QuestionWriter, getQuestions, saveQuestions } from "./interview-questions.ts";
+import {
+	type InterviewQuestion,
+	type QuestionWriter,
+	getQuestions,
+	questionRequirements,
+	saveQuestions,
+} from "./interview-questions.ts";
 import { getJob } from "./jobs.ts";
 import { takeAiRequest } from "./usage.ts";
 import type { AppEnv } from "./types.ts";
@@ -61,7 +67,7 @@ export function questionRoutes({ write }: { write: QuestionWriter }) {
 				name: candidate.name,
 				headline: candidate.headline,
 				summary: candidate.summary,
-				requirements: candidate.requirements ?? [],
+				requirements: questionRequirements(candidate),
 			});
 		} catch (error) {
 			console.error(`[${c.get("requestId")}] interview questions failed`, error);
