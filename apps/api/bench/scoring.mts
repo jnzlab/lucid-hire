@@ -1,6 +1,10 @@
-// How steady is the CV scorer? Drafts the sample job's requirement list a few times, then scores each sample CV
-// against one fixed list several times with the production code, and reports the spread, the rank order, which
-// levels moved between identical runs, and whether every quote really is in the CV.
+// How steady and how right is the CV scorer? Scores each sample CV several times against the sample job's list of
+// requirements with the production code, and reports the spread, the rank order, which levels moved between identical
+// runs, how many levels match the answer key, and whether every quote really is in the CV. It also drafts the job's
+// list a few times and reports how much the drafts agree.
+//
+// The CVs are scored against a fixed list (the job's own lines, as the landing demo shows them) rather than a fresh
+// draft, so a run measures the scorer alone and has an answer key: the levels the CVs were written to earn.
 //
 // Spends real Gemini calls on the key in apps/api/.dev.vars (DRAFTS + 4 × RUNS, about 23 by default; the free tier
 // allows 500 a day), so it isn't part of `check`. Run: pnpm --filter @lucid-hire/api bench:scoring
@@ -8,7 +12,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type EvidenceMap, type RubricItem, scoreEvidence } from "@lucid-hire/scoring";
+import { type EvidenceLevel, type EvidenceMap, type RubricItem, scoreEvidence } from "@lucid-hire/scoring";
 import { scoreCvWithGemini } from "../src/cv-scorer.ts";
 import { draftRubricWithGemini } from "../src/rubric-drafter.ts";
 
@@ -23,6 +27,23 @@ const root = new URL("../../../", import.meta.url).pathname;
 const fixtures = join(root, "fixtures/cvs");
 // The order the sample CVs are written to land in (fixtures/cvs/README.md).
 const CVS = ["grace-turner", "kenji-tanaka", "lucas-becker", "amelia-nguyen"];
+
+// The job's requirements in its own words, labelled as the landing demo labels them.
+const RUBRIC: RubricItem[] = [
+	{ id: "r1", label: "Swift", detail: "Several years of Swift in production apps", weight: "must" },
+	{ id: "r2", label: "SwiftUI", detail: "SwiftUI shipped in a live app", weight: "must" },
+	{ id: "r3", label: "Performance", detail: "Performance work, with profiling in Instruments", weight: "must" },
+	{ id: "r4", label: "Accessibility", detail: "Accessibility experience, including VoiceOver and Dynamic Type", weight: "must" },
+	{ id: "r5", label: "GraphQL", detail: "GraphQL on the client side, with any library", weight: "nice" },
+	{ id: "r6", label: "Kotlin Multiplatform", detail: "Kotlin Multiplatform, with code shared between iOS and Android", weight: "nice" },
+];
+// What each CV was written to show for r1 to r6 (the landing demo's evidence for the same people): 93, 71, 54, 50.
+const ANSWER_KEY: Record<string, EvidenceLevel[]> = {
+	"grace-turner": ["clear", "clear", "clear", "clear", "clear", "none"],
+	"kenji-tanaka": ["clear", "clear", "partial", "partial", "clear", "none"],
+	"lucas-becker": ["clear", "partial", "partial", "partial", "none", "none"],
+	"amelia-nguyen": ["partial", "partial", "none", "clear", "clear", "none"],
+};
 
 const vars = readFileSync(join(root, "apps/api/.dev.vars"), "utf8");
 const apiKey = vars.match(/^GOOGLE_GENERATIVE_AI_API_KEY=(.*)$/m)?.[1]?.trim().replace(/^["']|["']$/g, "");
@@ -88,13 +109,13 @@ const details = drafts.map((d) => new Set(d.map((r) => norm(r.detail))));
 const shared = [...details[0]].filter((detail) => details.every((set) => set.has(detail))).length;
 console.log(`  items per draft [${drafts.map((d) => d.length).join(", ")}], ${shared} of draft 1's ${details[0].size} in every draft\n`);
 
-// 2. Every CV against ONE list, the way a job works: drafted once, then fixed.
-const rubric: RubricItem[] = drafts[0].map((item, k) => ({ id: `r${k + 1}`, ...item }));
+// 2. Every CV against the fixed list, several times.
+const rubric = RUBRIC;
 type Run = { name: string; run: number; ms: number; evidence: EvidenceMap; score: number | null };
 const runs: Run[] = [];
 const tasks = Array.from({ length: RUNS }, (_, run) => CVS.map((name) => ({ name, run }))).flat();
 let next = 0;
-console.log(`Scoring ${CVS.length} CVs × ${RUNS} runs against draft 1`);
+console.log(`Scoring ${CVS.length} CVs × ${RUNS} runs against the job's own list`);
 await Promise.all(
 	Array.from({ length: CONCURRENCY }, async () => {
 		while (next < tasks.length) {
@@ -147,6 +168,19 @@ for (const name of CVS) {
 }
 if (!moved) console.log("  none");
 
+console.log("\nLevels vs the answer key");
+let right = 0;
+const wrong: string[] = [];
+for (const r of runs) {
+	rubric.forEach((item, k) => {
+		const level = r.evidence[item.id]?.level ?? "none";
+		if (level === ANSWER_KEY[r.name][k]) right++;
+		else wrong.push(`  ${r.name} run ${r.run + 1} / ${item.label}: ${level}, key says ${ANSWER_KEY[r.name][k]}`);
+	});
+}
+console.log(`  ${right} of ${runs.length * rubric.length} match`);
+for (const miss of wrong) console.log(miss);
+
 console.log("\nQuotes vs the CV's text");
 let quotes = 0;
 const misses: string[] = [];
@@ -168,4 +202,5 @@ console.log("\nTargets");
 console.log(`  ${exact === RUNS ? "PASS" : "FAIL"}  written order in every run (${exact}/${RUNS})`);
 console.log(`  ${worstSpread <= MAX_SPREAD ? "PASS" : "FAIL"}  no CV moves more than ${MAX_SPREAD} points (worst ${worstSpread})`);
 console.log(`  ${misses.length === 0 ? "PASS" : "FAIL"}  every quote is in the CV (${quotes - misses.length}/${quotes})`);
+console.log(`  ${wrong.length === 0 ? "PASS" : "FAIL"}  every level matches the answer key (${right}/${right + wrong.length})`);
 console.log(`\nRaw results: ${out}`);
