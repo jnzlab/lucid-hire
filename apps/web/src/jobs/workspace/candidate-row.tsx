@@ -24,9 +24,9 @@ const plainClick = (event: MouseEvent) => event.button === 0 && !event.metaKey &
 // square per requirement, the evidence chips, the decision and the score. The best match sits on the marker band
 // (design system §3); its ring belongs to the detail pane, not the list. The selected row has a 3px ink bar and the
 // paper-2 fill, and says so to screen readers with aria-current. A CV still being read, or one that failed, says so
-// where the headline would be, and one that can be scored again has Retry beside the link (Re-read for a CV scored
-// before the job had requirements). Right after a re-rank, a row that moved shows ↑n or ↓n and its score counts to
-// the new one.
+// where the headline would be, and one that can be scored again has Retry beside the link. A CV scored before the job
+// had requirements only says so in a quiet line: its Re-read is on the candidate page, so a long list of them stays
+// calm. Right after a re-rank, a row that moved shows ↑n or ↓n and its score counts to the new one.
 export function CandidateRow({
 	jobId,
 	candidate,
@@ -115,7 +115,7 @@ export function CandidateRow({
 						<DecisionTag decision={candidate.decision} />
 					</span>
 					<Detail candidate={candidate} top={top} />
-					<Requirements candidate={candidate} muted={muted} />
+					<Requirements candidate={candidate} muted={muted} top={top} />
 					{candidate.status === "scored" && (
 						<CandidateTags
 							matches={candidate.matches.slice(0, 2)}
@@ -130,7 +130,7 @@ export function CandidateRow({
 					</span>
 				)}
 			</a>
-			{candidate.canRetry ? <RetryButton jobId={jobId} candidate={candidate} /> : <span />}
+			{candidate.canRetry && !candidate.scoredBeforeRequirements ? <RetryButton jobId={jobId} candidate={candidate} /> : <span />}
 		</li>
 	);
 }
@@ -149,12 +149,12 @@ function Detail({ candidate, top }: { candidate: CandidateSummary; top: boolean 
 }
 
 // A square per requirement in the job's order, with "Checking" while a Check all reads the CV again. A CV scored
-// before the job had requirements has no squares; it says so instead, beside its Re-read.
-function Requirements({ candidate, muted }: { candidate: CandidateSummary; muted: boolean }) {
+// before the job had requirements has no squares; it says so instead.
+function Requirements({ candidate, muted, top }: { candidate: CandidateSummary; muted: boolean; top: boolean }) {
 	if (candidate.status !== "scored") return null;
 	if (candidate.scoredBeforeRequirements) {
 		return (
-			<span className="self-start rounded-md border border-line bg-paper-2 px-2 py-0.5 font-mono text-[11.5px] leading-[1.4] text-ink-2">
+			<span className={`block truncate font-mono text-[11.5px] leading-[1.3] ${top ? "text-on-marker" : "text-ink-muted"}`}>
 				Scored before requirements were set
 			</span>
 		);
@@ -187,13 +187,11 @@ function Reading({ candidate, line }: { candidate: CandidateSummary; line: strin
 	);
 }
 
-// Scores a failed (or stuck) CV again, or reads one scored before the job had requirements against them. Each row
-// keeps its own state; while it runs the button only looks disabled, so it keeps keyboard focus, and the click is
-// ignored.
+// Scores a failed (or stuck) CV again. Each row keeps its own state; while it runs the button only looks disabled, so
+// it keeps keyboard focus, and the click is ignored.
 function RetryButton({ jobId, candidate }: { jobId: string; candidate: CandidateSummary }) {
 	const retry = useRetryCandidate(jobId);
-	const reread = candidate.scoredBeforeRequirements;
-	const label = retry.isPending ? (reread ? "Re-reading" : "Retrying") : reread ? "Re-read" : "Retry";
+	const label = retry.isPending ? "Retrying" : "Retry";
 	return (
 		<div className="flex flex-col items-end gap-1 py-3 pr-3">
 			<button

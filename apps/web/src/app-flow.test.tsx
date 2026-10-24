@@ -4675,7 +4675,7 @@ describe("requirements", () => {
 		expect(squares[2].className).toMatch(/opacity-30/);
 	});
 
-	it("tags a CV scored before the job had requirements, keeps its score, and offers Re-read", async () => {
+	it("tags a CV scored before the job had requirements and keeps its score, leaving Re-read to its page", async () => {
 		candidates = [
 			...threeCvs(),
 			fakeCandidate({ id: "cand_old", name: "Ola Berg", score: 80, scoredBeforeRequirements: true, canRetry: true, scoredAt: "2026-10-21T12:00:00Z" }),
@@ -4687,8 +4687,7 @@ describe("requirements", () => {
 		expect(within(old).queryAllByRole("img")).toHaveLength(0);
 		expect(within(old).getByRole("link").textContent).toMatch(/Score 80$/);
 
-		fireEvent.click(within(old).getByRole("button", { name: "Re-read Ola Berg" }));
-		await waitFor(() => expect(candidates.find(({ id }) => id === "cand_old")?.status).toBe("queued"));
+		expect(within(old).queryByRole("button")).toBeNull();
 	});
 
 	it("shows each requirement on the candidate page with its weight, level and the line from the CV", async () => {
