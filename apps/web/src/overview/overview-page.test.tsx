@@ -212,7 +212,8 @@ const summary = () => screen.getByRole("heading", { level: 1, name: "Overview" }
 // Every card has its numbers once none says it is loading.
 const cardsLoaded = async () => {
 	await screen.findByRole("heading", { level: 1, name: "Overview" }, { timeout: 4000 });
-	await waitFor(() => expect(screen.queryByText(/^Loading /)).toBeNull());
+	// queryAll: several cards can still be loading at once, and a busy machine needs more than the default second.
+	await waitFor(() => expect(screen.queryAllByText(/^Loading /)).toHaveLength(0), { timeout: 4000 });
 	await screen.findByRole("region", { name: "Key numbers" });
 };
 
