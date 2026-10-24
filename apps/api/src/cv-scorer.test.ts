@@ -133,8 +133,9 @@ describe("scoreCvWithGemini", () => {
 		expect(parts[0].text).toContain("Senior iOS Engineer");
 		expect(parts[0].text).toContain("Swift 5+ years, SwiftUI, Combine.");
 		// The fixed requirements, each under the id its evidence comes back with.
-		expect(parts[0].text).toContain("[r1] Swift: 5+ years of Swift");
-		expect(parts[0].text).toContain("[r4] Combine: Combine");
+		expect(parts[0].text).toContain("[r1] 5+ years of Swift");
+		expect(parts[0].text).not.toContain("[r1] Swift:");
+		expect(parts[0].text).toContain("[r4] Combine");
 		expect(parts[1].fileData).toMatchObject({
 			fileUri: "https://generativelanguage.googleapis.com/v1beta/files/abc123",
 			mimeType: "application/pdf",

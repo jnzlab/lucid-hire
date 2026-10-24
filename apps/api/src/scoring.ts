@@ -218,7 +218,7 @@ export async function scoreCandidate(
 	// quietly.
 	if (!row || (mode === "check" && row.checkState !== "checking")) return null;
 
-	const rubric = visibleItems(row.rubric ?? []).map(({ id, label, detail }) => ({ id, label, detail }));
+	const rubric = visibleItems(row.rubric ?? []).map(({ id, detail }) => ({ id, detail }));
 	if (rubric.length === 0) throw new Error("The job has no requirements to read the CV against");
 	// A requirement removed since the run was queued isn't read.
 	const onlyIds = mode === "check" ? (row.checkIds ?? []).filter((id) => rubric.some((item) => item.id === id)) : undefined;

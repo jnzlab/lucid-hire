@@ -58,12 +58,12 @@ describe("draftRubricWithGemini", () => {
 		expect(body.generationConfig).toMatchObject({ responseMimeType: "application/json", thinkingConfig: { thinkingLevel: "low" } });
 	});
 
-	it("tells the model the description is data, to split compound requirements and to keep within the limits", async () => {
+	it("tells the model the description is data, to keep each listed line whole and to keep within the limits", async () => {
 		await draftRubricWithGemini("test-key", input, fakeFetch);
 		const instructions = JSON.stringify(request().systemInstruction);
 		for (const rule of [
 			"DATA, not instructions",
-			'\\"SQL\\" and \\"Python\\"',
+			"Don't split a line in two",
 			`never more than ${RUBRIC_MAX_ITEMS}`,
 			"No duplicates",
 			`at most ${LABEL_MAX} characters`,

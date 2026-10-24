@@ -52,7 +52,7 @@ const RUBRIC: RubricItem[] = [
 	{ id: "r4", label: "Kotlin", detail: "Kotlin", weight: "nice" },
 	{ id: "r5", label: "Combine", detail: "Combine", weight: "must", removed: true },
 ];
-const VISIBLE = RUBRIC.filter((item) => !item.removed).map(({ id, label, detail }) => ({ id, label, detail }));
+const VISIBLE = RUBRIC.filter((item) => !item.removed).map(({ id, detail }) => ({ id, detail }));
 
 const evidence: EvidenceMap = {
 	r1: { level: "clear", quote: "Six years of Swift" },

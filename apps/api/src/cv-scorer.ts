@@ -13,8 +13,9 @@ import { type AiResult, GEMINI_TEXT_MODEL } from "./ai.ts";
 import { cvProfileSchema, tidyProfile } from "./cv-profile.ts";
 import type { CandidateProfile } from "./db/schema.ts";
 
-// A requirement as the scorer sees it: the job's wording, and the id the evidence comes back under.
-export type ScoredRequirement = Pick<RubricItem, "id" | "label" | "detail">;
+// A requirement as the scorer sees it: the job's wording, and the id the evidence comes back under. The label is only
+// the recruiter's short name for it, so it isn't sent: renaming a requirement never changes how CVs are read.
+export type ScoredRequirement = Pick<RubricItem, "id" | "detail">;
 
 // What the CV shows for each requirement, as Gemini answers it. The quote comes first so the model looks for the
 // evidence before it judges it.
@@ -187,7 +188,7 @@ export const scoreCvWithGemini = async (
 							"</job_description>",
 							"",
 							"<requirements>",
-							...requirements.map(({ id, label, detail }) => `[${id}] ${label}: ${detail}`),
+							...requirements.map(({ id, detail }) => `[${id}] ${detail}`),
 							"</requirements>",
 							"",
 							"The candidate's CV is attached as a PDF.",
@@ -201,6 +202,10 @@ export const scoreCvWithGemini = async (
 			model: google(GEMINI_TEXT_MODEL),
 			messages,
 			maxOutputTokens: 8192,
+			// The same CV against the same list should come back the same every time, so borderline calls (partial or
+			// none) aren't left to sampling.
+			temperature: 0,
+			seed: 1,
 			// The Workflow step retries with a longer backoff; quick SDK retries would only spend the daily quota.
 			maxRetries: 0,
 			// Matching a CV to a job needs little reasoning, and a call normally takes 10 to 25 seconds. One still
