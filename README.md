@@ -56,9 +56,15 @@ scores the four fictional sample CVs five times each against the job's own
 requirement lines with the production code. It reports the spread of each
 score, the rank order of each run, which levels moved between identical runs,
 how many levels match the answer key the CVs were written to, and whether
-every quote is in the CV. On 24 October 2026 all 20
-reads matched the answer key (120 of 120 levels), every score came back the
-same in all five runs (93, 71, 54, 50), and all 90 quotes were word for word.
+every quote is in the CV and shows work rather than a goal. On 24 October 2026
+every score came back the same in all five runs (93, 61, 54, 50), the rank
+order matched in every run, and all 85 quotes were word for word and showed
+work. 115 of 120 levels matched the answer key. The five misses are one
+requirement on one CV: Kenji's "Improved scrolling in the home feed by
+prefetching and caching images" was written as partial performance work, and
+the scorer reads it as none. Until the scorer was told to quote work and never
+a goal, it gave that requirement partial by quoting his goal ("Looking to go
+deeper on performance tuning"), which matched the key for the wrong reason.
 
 Recruiters mark each candidate Shortlisted, Rejected or Undecided, keep a
 shared note, and open the original PDF. The ranked list shows each decision and
