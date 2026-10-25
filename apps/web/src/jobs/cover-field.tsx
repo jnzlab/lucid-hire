@@ -61,7 +61,14 @@ export function StagedCoverField({ file, onChange }: { file: File | null; onChan
 	const [problem, setProblem] = useState<string | null>(null);
 	const [announcement, setAnnouncement] = useState("");
 	const inputRef = useRef<HTMLInputElement>(null);
-	const src = useObjectUrl(file);
+	// The preview is made when the file is chosen; each one is let go once it's replaced, removed or the page closes.
+	const [src, setSrc] = useState<string | null>(null);
+	useEffect(
+		() => () => {
+			if (src) URL.revokeObjectURL(src);
+		},
+		[src],
+	);
 
 	const choose = (chosen: File) => {
 		const found = checkCover(chosen);
@@ -69,12 +76,14 @@ export function StagedCoverField({ file, onChange }: { file: File | null; onChan
 		setAnnouncement("");
 		if (found) return;
 		onChange(chosen);
+		setSrc(URL.createObjectURL(chosen));
 		setAnnouncement("Cover image added. It uploads when you save the job.");
 	};
 
 	const clear = () => {
 		setProblem(null);
 		onChange(null);
+		setSrc(null);
 		setAnnouncement("Cover image removed");
 		inputRef.current?.focus();
 	};
@@ -93,21 +102,6 @@ export function StagedCoverField({ file, onChange }: { file: File | null; onChan
 			error={problem}
 		/>
 	);
-}
-
-// A preview URL for a local file, revoked when the file changes or the field goes away.
-function useObjectUrl(file: File | null) {
-	const [url, setUrl] = useState<string | null>(null);
-	useEffect(() => {
-		if (!file) {
-			setUrl(null);
-			return;
-		}
-		const next = URL.createObjectURL(file);
-		setUrl(next);
-		return () => URL.revokeObjectURL(next);
-	}, [file]);
-	return url;
 }
 
 function CoverLayout({
