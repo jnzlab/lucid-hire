@@ -66,7 +66,7 @@ the scorer reads it as none. Until the scorer was told to quote work and never
 a goal, it gave that requirement partial by quoting his goal ("Looking to go
 deeper on performance tuning"), which matched the key for the wrong reason.
 
-Recruiters mark each candidate Shortlisted, Rejected or Undecided, keep a
+Recruiters mark each candidate Shortlisted, Not a fit or Undecided, keep a
 shared note, and open the original PDF. The ranked list shows each decision and
 can be filtered by it.
 
@@ -115,18 +115,18 @@ on failure.
 | Recruiter shares an open job's public link | "Sprite share role" shows its https://lucidhire.io/jobs/… link and a Share menu with Email, X, LinkedIn, WhatsApp, Facebook and "Copy caption". Deletes its job afterwards |
 | Recruiter searches and filters the jobs list | Saves "Sprite search role" as a draft, searches for it and filters to "Draft", and sees only that job. Deletes its job afterwards |
 | Recruiter duplicates a job as a draft | "Duplicate" on "Sprite duplicate role" opens "Sprite duplicate role (copy)" for editing with "Duplicated as a draft". Deletes both jobs afterwards |
-| Overview shows the company dashboard | "Overview", the first page after sign-in, shows active roles, CVs screened, time to shortlist, top match, pipeline velocity, the 90-day funnel, the AI output mix and recent activity |
+| Overview shows the company dashboard | "Overview", the first page after sign-in, shows active roles, CVs screened, time to shortlist, the best new matches, the pipeline, the 90-day funnel, AI usage and recent activity |
 | Collapsed sidebar stays collapsed after a reload | "Collapse sidebar", then a reload, still shows "Expand sidebar" |
 | Recruiter searches the candidate list | Uploads grace-turner.pdf and kenji-tanaka.pdf to "Sprite search candidates role", searches "Kenji", and sees only Kenji Tanaka. Deletes its job afterwards |
 | Candidate page shows the rank and the profile read from the CV | Grace Turner's page in "Sprite profile role" says "Ranked #1 of 1 scored CV for this role" and has a "Profile" section with her skills. Deletes its job afterwards |
-| Recruiter opens the CSV export choices | With kenji-tanaka.pdf in "Sprite export role", "Export CSV" offers all, shortlisted, undecided or rejected candidates. Deletes its job afterwards |
+| Recruiter opens the CSV export choices | With kenji-tanaka.pdf in "Sprite export role", "Export CSV" offers all, shortlisted, undecided or "Not a fit" candidates. Deletes its job afterwards |
 | Settings shows the company's plan, usage and the plans | Settings says "Current plan Max" with "Active", shows the monthly job meter and compares Free, Pro and Max |
 | Pricing button carries the picked plan to sign-up | "Choose Pro" on the landing pricing opens /sign-up?plan=pro |
 | Admin creates a team invite link | The Team section lists the signed-in admin as "You" and "Create invite link" shows an /invite/ link, which the test then revokes |
 | New job page shows the monthly job allowance | The new job page says "Unlimited jobs on your plan" |
-| Recruiter copies a job's public link from the jobs list | The row menu of an open job says "Copied" after "Copy public link". Deletes its job afterwards |
+| Recruiter copies a job's public link from the jobs list | The row menu of an open job says "Apply link copied" after "Copy apply link". Deletes its job afterwards |
 | Sidebar shows the company's plan | The "Max" badge beside "Sprite Labs" opens Settings at "Plan & usage" |
-| Recruiter gives an uploaded CV its applicant's name and email | With "Add a name or email to each CV" on, grace-turner.pdf is staged with the name Grace Sprite and the email grace.sprite@example.com, which the candidate page then shows over what the CV says. Deletes its job afterwards |
+| Recruiter gives an uploaded CV its applicant's email | With "Add a name or email to each CV" on, grace-turner.pdf is staged with the name Grace Sprite and the email grace.sprite@example.com, which the candidate page then shows over what the CV says. Deletes its job afterwards |
 | A malformed email holds a staged upload back | A staged CV with the email "not-an-email" says "Enter a valid email address" and nothing uploads. Deletes its job afterwards |
 
 The recruiter test account's credentials live only in the TestSprite
