@@ -1,5 +1,4 @@
 import type { KeyboardEvent, MouseEvent } from "react";
-import { CandidateTags } from "../../candidates/candidate-tags.tsx";
 import { NoteMark } from "../../components/icons.tsx";
 import {
 	type CandidateSummary,
@@ -14,14 +13,13 @@ import { useNow } from "../../lib/use-now.ts";
 import { Checkbox } from "../../ui/checkbox.tsx";
 import { DecisionTag } from "../../ui/decision-tag.tsx";
 import { TweenedNumber } from "../../ui/tweened-number.tsx";
-import { EvidenceSquares } from "./evidence-squares.tsx";
 import { MoveMark } from "./move-mark.tsx";
 
 // A plain left click, as opposed to one that opens a new tab or window.
 const plainClick = (event: MouseEvent) => event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
 
-// One compact row of the ranked list: the bulk checkbox, then a link holding the rank, the name, the headline, a
-// square per requirement, the evidence chips, the decision and the score. The best match sits on the marker band
+// One compact row of the ranked list: the bulk checkbox, then a link holding the rank, the name, the headline, the
+// decision and the score. The evidence itself is in the detail pane. The best match sits on the marker band
 // (design system §3); its ring belongs to the detail pane, not the list. The selected row has a 3px ink bar and the
 // paper-2 fill, and says so to screen readers with aria-current. A CV still being read, or one that failed, says so
 // where the headline would be, and one that can be scored again has Retry beside the link. A CV scored before the job
@@ -115,14 +113,7 @@ export function CandidateRow({
 						<DecisionTag decision={candidate.decision} />
 					</span>
 					<Detail candidate={candidate} top={top} />
-					<Requirements candidate={candidate} muted={muted} top={top} />
-					{candidate.status === "scored" && (
-						<CandidateTags
-							matches={candidate.matches.slice(0, 2)}
-							gaps={candidate.gaps.slice(0, 1)}
-							className={`gap-x-2.5 gap-y-1 ${muted ? "opacity-75" : ""}`}
-						/>
-					)}
+					<Requirements candidate={candidate} top={top} />
 				</span>
 				{candidate.status === "scored" && candidate.score !== null && (
 					<span className={`self-center font-display text-[30px] leading-none font-[800] tabular-nums [font-stretch:62%] ${muted ? "text-ink-muted" : ""}`}>
@@ -148,27 +139,16 @@ function Detail({ candidate, top }: { candidate: CandidateSummary; top: boolean 
 	return text ? <span className={line}>{text}</span> : null;
 }
 
-// A square per requirement in the job's order, with "Checking" while a Check all reads the CV again. A CV scored
-// before the job had requirements has no squares; it says so instead.
-function Requirements({ candidate, muted, top }: { candidate: CandidateSummary; muted: boolean; top: boolean }) {
+// "Checking" while a Check all reads the CV again, and a quiet note on a CV scored before the job had requirements.
+function Requirements({ candidate, top }: { candidate: CandidateSummary; top: boolean }) {
 	if (candidate.status !== "scored") return null;
-	if (candidate.scoredBeforeRequirements) {
-		return (
-			<span className={`block truncate font-mono text-[11.5px] leading-[1.3] ${top ? "text-on-marker" : "text-ink-muted"}`}>
-				Scored before requirements were set
-			</span>
-		);
-	}
-	if (candidate.checks.length === 0 && !candidate.checking) return null;
+	const line = `block truncate font-mono text-[12px] leading-[1.3] ${top ? "text-on-marker" : "text-ink-muted"}`;
+	if (candidate.scoredBeforeRequirements) return <span className={line}>Scored before requirements were set</span>;
+	if (!candidate.checking) return null;
 	return (
-		<span className={`flex flex-wrap items-center gap-x-2.5 gap-y-1 ${muted ? "opacity-75" : ""}`}>
-			<EvidenceSquares checks={candidate.checks} />
-			{candidate.checking && (
-				<span className="inline-flex items-center gap-1.5 font-mono text-[11.5px] leading-[1.3] text-ink-muted">
-					<span className="live-dot" aria-hidden="true" />
-					Checking…
-				</span>
-			)}
+		<span className="inline-flex items-center gap-1.5 font-mono text-[11.5px] leading-[1.3] text-ink-muted">
+			<span className="live-dot" aria-hidden="true" />
+			Checking…
 		</span>
 	);
 }

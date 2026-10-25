@@ -2720,7 +2720,7 @@ describe("candidates", () => {
 		expect(await chooser()).toBeTruthy();
 	});
 
-	it("ranks scored CVs best first, with yellow matches and pink gaps, then the ones still being read", async () => {
+	it("ranks scored CVs best first, then the ones still being read, without skill tags on the rows", async () => {
 		jobs = [openJob({ cvCount: 4 })];
 		candidates = [
 			fakeCandidate({
@@ -2760,10 +2760,10 @@ describe("candidates", () => {
 		const links = within(list).getAllByRole("link");
 		expect(links[0].getAttribute("href")).toBe("/dashboard/jobs/job_1/candidates/cand_grace");
 
-		// Matches are yellow marks; a gap is a pink mark with a ✕, and both are words.
-		expect(screen.getAllByText("SwiftUI").every((tag) => tag.className.includes("mk"))).toBe(true);
-		expect(screen.getByText("Instruments").className).not.toContain("mk-gap");
-		expect(screen.getByText("✕ Kotlin MP").className).toContain("mk-gap");
+		// The rows stay plain: the matches and gaps are in the detail pane, not marked up in the list.
+		expect(within(list).queryByText("SwiftUI")).toBeNull();
+		expect(within(list).queryByText("✕ Kotlin MP")).toBeNull();
+		expect(list.querySelector(".mk")).toBeNull();
 		expect(screen.getByText("2 of 4 read · 1 failed")).toBeTruthy();
 	});
 
@@ -4731,7 +4731,7 @@ describe("requirements", () => {
 		expect(jobs[0].rubricStatus).toBe("none");
 	});
 
-	it("shows a square per requirement on each row, named for screen readers, and dims an Off one", async () => {
+	it("keeps the rows plain: no requirement squares or counts, only the score", async () => {
 		jobs = [requirementsJob({ rubric: [{ ...swift }, { ...swiftUi }, { ...kotlin, weight: "off" }] })];
 		candidates = threeCvs().map((candidate) => ({
 			...candidate,
@@ -4740,13 +4740,9 @@ describe("requirements", () => {
 		renderAt("/dashboard/jobs/job_1");
 		const list = within(await screen.findByRole("list", { name: "Candidates" }));
 		const kenji = list.getAllByRole("listitem").find((row) => row.textContent?.includes("Kenji Sato"));
-		const squares = within(kenji!).getAllByRole("img");
-		expect(squares.map((square) => square.getAttribute("aria-label"))).toEqual([
-			"Swift: clear",
-			"SwiftUI: partial",
-			"Kotlin MP: clear, off",
-		]);
-		expect(squares[2].className).toMatch(/opacity-30/);
+		expect(within(kenji!).queryByText(/requirements met/)).toBeNull();
+		expect(within(kenji!).queryAllByRole("img")).toHaveLength(0);
+		expect(within(kenji!).getByRole("link").textContent).toMatch(/Score \d+$/);
 	});
 
 	it("tags a CV scored before the job had requirements and keeps its score, leaving Re-read to its page", async () => {
