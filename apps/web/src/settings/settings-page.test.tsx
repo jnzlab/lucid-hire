@@ -489,23 +489,11 @@ describe("after checkout", () => {
 });
 
 describe("Account", () => {
-	it("shows Appearance above Clerk's profile, which routes under the account page", async () => {
+	it("shows Clerk's profile, which routes under the account page, and leaves the theme to the account menu", async () => {
 		renderAt("/dashboard/settings/account");
 		const profile = await screen.findByText("Clerk profile panel", {}, { timeout: 5000 });
 		expect(profile.getAttribute("data-path")).toBe("/dashboard/settings/account");
 		expect(document.title).toBe("Account · LucidHire");
-		const group = screen.getByRole("radiogroup", { name: "Appearance" });
-		expect((within(group).getByRole("radio", { name: /System/ }) as HTMLInputElement).checked).toBe(true);
-	});
-
-	it("switches the dashboard's theme and remembers it", async () => {
-		renderAt("/dashboard/settings/account");
-		const group = await screen.findByRole("radiogroup", { name: "Appearance" }, { timeout: 5000 });
-		fireEvent.click(within(group).getByRole("radio", { name: /Dark/ }));
-		await waitFor(() => expect(document.documentElement.classList.contains("dark")).toBe(true));
-		expect(localStorage.getItem("lh-theme")).toBe("dark");
-		fireEvent.click(within(group).getByRole("radio", { name: /Light/ }));
-		await waitFor(() => expect(document.documentElement.classList.contains("dark")).toBe(false));
-		expect(localStorage.getItem("lh-theme")).toBe("light");
+		expect(screen.queryByRole("radiogroup", { name: "Appearance" })).toBeNull();
 	});
 });
