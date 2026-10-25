@@ -60,7 +60,11 @@ export function CandidateRow({
 	const muted = candidate.decision === "rejected";
 
 	return (
-		<li className={`relative grid grid-cols-[44px_minmax(0,1fr)_auto] items-start ${top ? "rank-band" : ""} ${selected ? "bg-paper-2" : ""}`}>
+		// The focus ring goes round the whole row, checkbox included, rather than the link alone, where it cut across the
+		// rank.
+		<li
+			className={`relative grid grid-cols-[44px_minmax(0,1fr)_auto] items-start has-[>a:focus-visible]:outline-3 has-[>a:focus-visible]:outline-offset-[-3px] has-[>a:focus-visible]:outline-ink has-[>a:focus-visible]:outline-solid ${top ? "rank-band" : ""} ${selected ? "bg-paper-2" : ""}`}
+		>
 			{selected && <span className="absolute inset-y-0 left-0 w-[3px] bg-ink" aria-hidden="true" />}
 			<Checkbox
 				hideLabel
@@ -89,7 +93,7 @@ export function CandidateRow({
 					event.preventDefault();
 					onOpen();
 				}}
-				className="group grid min-h-16 min-w-0 grid-cols-[24px_minmax(0,1fr)_auto] items-start gap-x-2.5 rounded-[3px] py-2.5 pr-3 focus-visible:outline-offset-[-3px]"
+				className="group grid min-h-16 min-w-0 grid-cols-[24px_minmax(0,1fr)_auto] items-start gap-x-2.5 py-2.5 pr-3 focus-visible:outline-none"
 			>
 				<span className={`pt-[3px] font-mono text-[12px] leading-[1.3] tabular-nums ${top ? "" : "text-ink-faint"}`} aria-hidden="true">
 					{rank ?? "–"}
