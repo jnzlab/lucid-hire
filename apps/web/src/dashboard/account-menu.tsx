@@ -84,7 +84,7 @@ function ThemeItems({ preference, onChange }: { preference: ThemePreference; onC
 						aria-checked={preference === option.value}
 						tabIndex={-1}
 						onClick={() => onChange(option.value)}
-						className={`min-h-9 rounded-md border-[1.5px] pointer-coarse:min-h-11 text-[13.5px] font-semibold focus-visible:outline-2 focus-visible:-outline-offset-2 ${preference === option.value ? "border-ink bg-sheet text-ink" : "border-transparent text-ink-muted hover:text-ink focus:bg-sheet"}`}
+						className={`min-h-9 rounded-md border-[1.5px] pointer-coarse:min-h-11 text-[13.5px] font-semibold focus-visible:outline-2 focus-visible:-outline-offset-2 ${preference === option.value ? "border-ink bg-sheet text-ink" : "border-transparent text-ink-muted hover:text-ink focus-visible:text-ink"}`}
 					>
 						{option.label}
 					</button>
