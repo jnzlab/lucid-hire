@@ -88,7 +88,7 @@ const zeros: Overview = {
 	kpis: {
 		activeRoles: { value: 0, change: 0 },
 		cvsScreened: { value: 0, thisMonth: 0, lastMonth: 0 },
-		avgTimeToShortlist: { hours: null, previousHours: null },
+		awaitingDecision: { value: 0, scoredThisWeek: 0 },
 		topMatch: null,
 	},
 	velocity: { days: DAYS.map((date) => ({ date, uploaded: 0 })), totals: { received: 0, scored: 0, shortlisted: 0 } },
@@ -101,7 +101,7 @@ const busy: Overview = {
 	kpis: {
 		activeRoles: { value: 5, change: 3 },
 		cvsScreened: { value: 120, thisMonth: 40, lastMonth: 55 },
-		avgTimeToShortlist: { hours: 6.4, previousHours: 9.4 },
+		awaitingDecision: { value: 8, scoredThisWeek: 3 },
 		topMatch: { score: 94, candidateName: "Ada Lovelace", candidateId: "c_ada", jobId: "job_1", jobTitle: "Staff Engineer" },
 	},
 	velocity: {
@@ -368,8 +368,10 @@ describe("overview page", () => {
 		expect(kpis.getByText("+3 opened vs last month")).toBeTruthy();
 		expect(kpis.getByText("CVs screened").nextElementSibling?.textContent).toBe("120");
 		expect(kpis.getByText("−15 vs last month")).toBeTruthy();
-		expect(kpis.getByText("Avg. time to shortlist").nextElementSibling?.textContent).toBe("6.4h");
-		expect(kpis.getByText("3.0 h faster than the 30 days before")).toBeTruthy();
+		expect(kpis.getByText("Awaiting a decision").nextElementSibling?.textContent).toBe("8");
+		const awaiting = kpis.getByRole("link", { name: /Awaiting a decision/ });
+		expect(awaiting.getAttribute("href")).toBe("/dashboard/candidates?decision=review");
+		expect(awaiting.textContent).toContain("3 scored this week · Review");
 		expect(kpis.queryByText(/Top match/i)).toBeNull();
 	});
 
@@ -515,8 +517,8 @@ describe("overview page", () => {
 		const kpis = region("Key numbers");
 		expect(kpis.getByText("No open jobs. Open one to take CVs.")).toBeTruthy();
 		expect(kpis.getByText("Scored CVs are counted here.")).toBeTruthy();
-		expect(kpis.getByText("Shortlist a CV to see this")).toBeTruthy();
-		expect(kpis.getByText("Avg. time to shortlist").nextElementSibling?.textContent).toBe("—");
+		expect(kpis.getByText("Nothing waiting. Scored CVs land here.")).toBeTruthy();
+		expect(kpis.getByText("Awaiting a decision").nextElementSibling?.textContent).toBe("0");
 		const pipeline = region("Pipeline");
 		expect(pipeline.getByText(/No CVs uploaded in the last 10 days/)).toBeTruthy();
 		expect(pipeline.queryByRole("img")).toBeNull();

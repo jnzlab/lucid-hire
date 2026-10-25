@@ -23,7 +23,8 @@ export type ActivityEvent = {
 export type OverviewKpis = {
 	activeRoles: { value: number; change: number };
 	cvsScreened: { value: number; thisMonth: number; lastMonth: number };
-	avgTimeToShortlist: { hours: number | null; previousHours: number | null };
+	// Scored CVs nobody has decided on ("To review" on the candidates page); scoredThisWeek is those scored in 7 days.
+	awaitingDecision: { value: number; scoredThisWeek: number };
 	topMatch: { score: number; candidateName: string; candidateId: string; jobId: string; jobTitle: string } | null;
 };
 export type OverviewVelocity = { days: Array<{ date: string; uploaded: number }>; totals: FunnelCounts };
