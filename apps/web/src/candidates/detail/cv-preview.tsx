@@ -15,8 +15,8 @@ export function OpenCvAction({ cv, className = "btn ghost xs", label = "Open CV"
 	);
 }
 
-// The CV itself, on the desk (design system §3): the PDF in the browser's own viewer on a sheet, with the file's
-// name and a way to open it in a new tab under it. Phones and tablets don't show PDFs inside a page, so `inline` is
+// The CV itself, on the desk (design system §3): the file's name and a way to open it in a new tab, then the PDF in
+// the browser's own viewer on a sheet. Phones and tablets don't show PDFs inside a page, so `inline` is
 // off there and the sheet offers Open CV instead. While the file loads, or when it can't, the sheet says so.
 export function CvPreview({
 	name,
@@ -60,6 +60,17 @@ export function CvPreview({
 
 	return (
 		<div className="desk rounded-2xl p-3 sm:p-5">
+			<div className="mb-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+				<p className="min-w-0 font-mono text-[12.5px] text-ink-muted [overflow-wrap:anywhere]">
+					{fileName} · {formatFileSize(fileSize)}
+				</p>
+				{inline && <OpenCvAction cv={cv} label="Open in a new tab" />}
+			</div>
+			{cv.error && (
+				<p role="alert" className="mb-3 text-[14px] text-gap-ink">
+					✕ {cv.error}
+				</p>
+			)}
 			{!inline ? (
 				fallback(fileName, "Open the PDF to read it in your browser's viewer.")
 			) : preview.state === "ready" ? (
@@ -83,17 +94,6 @@ export function CvPreview({
 						<span className="skeleton h-3 w-4/5" />
 					</span>
 				</div>
-			)}
-			<div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-				<p className="min-w-0 font-mono text-[12.5px] text-ink-muted [overflow-wrap:anywhere]">
-					{fileName} · {formatFileSize(fileSize)}
-				</p>
-				{inline && <OpenCvAction cv={cv} label="Open in a new tab" />}
-			</div>
-			{cv.error && (
-				<p role="alert" className="mt-2 text-[14px] text-gap-ink">
-					✕ {cv.error}
-				</p>
 			)}
 		</div>
 	);
