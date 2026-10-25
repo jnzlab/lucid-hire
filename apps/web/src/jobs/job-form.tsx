@@ -1,16 +1,15 @@
 import { useBlocker } from "@tanstack/react-router";
+import { ExternalLink } from "lucide-react";
 import { type FormEvent, type ReactNode, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { ConfirmDialog } from "../components/confirm-dialog.tsx";
-import { useOrg } from "../dashboard/org.ts";
 import { ApiError } from "../lib/api.ts";
 import { useHotkeys } from "../lib/hotkeys.ts";
 import { JOB_TITLE_MAX, JOB_TITLE_MIN, type Job, type JobInput, type JobStatus } from "../lib/jobs.ts";
 import { useMediaQuery } from "../lib/use-media-query.ts";
 import { useToastLift } from "../ui/use-toast-lift.ts";
-import { CoverField } from "./cover-field.tsx";
+import { CoverField, StagedCoverField } from "./cover-field.tsx";
 import { BriefCheckCard } from "./editor/brief-check-card.tsx";
-import { CandidateView } from "./editor/candidate-view.tsx";
 import { type DescriptionTab, DescriptionField } from "./editor/description-field.tsx";
 import { PublishActions, PublishCard } from "./editor/publish-card.tsx";
 import { type EditorMode, statusChoices, submitLabel } from "./editor/publish.ts";
@@ -25,7 +24,8 @@ type JobFormProps = {
 	mode: EditorMode;
 	// The saved job, on the edit page.
 	job?: Job;
-	onSave: (input: JobInput, status: JobStatus) => void;
+	// `cover` is the image chosen on a new job, which the page uploads once the job exists (always null on edit).
+	onSave: (input: JobInput, status: JobStatus, cover: File | null) => void;
 	saving: boolean;
 	saveError: Error | null;
 	// Where Cancel goes: the jobs list for a new job, the job for an edit.
@@ -36,15 +36,16 @@ type JobFormProps = {
 	blocked?: ReactNode;
 };
 
-// The job editor (spec §4.3): title, description and cover on the left; Publish, Brief check and Candidate view in a
-// sticky column on the right from 1100px. Unsaved typing is guarded against every way out, and Ctrl/⌘+Enter saves
-// from anywhere in the form.
+// The job editor (spec §4.3): title, description and cover on the left; Publish and Brief check in a sticky column on
+// the right from 1100px. Unsaved typing is guarded against every way out, and Ctrl/⌘+Enter saves from anywhere in the
+// form.
 export function JobForm({ mode, job, onSave, saving, saveError, cancelHref, allowance, blocked }: JobFormProps) {
-	const org = useOrg();
 	const saved: JobInput = { title: job?.title ?? "", description: job?.description ?? "" };
 	const [title, setTitle] = useState(saved.title);
 	const [description, setDescription] = useState(saved.description);
 	const [status, setStatus] = useState<JobStatus>(job?.status ?? "open");
+	// A saved job's cover saves on its own (CoverField); a new job's waits for the save.
+	const [cover, setCover] = useState<File | null>(null);
 	const [errors, setErrors] = useState<FieldErrors>({});
 	const [tab, setTab] = useState<DescriptionTab>("write");
 	const formRef = useRef<HTMLFormElement>(null);
@@ -60,8 +61,9 @@ export function JobForm({ mode, job, onSave, saving, saveError, cancelHref, allo
 	});
 
 	// Unsaved typing is lost by leaving, whether by a link, Cancel, Back or closing the tab. The pages navigate with
-	// `ignoreBlocker` after a save, so a save is never held up. A status flipped on a new job loses nothing.
-	const dirty = isDirty({ title, description }, saved) || (mode === "edit" && status !== job?.status);
+	// `ignoreBlocker` after a save, so a save is never held up. A status flipped on a new job loses nothing; a chosen
+	// cover would.
+	const dirty = isDirty({ title, description }, saved) || (mode === "edit" && status !== job?.status) || cover !== null;
 	const leaving = useBlocker({ shouldBlockFn: () => dirty, enableBeforeUnload: dirty, withResolver: true });
 
 	const serverFields = saveError instanceof ApiError ? saveError.fields : {};
@@ -86,7 +88,7 @@ export function JobForm({ mode, job, onSave, saving, saveError, cancelHref, allo
 		// Focus goes to the first field with a problem, so its message is read out and fixing it is one keystroke away.
 		if (found.title) titleRef.current?.focus();
 		else if (found.description) focusDescription();
-		else onSave(input, status);
+		else onSave(input, status, job ? null : cover);
 	};
 
 	useHotkeys([
@@ -175,26 +177,22 @@ export function JobForm({ mode, job, onSave, saving, saveError, cancelHref, allo
 				/>
 
 				<div className="border-t border-line-2 pt-6">
-					{job ? (
-						<CoverField job={job} />
-					) : (
-						<>
-							<p className="text-[14px] font-semibold text-ink">Cover image</p>
-							<p className="mt-1 text-[13px] text-ink-muted">Optional. You can add one from Edit job once the job is saved.</p>
-						</>
-					)}
+					{job ? <CoverField job={job} /> : <StagedCoverField file={cover} onChange={setCover} />}
 				</div>
 			</div>
 
 			{/* On a tablet the side cards pair up under the editor; from 1100px they stack in the sticky column. */}
 			<div className="grid min-w-0 items-start gap-6 @min-[640px]:grid-cols-2 min-[1100px]:sticky min-[1100px]:top-6 min-[1100px]:flex min-[1100px]:flex-col">
-				<PublishCard choices={statusChoices(mode, job?.status)} status={status} onStatus={setStatus} allowance={allowance}>
+				<PublishCard
+					choices={statusChoices(mode, job?.status)}
+					status={status}
+					onStatus={setStatus}
+					allowance={allowance}
+					preview={job && job.status !== "draft" && <ApplyPageLink slug={job.slug} />}
+				>
 					{wide && actions("card")}
 				</PublishCard>
 				<BriefCheckCard description={description} />
-				<div className="min-w-0 @min-[640px]:col-span-2">
-					<CandidateView title={title} status={status} company={org.name} job={job} />
-				</div>
 			</div>
 
 			{!wide && <SaveBar>{actions("bar")}</SaveBar>}
@@ -211,6 +209,22 @@ export function JobForm({ mode, job, onSave, saving, saveError, cancelHref, allo
 				</ConfirmDialog>
 			)}
 		</form>
+	);
+}
+
+// The saved job's public apply page, in a new tab. It shows what was last saved, not what's being typed.
+function ApplyPageLink({ slug }: { slug: string }) {
+	return (
+		<a
+			href={`/jobs/${slug}`}
+			target="_blank"
+			rel="noopener noreferrer"
+			className="inline-flex min-h-11 items-center gap-1.5 rounded-[3px] text-[14px] font-semibold underline underline-offset-[.18em]"
+		>
+			Open apply page
+			<ExternalLink size={16} strokeWidth={2} aria-hidden="true" />
+			<span className="sr-only">(opens in a new tab)</span>
+		</a>
 	);
 }
 

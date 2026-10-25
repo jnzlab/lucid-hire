@@ -136,19 +136,25 @@ export function PublishCard({
 	status,
 	onStatus,
 	allowance,
+	preview,
 	children,
 }: {
 	choices: StatusChoice[];
 	status: JobStatus;
 	onStatus: (status: JobStatus) => void;
 	allowance?: ReactNode;
+	// A link to the live apply page, beside the heading (a saved job candidates can see).
+	preview?: ReactNode;
 	children?: ReactNode;
 }) {
 	return (
 		<section aria-labelledby="publish-h" className="rounded-xl bg-sheet p-5 shadow-card min-[561px]:p-6">
-			<h2 id="publish-h" className="text-[18px] leading-[1.2] font-[800] tracking-[-0.01em] [font-stretch:108%]">
-				Publish
-			</h2>
+			<div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+				<h2 id="publish-h" className="text-[18px] leading-[1.2] font-[800] tracking-[-0.01em] [font-stretch:108%]">
+					Publish
+				</h2>
+				{preview}
+			</div>
 			<div className="mt-4">
 				<StatusChoices choices={choices} value={status} onChange={onStatus} />
 			</div>

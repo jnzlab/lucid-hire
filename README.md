@@ -115,7 +115,7 @@ on failure.
 | Recruiter shares an open job's public link | "Sprite share role" shows its https://lucidhire.io/jobs/… link and a Share menu with Email, X, LinkedIn, WhatsApp, Facebook and "Copy caption". Deletes its job afterwards |
 | Recruiter searches and filters the jobs list | Saves "Sprite search role" as a draft, searches for it and filters to "Draft", and sees only that job. Deletes its job afterwards |
 | Recruiter duplicates a job as a draft | "Duplicate" on "Sprite duplicate role" opens "Sprite duplicate role (copy)" for editing with "Duplicated as a draft". Deletes both jobs afterwards |
-| Overview shows the company dashboard | "Overview", the first page after sign-in, shows active roles, CVs screened, time to shortlist, the best new matches, the pipeline, the 90-day funnel, AI usage and recent activity |
+| Overview shows the company dashboard | "Overview", the first page after sign-in, shows active roles, CVs screened, the CVs awaiting a decision, the best new matches, the pipeline, the 90-day funnel, AI usage and recent activity |
 | Collapsed sidebar stays collapsed after a reload | "Collapse sidebar", then a reload, still shows "Expand sidebar" |
 | Recruiter searches the candidate list | Uploads grace-turner.pdf and kenji-tanaka.pdf to "Sprite search candidates role", searches "Kenji", and sees only Kenji Tanaka. Deletes its job afterwards |
 | Candidate page shows the rank and the profile read from the CV | Grace Turner's page in "Sprite profile role" says "Ranked #1 of 1 scored CV for this role" and has a "Profile" section with her skills. Deletes its job afterwards |

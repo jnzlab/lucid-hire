@@ -7,7 +7,8 @@ import { countIf, isReading, isToReview, pipelineByJob, toCount } from "./pipeli
 const DAY = 86_400_000;
 const FUNNEL_DAYS = 90;
 const VELOCITY_DAYS = 10;
-const SHORTLIST_DAYS = 30;
+// "Scored this week" under the awaiting-a-decision count.
+const AWAITING_WEEK_DAYS = 7;
 const ACTIVITY_LIMIT = 8;
 // What the AI output mix counts. Other operations are not shown.
 const DESCRIPTION_OPERATION = "job_description_enhance";
@@ -37,8 +38,9 @@ export type FunnelCounts = { received: number; scored: number; shortlisted: numb
 export type OverviewKpis = {
 	activeRoles: { value: number; change: number };
 	cvsScreened: { value: number; thisMonth: number; lastMonth: number };
-	// Hours from a CV being uploaded to the recruiter shortlisting it; null when nothing was shortlisted.
-	avgTimeToShortlist: { hours: number | null; previousHours: number | null };
+	// Scored CVs nobody has decided on (the candidates page's "To review"), and how many of them were scored in the
+	// last 7 days.
+	awaitingDecision: { value: number; scoredThisWeek: number };
 	topMatch: { score: number; candidateName: string; candidateId: string; jobId: string; jobTitle: string } | null;
 };
 export type OverviewVelocity = { days: Array<{ date: string; uploaded: number }>; totals: FunnelCounts };
@@ -47,7 +49,6 @@ export type OverviewAiMix = { scoring: number; descriptionRewrites: number; inte
 const monthStart = (date: Date, offset = 0) => Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + offset, 1);
 const dayStart = (ms: number) => ms - (ms % DAY);
 const iso = (ms: number) => new Date(ms).toISOString();
-const hours = (ms: number | null) => (ms === null ? null : Math.round((ms / 3_600_000) * 10) / 10);
 const count = (value: unknown) => Number(value ?? 0);
 const candidateLabel = (name: string | null, fileName: string) => name ?? fileName;
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -64,8 +65,7 @@ export async function getOverviewKpis(db: Db, orgId: string, now = new Date()): 
 	const t = now.getTime();
 	const thisMonth = monthStart(now);
 	const lastMonth = monthStart(now, -1);
-	const shortlistFrom = t - SHORTLIST_DAYS * DAY;
-	const shortlistBefore = t - 2 * SHORTLIST_DAYS * DAY;
+	const weekFrom = t - AWAITING_WEEK_DAYS * DAY;
 	const ownCandidates = eq(candidates.orgId, orgId);
 	const ownJobs = eq(jobs.orgId, orgId);
 
@@ -89,8 +89,8 @@ export async function getOverviewKpis(db: Db, orgId: string, now = new Date()): 
 					"scoredLastMonth",
 					sql`${candidates.status} = 'scored' and ${between(candidates.scoredAt, lastMonth, thisMonth)}`,
 				),
-				waitNow: sql<number | null>`avg(case when ${candidates.decision} = 'shortlisted' and ${candidates.decidedAt} >= ${shortlistFrom} then ${candidates.decidedAt} - ${candidates.createdAt} end)`.as("waitNow"),
-				waitBefore: sql<number | null>`avg(case when ${candidates.decision} = 'shortlisted' and ${candidates.decidedAt} >= ${shortlistBefore} and ${candidates.decidedAt} < ${shortlistFrom} then ${candidates.decidedAt} - ${candidates.createdAt} end)`.as("waitBefore"),
+				awaiting: countIf("awaiting", isToReview),
+				awaitingThisWeek: countIf("awaitingThisWeek", sql`${isToReview} and ${between(candidates.scoredAt, weekFrom)}`),
 			})
 			.from(candidates)
 			.where(ownCandidates),
@@ -118,10 +118,7 @@ export async function getOverviewKpis(db: Db, orgId: string, now = new Date()): 
 			thisMonth: count(cs.scoredThisMonth),
 			lastMonth: count(cs.scoredLastMonth),
 		},
-		avgTimeToShortlist: {
-			hours: hours(cs.waitNow === null ? null : Number(cs.waitNow)),
-			previousHours: hours(cs.waitBefore === null ? null : Number(cs.waitBefore)),
-		},
+		awaitingDecision: { value: count(cs.awaiting), scoredThisWeek: count(cs.awaitingThisWeek) },
 		topMatch: best
 			? {
 					score: best.score!,

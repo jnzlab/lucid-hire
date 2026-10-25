@@ -313,9 +313,10 @@
   .tab-bar-item[aria-current="page"]::before,.tab-bar-item[aria-current="true"]::before{content:"";position:absolute;top:0;left:22%;right:22%;height:3px;border-radius:0 0 2px 2px;background:var(--marker)}
   .tab-bar-item:focus-visible{outline-offset:-3px}
 
-  /* The logo mark is an ink square; on dark paper it swaps to the light ink with dark strokes, the band stays yellow. */
-  .dark .logo-mark rect{fill:var(--ink)}
-  .dark .logo-mark path:not([stroke="#FFE84A"]){stroke:var(--paper)}
+  /* On dark paper the logo keeps its colours: the mark stays the ink square, edged so it doesn't sink into the
+     sidebar, and the yellow behind "Hire" runs the letters' full height, so no part of them sits on the dark. */
+  .dark .logo-mark rect{stroke:var(--line);stroke-width:2px;paint-order:stroke}
+  .dark .mk.mk-logo{background-size:100% 100%;background-position:0 50%}
 
   /* The swipe is pale yellow by design; on dark paper it is toned down so it stays a background. */
   .dark .swipe-art{opacity:.3}

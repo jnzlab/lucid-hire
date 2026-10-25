@@ -65,7 +65,7 @@ describe("an empty company", () => {
 		expect(await getOverviewKpis(db, emptyId, NOW)).toEqual({
 			activeRoles: { value: 0, change: 0 },
 			cvsScreened: { value: 0, thisMonth: 0, lastMonth: 0 },
-			avgTimeToShortlist: { hours: null, previousHours: null },
+			awaitingDecision: { value: 0, scoredThisWeek: 0 },
 			topMatch: null,
 		});
 		const funnel = await getOverviewFunnel(db, emptyId, NOW);
@@ -77,6 +77,26 @@ describe("an empty company", () => {
 		expect(velocity.days[9]).toEqual({ date: "2026-10-22", uploaded: 0 });
 		expect(await getOverviewAiMix(db, emptyId, NOW)).toEqual({ scoring: 0, descriptionRewrites: 0, interviewQuestions: 0 });
 		expect(await getOverviewActivity(db, emptyId)).toEqual([]);
+	});
+});
+
+describe("CVs awaiting a decision", () => {
+	let reviewId: string;
+	beforeAll(async () => {
+		reviewId = (await createOrgForUser(db, "user_review", "Review Co")).org.id;
+		await job("j_review_open", reviewId, { status: "open", title: "Open role" });
+		await job("j_review_closed", reviewId, { status: "closed", title: "Closed role" });
+		await cv("j_review_open", reviewId, { status: "scored", score: 80, scoredAt: ago(2) });
+		await cv("j_review_closed", reviewId, { status: "scored", score: 60, scoredAt: ago(10) });
+		await cv("j_review_open", reviewId, { status: "scored", score: 90, scoredAt: ago(1), decision: "shortlisted", decidedAt: ago(1) });
+		await cv("j_review_open", reviewId, { status: "scored", score: 40, scoredAt: ago(3), decision: "rejected", decidedAt: ago(3) });
+		await cv("j_review_open", reviewId, { status: "queued" });
+	});
+
+	it("counts scored, undecided CVs on every job, and those scored in the last 7 days", async () => {
+		const kpis = await getOverviewKpis(db, reviewId, NOW);
+		// The two undecided scored CVs, one of them scored 2 days ago. Decided and unread CVs don't count.
+		expect(kpis.awaitingDecision).toEqual({ value: 2, scoredThisWeek: 1 });
 	});
 });
 
@@ -162,10 +182,10 @@ describe("a busy company", () => {
 		expect(kpis.cvsScreened).toEqual({ value: 4, thisMonth: 2, lastMonth: 1 });
 	});
 
-	it("averages upload-to-shortlist hours over 30 days and the 30 before, shortlisted only", async () => {
+	it("has nothing awaiting a decision once every scored CV is decided", async () => {
 		const kpis = await getOverviewKpis(db, spriteId, NOW);
-		// Ada: 6 h, in the last 30 days. Old Timer: 12 h, decided 42 days ago. Bob was rejected, Ancient is too old.
-		expect(kpis.avgTimeToShortlist).toEqual({ hours: 6, previousHours: 12 });
+		// Ada, Old Timer and Ancient are shortlisted and Bob is rejected; the failed and queued CVs aren't scored.
+		expect(kpis.awaitingDecision).toEqual({ value: 0, scoredThisWeek: 0 });
 	});
 
 	it("finds the top match with its candidate and job", async () => {

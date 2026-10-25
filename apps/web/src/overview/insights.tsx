@@ -46,21 +46,18 @@ function change(delta: number, noun: string, verb?: string) {
 
 const trend = (delta: number) => (delta > 0 ? "up" : delta < 0 ? "down" : undefined);
 
-// Under 48 hours in hours, otherwise in days: [value, unit].
-function duration(hours: number): [string, string] {
-	return hours < 48 ? [hours.toFixed(1), "h"] : [(hours / 24).toFixed(1), "days"];
+function awaitingChange({ value, scoredThisWeek }: OverviewKpis["awaitingDecision"]) {
+	if (value === 0) return "Nothing waiting. Scored CVs land here.";
+	return (
+		<>
+			{formatNumber(scoredThisWeek)} scored this week · <span className="underline-offset-[.18em] group-hover:underline">Review</span>
+			<span aria-hidden="true"> →</span>
+		</>
+	);
 }
 
-function shortlistChange({ hours, previousHours }: OverviewKpis["avgTimeToShortlist"]) {
-	if (hours === null) return "Shortlist a CV to see this";
-	if (previousHours === null) return "No shortlists in the 30 days before";
-	const diff = hours - previousHours;
-	if (Math.abs(diff) < 0.05) return "No change vs the 30 days before";
-	return `${duration(Math.abs(diff)).join(" ")} ${diff < 0 ? "faster" : "slower"} than the 30 days before`;
-}
-
-// Open roles, CVs screened and how long a shortlist takes. Named "Key numbers" rather than "This month" because
-// they aren't all monthly: open roles are now, CVs screened are all time and the shortlist time is the last 30 days.
+// Open roles, CVs screened and the CVs waiting on a decision. Named "Key numbers" rather than "This month" because
+// they aren't all monthly: open roles and the CVs waiting are now, and CVs screened are all time.
 function KeyNumbers({ className }: { className: string }) {
 	const kpis = useOverviewKpis();
 	return (
@@ -81,9 +78,8 @@ function KeyNumbers({ className }: { className: string }) {
 					</div>
 				)}
 			>
-				{({ activeRoles, cvsScreened, avgTimeToShortlist }) => {
+				{({ activeRoles, cvsScreened, awaitingDecision }) => {
 					const screenedDelta = cvsScreened.thisMonth - cvsScreened.lastMonth;
-					const [wait, unit] = avgTimeToShortlist.hours === null ? ["—", undefined] : duration(avgTimeToShortlist.hours);
 					return (
 						<div className="grid gap-3 @min-[560px]:grid-cols-3">
 							<StatTile
@@ -102,12 +98,15 @@ function KeyNumbers({ className }: { className: string }) {
 								change={cvsScreened.value === 0 ? "Scored CVs are counted here." : change(screenedDelta, "last month")}
 								trend={cvsScreened.value === 0 ? undefined : trend(screenedDelta)}
 							/>
-							<StatTile
-								label="Avg. time to shortlist"
-								value={wait}
-								unit={unit}
-								change={shortlistChange(avgTimeToShortlist)}
-							/>
+							{/* The whole card opens the candidates page at "To review", which lists exactly these CVs. */}
+							<Link to="/dashboard/candidates" search={{ decision: "review" }} className="group flex rounded-xl">
+								<StatTile
+									className="w-full"
+									label="Awaiting a decision"
+									value={formatNumber(awaitingDecision.value)}
+									change={awaitingChange(awaitingDecision)}
+								/>
+							</Link>
 						</div>
 					);
 				}}

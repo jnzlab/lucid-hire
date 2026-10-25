@@ -408,6 +408,10 @@ describe("account menu", () => {
 		await waitFor(() => expect(document.documentElement.classList.contains("dark")).toBe(true));
 		// Choosing a theme keeps the menu open, so the change can be seen.
 		expect(within(screen.getByRole("menu")).getByRole("menuitemradio", { name: "Dark" }).getAttribute("aria-checked")).toBe("true");
+		// Only the chosen one is filled: the focused System must not look chosen too.
+		const system = within(screen.getByRole("menu")).getByRole("menuitemradio", { name: "System" });
+		system.focus();
+		expect(system.className).not.toMatch(/\bbg-sheet\b/);
 
 		expect(within(menu).getByRole("menuitem", { name: "Account settings" }).getAttribute("href")).toBe("/dashboard/settings/account");
 		expect(within(menu).getByRole("menuitem", { name: "Plan & billing" }).getAttribute("href")).toBe("/dashboard/settings/billing");

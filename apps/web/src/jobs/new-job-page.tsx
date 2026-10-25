@@ -3,7 +3,7 @@ import { useOrg } from "../dashboard/org.ts";
 import { ApiError } from "../lib/api.ts";
 import { useBilling } from "../lib/billing.ts";
 import { formatNumber } from "../lib/format.ts";
-import { useCreateJob } from "../lib/jobs.ts";
+import { type Job, useCreateJob, useUploadCover } from "../lib/jobs.ts";
 import { useDocumentTitle } from "../lib/use-document-title.ts";
 import { UpgradeAction } from "../settings/upgrade.tsx";
 import { Meter } from "../ui/meter.tsx";
@@ -18,6 +18,7 @@ export function NewJobPage() {
 	const navigate = useNavigate();
 	const toast = useToast();
 	const create = useCreateJob();
+	const upload = useUploadCover();
 	const org = useOrg();
 	const billing = useBilling();
 	const usage = billing.data?.usage;
@@ -26,6 +27,13 @@ export function NewJobPage() {
 	const limit = usage?.jobsLimit ?? null;
 	const used = usage?.jobsThisMonth ?? 0;
 	const full = refusal !== null || (limit !== null && used >= limit);
+
+	const opened = (job: Job, coverFailed: boolean) => {
+		toast.show(savedMessage("new", job.status));
+		// The job is saved either way; only the image needs another go, from Edit job.
+		if (coverFailed) toast.error("The cover image didn't upload. Add it from Edit job.");
+		void navigate({ to: "/dashboard/jobs/$jobId", params: { jobId: job.id }, ignoreBlocker: true });
+	};
 
 	return (
 		<div className="wrap page">
@@ -37,7 +45,7 @@ export function NewJobPage() {
 			<div className="mt-8">
 				<JobForm
 					mode="new"
-					saving={create.isPending}
+					saving={create.isPending || upload.isPending}
 					saveError={refusal ? null : create.error}
 					cancelHref="/dashboard/jobs"
 					allowance={
@@ -65,13 +73,16 @@ export function NewJobPage() {
 							</div>
 						)
 					}
-					onSave={(input, status) =>
+					onSave={(input, status, cover) =>
 						create.mutate(
 							{ ...input, status: status === "open" ? "open" : "draft" },
 							{
 								onSuccess: (job) => {
-									toast.show(savedMessage("new", job.status));
-									void navigate({ to: "/dashboard/jobs/$jobId", params: { jobId: job.id }, ignoreBlocker: true });
+									if (!cover) return opened(job, false);
+									upload.mutate(
+										{ id: job.id, file: cover },
+										{ onSuccess: (withCover) => opened(withCover, false), onError: () => opened(job, true) },
+									);
 								},
 							},
 						)
