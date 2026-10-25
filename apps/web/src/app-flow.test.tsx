@@ -627,20 +627,15 @@ describe("jobs", () => {
 		org = { id: "org_1", name: "Sprite Labs", role: "admin" };
 	});
 
-	it("previews the description as Markdown on the Preview tab, and the apply page header as the title is typed", async () => {
+	it("previews the description as Markdown on the Preview tab", async () => {
 		renderAt("/dashboard/jobs/new");
 		const title = await screen.findByLabelText("Job title");
-		const view = screen.getByRole("heading", { level: 2, name: "Candidate view" }).closest("section")!;
-		expect(within(view).getByText("Job title")).toBeTruthy();
-		expect(within(view).getByText("Open role")).toBeTruthy();
-		expect(within(view).getByText("Sprite Labs")).toBeTruthy();
+		// The apply page's header preview is gone; a new job has no link to its apply page either.
+		expect(screen.queryByRole("heading", { level: 2, name: "Candidate view" })).toBeNull();
+		expect(screen.queryByRole("link", { name: /Open apply page/ })).toBeNull();
 
 		fireEvent.change(title, { target: { value: "Preview role" } });
 		fireEvent.change(screen.getByLabelText("Description"), { target: { value: "## Duties\n\nShip **fast**." } });
-		expect(within(view).getByText("Preview role")).toBeTruthy();
-		// The header follows the status choice too.
-		fireEvent.click(screen.getByRole("radio", { name: "Draft" }));
-		expect(within(view).getByText("Draft · not public")).toBeTruthy();
 
 		const write = screen.getByRole("tab", { name: "Write" });
 		const preview = screen.getByRole("tab", { name: "Preview" });
@@ -692,6 +687,85 @@ describe("jobs", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: /Open job/ }));
 		expect(await screen.findByRole("heading", { level: 1, name: "Platform Engineer" })).toBeTruthy();
+	});
+
+	it("takes a cover image while posting a job, and uploads it once the job is saved", async () => {
+		Object.assign(URL, { createObjectURL: () => "blob:staged", revokeObjectURL: () => {} });
+		renderAt("/dashboard/jobs/new");
+		fireEvent.change(await screen.findByLabelText("Job title"), { target: { value: "Cover first role" } });
+		fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Build the API." } });
+		const input = document.querySelector('input[accept^="image/"]') as HTMLInputElement;
+
+		fireEvent.change(input, { target: { files: [new File(["x"], "cover.gif", { type: "image/gif" })] } });
+		expect((await screen.findByRole("alert")).textContent).toContain("Upload a JPEG, PNG or WebP image");
+		const png = new File(["x"], "cover.png", { type: "image/png" });
+		fireEvent.change(input, { target: { files: [png] } });
+		expect(await screen.findByText("Cover image added. It uploads when you save the job.")).toBeTruthy();
+		expect(screen.getByRole("img", { name: "Current cover" }).getAttribute("src")).toBe("blob:staged");
+		// Nothing is sent before the job exists.
+		expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(false);
+
+		fireEvent.click(screen.getByRole("button", { name: /Open job/ }));
+		expect(await screen.findByRole("heading", { level: 1, name: "Cover first role" })).toBeTruthy();
+		const methods = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST" || init?.method === "PUT");
+		const post = methods.findIndex(([url, init]) => init?.method === "POST" && new URL(url).pathname === "/jobs");
+		const put = methods.findIndex(([, init]) => init?.method === "PUT");
+		expect(post).toBeGreaterThanOrEqual(0);
+		expect(put).toBeGreaterThan(post);
+		expect(methods[put][0]).toMatch(/\/jobs\/job_\d+\/cover$/);
+		expect(methods[put][1]?.body).toBe(png);
+		expect(jobs[0].hasCover).toBe(true);
+	});
+
+	it("still opens the new job when only its cover fails to upload, and says how to add it", async () => {
+		Object.assign(URL, { createObjectURL: () => "blob:staged", revokeObjectURL: () => {} });
+		const answer = fetchMock.getMockImplementation()!;
+		fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+			init?.method === "PUT" ? Promise.resolve(apiError(500, "internal_error", "Something went wrong on our side. Try again.")) : answer(url, init),
+		);
+		renderAt("/dashboard/jobs/new");
+		fireEvent.change(await screen.findByLabelText("Job title"), { target: { value: "Cover later role" } });
+		fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Build the API." } });
+		const input = document.querySelector('input[accept^="image/"]') as HTMLInputElement;
+		fireEvent.change(input, { target: { files: [new File(["x"], "cover.png", { type: "image/png" })] } });
+
+		fireEvent.click(screen.getByRole("button", { name: /Open job/ }));
+		expect(await screen.findByRole("heading", { level: 1, name: "Cover later role" })).toBeTruthy();
+		const toasts = screen.getByRole("region", { name: "Notifications" });
+		expect(within(toasts).getByText("The cover image didn't upload. Add it from Edit job.")).toBeTruthy();
+	});
+
+	it("removes a chosen cover before the job is saved, and then posts without one", async () => {
+		Object.assign(URL, { createObjectURL: () => "blob:staged", revokeObjectURL: () => {} });
+		renderAt("/dashboard/jobs/new");
+		fireEvent.change(await screen.findByLabelText("Job title"), { target: { value: "No cover role" } });
+		fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Build the API." } });
+		const input = document.querySelector('input[accept^="image/"]') as HTMLInputElement;
+		fireEvent.change(input, { target: { files: [new File(["x"], "cover.png", { type: "image/png" })] } });
+		fireEvent.click(await screen.findByRole("button", { name: "Remove image" }));
+		expect(await screen.findByText("Cover image removed")).toBeTruthy();
+		expect(screen.queryByRole("img", { name: "Current cover" })).toBeNull();
+		expect(document.activeElement).toBe(input);
+
+		fireEvent.click(screen.getByRole("button", { name: /Open job/ }));
+		expect(await screen.findByRole("heading", { level: 1, name: "No cover role" })).toBeTruthy();
+		expect(fetchMock.mock.calls.some(([, init]) => init?.method === "PUT")).toBe(false);
+	});
+
+	it("links an open job's edit page to its apply page, and a draft's to nothing", async () => {
+		jobs = [
+			{ id: "job_1", title: "Live role", description: "Text", status: "open", createdAt: "2026-10-20T10:00:00Z", updatedAt: "2026-10-20T10:00:00Z" },
+			{ id: "job_2", title: "Draft role", description: "Text", status: "draft", createdAt: "2026-10-20T10:00:00Z", updatedAt: "2026-10-20T10:00:00Z" },
+		];
+		const router = renderAt("/dashboard/jobs/job_1/edit");
+		const link = await screen.findByRole("link", { name: /Open apply page/ });
+		expect(link.getAttribute("href")).toBe("/jobs/job_1-slug");
+		expect(link.getAttribute("target")).toBe("_blank");
+		expect(screen.queryByRole("heading", { level: 2, name: "Candidate view" })).toBeNull();
+
+		await act(() => router.navigate({ to: "/dashboard/jobs/$jobId/edit", params: { jobId: "job_2" } }));
+		expect(await screen.findByDisplayValue("Draft role")).toBeTruthy();
+		expect(screen.queryByRole("link", { name: /Open apply page/ })).toBeNull();
 	});
 
 	it("adds, replaces and removes a cover image on the edit page", async () => {

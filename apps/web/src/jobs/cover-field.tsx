@@ -1,12 +1,12 @@
 import { ImageUp } from "lucide-react";
-import { useId, useRef, useState } from "react";
+import { type ReactNode, type RefObject, useEffect, useId, useRef, useState } from "react";
 import { type Job, checkCover, useCoverImage, useRemoveCover, useSetCover } from "../lib/jobs.ts";
+
+const HELP = "Optional. Shown at the top of the public page and in link previews. JPEG, PNG or WebP, up to 2 MB.";
 
 // The optional cover image, under the description on the edit page. It saves on its own as soon as a file is chosen
 // or removed, so it doesn't wait for "Save changes" (and doesn't count as an unsaved change in the form).
 export function CoverField({ job }: { job: Job }) {
-	const inputId = useId();
-	const helpId = useId();
 	const set = useSetCover(job.id);
 	const remove = useRemoveCover(job.id);
 	const image = useCoverImage(job.id, job.hasCover, job.updatedAt);
@@ -16,8 +16,8 @@ export function CoverField({ job }: { job: Job }) {
 	const busy = set.isPending || remove.isPending;
 	const error = problem ?? (set.isError ? set.error.message : remove.isError ? remove.error.message : null);
 
-	const choose = (file: File | undefined) => {
-		if (!file || busy) return;
+	const choose = (file: File) => {
+		if (busy) return;
 		const found = checkCover(file);
 		setProblem(found);
 		setAnnouncement("");
@@ -40,12 +40,107 @@ export function CoverField({ job }: { job: Job }) {
 	};
 
 	return (
+		<CoverLayout
+			src={job.hasCover ? (image.data ?? null) : null}
+			help={HELP}
+			inputRef={inputRef}
+			busy={busy}
+			chooseLabel={set.isPending ? "Uploading" : job.hasCover ? "Replace image" : "Choose an image"}
+			onChoose={choose}
+			removeLabel={job.hasCover ? (remove.isPending ? "Removing" : "Remove image") : null}
+			onRemove={clear}
+			announcement={announcement}
+			error={error}
+		/>
+	);
+}
+
+// The cover on the new-job page. There's no job to attach it to yet, so the chosen file waits here, checked and
+// previewed, and the page uploads it once the job is saved.
+export function StagedCoverField({ file, onChange }: { file: File | null; onChange: (file: File | null) => void }) {
+	const [problem, setProblem] = useState<string | null>(null);
+	const [announcement, setAnnouncement] = useState("");
+	const inputRef = useRef<HTMLInputElement>(null);
+	const src = useObjectUrl(file);
+
+	const choose = (chosen: File) => {
+		const found = checkCover(chosen);
+		setProblem(found);
+		setAnnouncement("");
+		if (found) return;
+		onChange(chosen);
+		setAnnouncement("Cover image added. It uploads when you save the job.");
+	};
+
+	const clear = () => {
+		setProblem(null);
+		onChange(null);
+		setAnnouncement("Cover image removed");
+		inputRef.current?.focus();
+	};
+
+	return (
+		<CoverLayout
+			src={src}
+			help={`${HELP} It uploads when you save the job.`}
+			inputRef={inputRef}
+			busy={false}
+			chooseLabel={file ? "Replace image" : "Choose an image"}
+			onChoose={choose}
+			removeLabel={file ? "Remove image" : null}
+			onRemove={clear}
+			announcement={announcement}
+			error={problem}
+		/>
+	);
+}
+
+// A preview URL for a local file, revoked when the file changes or the field goes away.
+function useObjectUrl(file: File | null) {
+	const [url, setUrl] = useState<string | null>(null);
+	useEffect(() => {
+		if (!file) {
+			setUrl(null);
+			return;
+		}
+		const next = URL.createObjectURL(file);
+		setUrl(next);
+		return () => URL.revokeObjectURL(next);
+	}, [file]);
+	return url;
+}
+
+function CoverLayout({
+	src,
+	help,
+	inputRef,
+	busy,
+	chooseLabel,
+	onChoose,
+	removeLabel,
+	onRemove,
+	announcement,
+	error,
+}: {
+	src: string | null;
+	help: ReactNode;
+	inputRef: RefObject<HTMLInputElement | null>;
+	busy: boolean;
+	chooseLabel: string;
+	onChoose: (file: File) => void;
+	// Null hides the remove button (there's nothing to remove).
+	removeLabel: string | null;
+	onRemove: () => void;
+	announcement: string;
+	error: string | null;
+}) {
+	const inputId = useId();
+	const helpId = useId();
+	return (
 		<section aria-labelledby="cover-h" className="flex flex-col gap-4 min-[561px]:flex-row min-[561px]:items-start">
-			<div
-				className={`grid aspect-[16/9] w-full flex-none place-items-center overflow-hidden rounded-lg min-[561px]:w-44 ${job.hasCover && image.data ? "" : "desk"}`}
-			>
-				{job.hasCover && image.data ? (
-					<img src={image.data} alt="Current cover" className="size-full object-cover" />
+			<div className={`grid aspect-[16/9] w-full flex-none place-items-center overflow-hidden rounded-lg min-[561px]:w-44 ${src ? "" : "desk"}`}>
+				{src ? (
+					<img src={src} alt="Current cover" className="size-full object-cover" />
 				) : (
 					<ImageUp size={20} strokeWidth={2} aria-hidden="true" className="text-ink-faint" />
 				)}
@@ -55,7 +150,7 @@ export function CoverField({ job }: { job: Job }) {
 					Cover image
 				</h2>
 				<p id={helpId} className="mt-1 text-[13px] text-ink-muted">
-					Optional. Shown at the top of the public page and in link previews. JPEG, PNG or WebP, up to 2 MB.
+					{help}
 				</p>
 				<div className="mt-3 flex flex-wrap items-center gap-3">
 					<input
@@ -66,7 +161,8 @@ export function CoverField({ job }: { job: Job }) {
 						aria-describedby={helpId}
 						className="peer sr-only"
 						onChange={(event) => {
-							choose(event.target.files?.[0]);
+							const file = event.target.files?.[0];
+							if (file) onChoose(file);
 							event.target.value = "";
 						}}
 					/>
@@ -74,11 +170,11 @@ export function CoverField({ job }: { job: Job }) {
 						htmlFor={inputId}
 						className={`btn ghost xs peer-focus-visible:outline-3 peer-focus-visible:outline-offset-3 peer-focus-visible:outline-ink ${busy ? "pointer-events-none opacity-70" : ""}`}
 					>
-						{set.isPending ? "Uploading" : job.hasCover ? "Replace image" : "Choose an image"}
+						{chooseLabel}
 					</label>
-					{job.hasCover && (
-						<button type="button" className="btn danger xs" aria-disabled={busy} onClick={clear}>
-							{remove.isPending ? "Removing" : "Remove image"}
+					{removeLabel && (
+						<button type="button" className="btn danger xs" aria-disabled={busy} onClick={onRemove}>
+							{removeLabel}
 						</button>
 					)}
 				</div>

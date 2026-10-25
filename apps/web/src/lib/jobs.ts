@@ -230,6 +230,13 @@ export function useSetCover(id: string) {
 	return useSaveJob((file: File, token) => apiPutFile<{ job: Job }>(`/jobs/${id}/cover`, file, { token }));
 }
 
+// The cover chosen on the new-job page, uploaded to the job once it's been created (its id is only known then).
+export function useUploadCover() {
+	return useSaveJob(({ id, file }: { id: string; file: File }, token) =>
+		apiPutFile<{ job: Job }>(`/jobs/${id}/cover`, file, { token }),
+	);
+}
+
 export function useRemoveCover(id: string) {
 	return useSaveJob((_: void, token) => apiDeleteJson<{ job: Job }>(`/jobs/${id}/cover`, { token }));
 }
